@@ -124,11 +124,20 @@ internal static class SpaceMoltResponseParsers
         if (response.ValueKind != JsonValueKind.Object)
             return false;
 
-        if (!response.TryGetProperty("ships", out var shipsArray) ||
+        JsonElement result = response;
+        if (response.TryGetProperty("result", out var wrappedResult) &&
+            wrappedResult.ValueKind == JsonValueKind.Object)
+        {
+            result = wrappedResult;
+        }
+
+        if (!result.TryGetProperty("ships", out var shipsArray) ||
             shipsArray.ValueKind != JsonValueKind.Array)
         {
             return false;
         }
+
+        string activeShipId = SpaceMoltJson.TryGetString(result, "active_ship_id") ?? "";
 
         var parsed = new List<OwnedShipInfo>();
         foreach (var ship in shipsArray.EnumerateArray())
@@ -144,8 +153,14 @@ internal static class SpaceMoltResponseParsers
             {
                 ShipId = shipId,
                 ClassId = SpaceMoltJson.TryGetString(ship, "class_id") ?? "",
-                Location = SpaceMoltJson.TryGetString(ship, "location") ?? "",
-                IsActive = ship.TryGetProperty("is_active", out var activeEl) && activeEl.ValueKind == JsonValueKind.True
+                Location =
+                    SpaceMoltJson.TryGetString(ship, "location") ??
+                    SpaceMoltJson.TryGetString(ship, "location_base_id") ??
+                    "",
+                IsActive =
+                    (ship.TryGetProperty("is_active", out var activeEl) && activeEl.ValueKind == JsonValueKind.True) ||
+                    (!string.IsNullOrWhiteSpace(activeShipId) &&
+                     string.Equals(shipId, activeShipId, StringComparison.Ordinal))
             });
         }
 

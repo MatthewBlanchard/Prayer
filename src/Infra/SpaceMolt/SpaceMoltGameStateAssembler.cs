@@ -255,7 +255,10 @@ internal sealed class SpaceMoltGameStateAssembler
             galaxySnapshot.Market.GlobalWeightedMidPrices,
             StringComparer.Ordinal);
 
-        state.OwnedShips = Array.Empty<OwnedShipInfo>();
+        var ownedShipsResult = await _owner.ExecuteAsync("list_ships");
+        state.OwnedShips = SpaceMoltResponseParsers.TryParseOwnedShips(ownedShipsResult, out var ownedShips)
+            ? ownedShips
+            : Array.Empty<OwnedShipInfo>();
 
         var activeMissionsResult = await _owner.ExecuteAsync("get_active_missions");
         var activeMissions = new List<MissionInfo>();

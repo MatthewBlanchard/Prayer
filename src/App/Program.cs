@@ -14,22 +14,131 @@ class Program
     static async Task Main(string[] args)
     {
         AppPaths.EnsureDirectories();
-
-        ILLMClient commandLlm = new LlamaCppClient("http://localhost:8080");
+        var llamaCppBaseUrl = Environment.GetEnvironmentVariable("LLAMACPP_BASE_URL")
+            ?? "http://localhost:8080";
+        var llamaCppModel = Environment.GetEnvironmentVariable("LLAMACPP_MODEL")
+            ?? "model";
+        ILLMClient commandLlm = new LlamaCppClient(llamaCppBaseUrl, llamaCppModel);
 
         var openAiApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
-        var openAiModel = Environment.GetEnvironmentVariable("OPENAI_MODEL") ?? "gpt-4o-mini";
+        var groqApiKey = Environment.GetEnvironmentVariable("GROQ_API_KEY");
+        var openAiDefaultModel = Environment.GetEnvironmentVariable("OPENAI_MODEL")
+            ?? "gpt-4o-mini";
+        var groqDefaultModel = Environment.GetEnvironmentVariable("GROQ_MODEL")
+            ?? "llama-3.3-70b-versatile";
 
-        if (string.IsNullOrWhiteSpace(openAiApiKey))
-            throw new InvalidOperationException(
-                "OPENAI_API_KEY is required. Aborting startup because remote planning model is mandatory.");
+        var providersById = new Dictionary<string, ILLMProvider>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["llamacpp"] = new LlamaCppProvider(llamaCppBaseUrl, llamaCppModel)
+        };
 
-        ILLMClient planningLlm = new OpenAIClient(openAiApiKey, openAiModel);
-        var openAiEmbeddingModel = Environment.GetEnvironmentVariable("OPENAI_EMBEDDING_MODEL")
-            ?? "text-embedding-3-small";
-        var scriptExampleRag = new PromptScriptRag(openAiApiKey, openAiEmbeddingModel);
+        if (!string.IsNullOrWhiteSpace(openAiApiKey))
+            providersById["openai"] = new OpenAIProvider(openAiApiKey, openAiDefaultModel);
+        if (!string.IsNullOrWhiteSpace(groqApiKey))
+            providersById["groq"] = new GroqProvider(groqApiKey, groqDefaultModel);
+
+        static string NormalizeProvider(string? provider)
+        {
+            var normalized = (provider ?? string.Empty).Trim().ToLowerInvariant();
+            return normalized switch
+            {
+                "openai" => "openai",
+                "groq" => "groq",
+                "llamacpp" => "llamacpp",
+                _ => "llamacpp"
+            };
+        }
+
+        string ResolveDefaultModel(string provider)
+        {
+            var normalizedProvider = NormalizeProvider(provider);
+            if (providersById.TryGetValue(normalizedProvider, out var providerInstance))
+                return providerInstance.DefaultModel;
+            return "model";
+        }
+
+        ILLMClient CreatePlanningClient(string provider, string model)
+        {
+            var normalizedProvider = NormalizeProvider(provider);
+            if (!providersById.TryGetValue(normalizedProvider, out var llmProvider))
+                throw new InvalidOperationException(
+                    $"Provider '{normalizedProvider}' is not configured.");
+
+            var normalizedModel = string.IsNullOrWhiteSpace(model)
+                ? llmProvider.DefaultModel
+                : model.Trim();
+
+            return llmProvider.CreateClient(normalizedModel);
+        }
+
+        var requestedProvider = NormalizeProvider(Environment.GetEnvironmentVariable("LLM_PROVIDER"));
+        var initialProvider = providersById.ContainsKey(requestedProvider)
+            ? requestedProvider
+            : providersById.ContainsKey("openai")
+                ? "openai"
+                : providersById.ContainsKey("groq")
+                    ? "groq"
+                    : "llamacpp";
+        var initialModel = Environment.GetEnvironmentVariable("LLM_MODEL")
+            ?? (initialProvider == "groq"
+                ? Environment.GetEnvironmentVariable("GROQ_MODEL")
+                : initialProvider == "openai"
+                    ? Environment.GetEnvironmentVariable("OPENAI_MODEL")
+                    : Environment.GetEnvironmentVariable("LLAMACPP_MODEL"))
+            ?? ResolveDefaultModel(initialProvider);
+
+        ILLMClient initialPlanningClient = CreatePlanningClient(initialProvider, initialModel);
+        var planningLlm = new SwappableLlmClient(initialPlanningClient);
+        string currentPlannerProvider = initialProvider;
+        string currentPlannerModel = initialModel;
+
+        PromptScriptRag? scriptExampleRag = null;
+        if (!string.IsNullOrWhiteSpace(openAiApiKey))
+        {
+            var openAiEmbeddingModel = Environment.GetEnvironmentVariable("OPENAI_EMBEDDING_MODEL")
+                ?? "text-embedding-3-small";
+            scriptExampleRag = new PromptScriptRag(openAiApiKey, openAiEmbeddingModel);
+        }
 
         var ui = new BotWindow();
+
+        var orderedProviderIds = new List<string>();
+        if (providersById.ContainsKey("openai"))
+            orderedProviderIds.Add("openai");
+        if (providersById.ContainsKey("groq"))
+            orderedProviderIds.Add("groq");
+        if (providersById.ContainsKey("llamacpp"))
+            orderedProviderIds.Add("llamacpp");
+        foreach (var providerId in providersById.Keys)
+        {
+            if (!orderedProviderIds.Contains(providerId, StringComparer.OrdinalIgnoreCase))
+                orderedProviderIds.Add(providerId);
+        }
+
+        ui.SetAvailableProviders(orderedProviderIds);
+        foreach (var provider in providersById.Values)
+            ui.SetProviderModels(provider.ProviderId, new[] { provider.DefaultModel });
+        ui.ConfigureInitialLlmSelection(initialProvider, initialModel);
+
+        async Task LoadRemoteModelCatalogsAsync()
+        {
+            foreach (var provider in providersById.Values)
+            {
+                try
+                {
+                    var models = await provider.ListModelsAsync();
+                    if (models.Count > 0)
+                        ui.SetProviderModels(provider.ProviderId, models);
+                }
+                catch
+                {
+                    // Keep UI responsive with defaults if API discovery fails.
+                }
+            }
+        }
+
+        await LoadRemoteModelCatalogsAsync();
+
         var channels = ProgramChannels.CreateAndBind(ui);
         var cts = new CancellationTokenSource();
         int globalStopTriggered = 0;
@@ -39,6 +148,9 @@ class Program
         object botLock = new();
         var savedBotStore = new SavedBotStore();
         var savedBots = savedBotStore.Load();
+
+        channels.Status.Writer.TryWrite(
+            $"Planner LLM: {currentPlannerProvider}/{currentPlannerModel}");
 
         void LogAuth(string message)
         {
@@ -405,6 +517,46 @@ class Program
                         {
                             channels.Status.Writer.TryWrite($"Failed to load bot '{display}': {ex.Message}");
                             LogAuth($"manual | {display} | load_failed | {ex.GetType().Name}: {ex.Message}");
+                        }
+                    }
+
+                    while (channels.LlmSelection.Reader.TryRead(out var selection))
+                    {
+                        var selectedProvider = NormalizeProvider(selection.Provider);
+                        if (!providersById.TryGetValue(selectedProvider, out var provider))
+                        {
+                            channels.Status.Writer.TryWrite(
+                                $"Provider '{selectedProvider}' is not configured in this run.");
+                            continue;
+                        }
+
+                        var selectedModel = string.IsNullOrWhiteSpace(selection.Model)
+                            ? provider.DefaultModel
+                            : selection.Model.Trim();
+
+                        if (string.Equals(currentPlannerProvider, selectedProvider, StringComparison.OrdinalIgnoreCase) &&
+                            string.Equals(currentPlannerModel, selectedModel, StringComparison.Ordinal))
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            var updatedClient = provider.CreateClient(selectedModel);
+                            planningLlm.SetInner(updatedClient);
+                            currentPlannerProvider = selectedProvider;
+                            currentPlannerModel = selectedModel;
+                            channels.Status.Writer.TryWrite(
+                                $"Planner LLM set to {currentPlannerProvider}/{currentPlannerModel}");
+                            LogAuth(
+                                $"llm_switch | provider={currentPlannerProvider} | model={currentPlannerModel}");
+                        }
+                        catch (Exception ex)
+                        {
+                            channels.Status.Writer.TryWrite(
+                                $"LLM switch failed ({selectedProvider}/{selectedModel}): {ex.Message}");
+                            LogAuth(
+                                $"llm_switch_failed | provider={selectedProvider} | model={selectedModel} | {ex.GetType().Name}: {ex.Message}");
                         }
                     }
 

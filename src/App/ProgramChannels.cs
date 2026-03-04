@@ -10,6 +10,7 @@ public sealed class ProgramChannels
         Channel<bool> executeScript,
         Channel<string> switchBot,
         Channel<AddBotRequest> addBot,
+        Channel<LlmProviderSelection> llmSelection,
         Channel<UiSnapshot> uiSnapshots)
     {
         Status = status;
@@ -19,6 +20,7 @@ public sealed class ProgramChannels
         ExecuteScript = executeScript;
         SwitchBot = switchBot;
         AddBot = addBot;
+        LlmSelection = llmSelection;
         UiSnapshots = uiSnapshots;
     }
 
@@ -29,6 +31,7 @@ public sealed class ProgramChannels
     public Channel<bool> ExecuteScript { get; }
     public Channel<string> SwitchBot { get; }
     public Channel<AddBotRequest> AddBot { get; }
+    public Channel<LlmProviderSelection> LlmSelection { get; }
     public Channel<UiSnapshot> UiSnapshots { get; }
 
     public static ProgramChannels CreateAndBind(BotWindow ui)
@@ -41,6 +44,7 @@ public sealed class ProgramChannels
             Channel.CreateUnbounded<bool>(),
             Channel.CreateUnbounded<string>(),
             Channel.CreateUnbounded<AddBotRequest>(),
+            Channel.CreateUnbounded<LlmProviderSelection>(),
             Channel.CreateUnbounded<UiSnapshot>());
 
         ui.SetControlInputWriter(channels.ControlInput.Writer);
@@ -49,6 +53,7 @@ public sealed class ProgramChannels
         ui.SetExecuteScriptWriter(channels.ExecuteScript.Writer);
         ui.SetSwitchBotWriter(channels.SwitchBot.Writer);
         ui.SetAddBotWriter(channels.AddBot.Writer);
+        ui.SetLlmSelectionWriter(channels.LlmSelection.Writer);
 
         return channels;
     }

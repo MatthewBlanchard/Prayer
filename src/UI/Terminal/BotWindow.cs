@@ -34,11 +34,15 @@ public class BotWindow
     private ChannelWriter<bool>? _executeScriptWriter;
     private ChannelWriter<string>? _switchBotWriter;
     private ChannelWriter<AddBotRequest>? _addBotWriter;
+    private ChannelWriter<LlmProviderSelection>? _llmSelectionWriter;
 
     private Window _win;
     private View _playerFrame;
     private View _playerStack;
+    private View _llmSelectorStack;
     private View _topInfoBar;
+    private ComboBox _providerDropdown;
+    private ComboBox _modelDropdown;
     private FrameView _executionStatusFrame;
     private ListView _executionStatusList;
     private Button _spaceTabButton;
@@ -61,8 +65,21 @@ public class BotWindow
     private readonly List<View> _playerControls = new();
     private string _lastPlayerSignature = "";
     private volatile bool _uiReady;
+    private bool _suppressLlmSelectionEvents;
+    private readonly object _llmModelsLock = new();
+    private readonly List<string> _llmProviders = new();
+    private string _initialLlmProvider = "openai";
+    private string _initialLlmModel = "gpt-4o-mini";
+    private readonly Dictionary<string, IReadOnlyList<string>> _llmModelsByProvider =
+        new(StringComparer.OrdinalIgnoreCase);
 
     public bool LoopEnabled => _loopEnabled;
+
+    public BotWindow()
+    {
+        _llmProviders.Add("llamacpp");
+        _llmModelsByProvider["llamacpp"] = new List<string> { "model" };
+    }
 
     // -----------------------------
     // Wiring
@@ -95,6 +112,79 @@ public class BotWindow
     public void SetAddBotWriter(ChannelWriter<AddBotRequest> writer)
     {
         _addBotWriter = writer;
+    }
+
+    public void SetLlmSelectionWriter(ChannelWriter<LlmProviderSelection> writer)
+    {
+        _llmSelectionWriter = writer;
+    }
+
+    public void ConfigureInitialLlmSelection(string provider, string model)
+    {
+        if (!string.IsNullOrWhiteSpace(provider))
+            _initialLlmProvider = provider.Trim().ToLowerInvariant();
+        if (!string.IsNullOrWhiteSpace(model))
+            _initialLlmModel = model.Trim();
+    }
+
+    public void SetAvailableProviders(IReadOnlyList<string> providers)
+    {
+        var normalized = (providers ?? Array.Empty<string>())
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (normalized.Count == 0)
+            normalized.Add("llamacpp");
+
+        lock (_llmModelsLock)
+        {
+            _llmProviders.Clear();
+            _llmProviders.AddRange(normalized);
+
+            foreach (var provider in _llmProviders)
+            {
+                if (!_llmModelsByProvider.ContainsKey(provider))
+                    _llmModelsByProvider[provider] = new List<string> { "model" };
+            }
+        }
+    }
+
+    public void SetProviderModels(string provider, IReadOnlyList<string> models)
+    {
+        var normalizedProvider = (provider ?? string.Empty).Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(normalizedProvider))
+            return;
+
+        var normalizedModels = (models ?? Array.Empty<string>())
+            .Where(m => !string.IsNullOrWhiteSpace(m))
+            .Select(m => m.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(m => m, StringComparer.Ordinal)
+            .ToList();
+
+        if (normalizedModels.Count == 0)
+            return;
+
+        lock (_llmModelsLock)
+        {
+            if (!_llmProviders.Contains(normalizedProvider, StringComparer.OrdinalIgnoreCase))
+                _llmProviders.Add(normalizedProvider);
+            _llmModelsByProvider[normalizedProvider] = normalizedModels;
+        }
+
+        if (!_uiReady || Application.MainLoop == null)
+            return;
+
+        Application.MainLoop.Invoke(() =>
+        {
+            var selectedProvider = GetSelectedProvider();
+            if (!string.Equals(selectedProvider, normalizedProvider, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            RefreshModelDropdownForSelectedProvider(publishSelection: false);
+        });
     }
 
     // -----------------------------
@@ -169,10 +259,18 @@ public class BotWindow
         _playerStack = new View
         {
             X = 0,
+            Y = 5,
+            Width = Dim.Fill(),
+            Height = Dim.Fill(5)
+        };
+        _llmSelectorStack = new View
+        {
+            X = 0,
             Y = 0,
             Width = Dim.Fill(),
-            Height = Dim.Fill()
+            Height = 5
         };
+        _playerFrame.Add(_llmSelectorStack);
         _playerFrame.Add(_playerStack);
 
         _topInfoBar = new View
@@ -183,6 +281,61 @@ public class BotWindow
             Height = 1,
             ColorScheme = baseScheme
         };
+        var providerLabel = new Label("Provider:")
+        {
+            X = 0,
+            Y = 0,
+            Width = Dim.Fill()
+        };
+
+        List<string> providerSnapshot;
+        lock (_llmModelsLock)
+            providerSnapshot = _llmProviders.ToList();
+
+        _providerDropdown = new ComboBox(providerSnapshot)
+        {
+            X = 0,
+            Y = 1,
+            Width = Dim.Fill(),
+            Height = 1,
+            ReadOnly = true,
+            Text = _initialLlmProvider
+        };
+
+        var modelLabel = new Label("Model:")
+        {
+            X = 0,
+            Y = 2,
+            Width = Dim.Fill()
+        };
+
+        _modelDropdown = new ComboBox(new List<string>())
+        {
+            X = 0,
+            Y = 3,
+            Width = Dim.Fill(),
+            Height = 1,
+            ReadOnly = true,
+            Text = _initialLlmModel
+        };
+
+        _providerDropdown.SelectedItemChanged += _ =>
+        {
+            if (_suppressLlmSelectionEvents)
+                return;
+
+            RefreshModelDropdownForSelectedProvider(publishSelection: true);
+        };
+        _modelDropdown.SelectedItemChanged += _ =>
+        {
+            if (_suppressLlmSelectionEvents)
+                return;
+
+            PublishLlmSelection();
+        };
+
+        RefreshModelDropdownForSelectedProvider(publishSelection: true);
+
         _spaceTabButton = new Button("Space")
         {
             X = 0,
@@ -254,7 +407,17 @@ public class BotWindow
             ApplySelectedStateTabText();
         };
 
-        _topInfoBar.Add(_spaceTabButton, _tradeTabButton, _shipyardTabButton, _cantinaTabButton);
+        _llmSelectorStack.Add(
+            providerLabel,
+            _providerDropdown,
+            modelLabel,
+            _modelDropdown);
+
+        _topInfoBar.Add(
+            _spaceTabButton,
+            _tradeTabButton,
+            _shipyardTabButton,
+            _cantinaTabButton);
         UpdateStateTabButtons(showTradeTab: false, showShipyardTab: false, showCantinaTab: false);
 
         RefreshPlayerStack(Array.Empty<BotTab>(), null);
@@ -435,6 +598,80 @@ public class BotWindow
             // CRITICAL: ensures driver + mouse cleanup
             Application.Shutdown();
         }
+    }
+
+    private void RefreshModelDropdownForSelectedProvider(bool publishSelection)
+    {
+        string provider = GetSelectedProvider();
+        string? preferredModel = _modelDropdown?.Text?.ToString()?.Trim();
+        IReadOnlyList<string> models;
+        lock (_llmModelsLock)
+        {
+            if (!_llmModelsByProvider.TryGetValue(provider, out models!) || models.Count == 0)
+                models = new List<string> { "gpt-4o-mini" };
+        }
+
+        _suppressLlmSelectionEvents = true;
+        _modelDropdown.SetSource(models.ToList());
+
+        int selectedIndex = 0;
+        if (!string.IsNullOrWhiteSpace(preferredModel))
+        {
+            var idx = models
+                .Select((model, index) => (model, index))
+                .FirstOrDefault(x => string.Equals(x.model, preferredModel, StringComparison.Ordinal))
+                .index;
+            if (idx >= 0 && idx < models.Count)
+                selectedIndex = idx;
+        }
+
+        _modelDropdown.SelectedItem = selectedIndex;
+        _modelDropdown.Text = models[selectedIndex];
+        _suppressLlmSelectionEvents = false;
+
+        if (publishSelection)
+            PublishLlmSelection();
+    }
+
+    private string GetSelectedProvider()
+    {
+        var fromText = _providerDropdown.Text?.ToString()?.Trim();
+        if (!string.IsNullOrWhiteSpace(fromText))
+            return fromText.ToLowerInvariant();
+
+        int idx = _providerDropdown.SelectedItem;
+        lock (_llmModelsLock)
+        {
+            if (idx >= 0 && idx < _llmProviders.Count)
+                return _llmProviders[idx];
+            if (_llmProviders.Count > 0)
+                return _llmProviders[0];
+        }
+
+        return "llamacpp";
+    }
+
+    private string GetSelectedModel()
+    {
+        var fromText = _modelDropdown.Text?.ToString()?.Trim();
+        if (!string.IsNullOrWhiteSpace(fromText))
+            return fromText;
+
+        string provider = GetSelectedProvider();
+        lock (_llmModelsLock)
+        {
+            if (_llmModelsByProvider.TryGetValue(provider, out var models) && models.Count > 0)
+                return models[0];
+        }
+
+        return "gpt-4o-mini";
+    }
+
+    private void PublishLlmSelection()
+    {
+        _llmSelectionWriter?.TryWrite(new LlmProviderSelection(
+            GetSelectedProvider(),
+            GetSelectedModel()));
     }
     // -----------------------------
     // Render (thread-safe)

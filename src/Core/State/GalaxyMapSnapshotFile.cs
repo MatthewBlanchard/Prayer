@@ -62,6 +62,36 @@ internal static class GalaxyMapSnapshotFile
             if (string.IsNullOrWhiteSpace(systemId))
                 continue;
 
+            string empire = TryGetString(systemObj, "empire")
+                            ?? TryGetString(systemObj, "Empire")
+                            ?? "";
+
+            double? x = null;
+            double? y = null;
+            if (TryGetObject(systemObj, "position", out var positionObj) ||
+                TryGetObject(systemObj, "Position", out positionObj))
+            {
+                x = TryGetDouble(positionObj, "x") ?? TryGetDouble(positionObj, "X");
+                y = TryGetDouble(positionObj, "y") ?? TryGetDouble(positionObj, "Y");
+            }
+
+            var connections = new List<string>();
+            if (TryGetArray(systemObj, "connections", out var connectionsArray) ||
+                TryGetArray(systemObj, "Connections", out connectionsArray))
+            {
+                foreach (var connection in connectionsArray.EnumerateArray())
+                {
+                    string? connectionId = connection.ValueKind == JsonValueKind.String
+                        ? connection.GetString()
+                        : TryGetString(connection, "system_id")
+                          ?? TryGetString(connection, "id")
+                          ?? TryGetString(connection, "Id");
+
+                    if (!string.IsNullOrWhiteSpace(connectionId))
+                        connections.Add(connectionId);
+                }
+            }
+
             var poiList = new List<GalaxyPoiInfo>();
 
             if (systemObj.TryGetProperty("pois", out var pois) &&
@@ -83,6 +113,10 @@ internal static class GalaxyMapSnapshotFile
             systems.Add(new GalaxySystemInfo
             {
                 Id = systemId,
+                Empire = empire,
+                X = x,
+                Y = y,
+                Connections = connections,
                 Pois = poiList
             });
         }
@@ -106,6 +140,35 @@ internal static class GalaxyMapSnapshotFile
             if (string.IsNullOrWhiteSpace(systemId))
                 continue;
 
+            string empire = TryGetString(systemObj, "Empire")
+                            ?? TryGetString(systemObj, "empire")
+                            ?? "";
+            double? x = TryGetDouble(systemObj, "X");
+            double? y = TryGetDouble(systemObj, "Y");
+            if (TryGetObject(systemObj, "Position", out var legacyPosition) ||
+                TryGetObject(systemObj, "position", out legacyPosition))
+            {
+                x ??= TryGetDouble(legacyPosition, "X") ?? TryGetDouble(legacyPosition, "x");
+                y ??= TryGetDouble(legacyPosition, "Y") ?? TryGetDouble(legacyPosition, "y");
+            }
+
+            var connections = new List<string>();
+            if (TryGetArray(systemObj, "Connections", out var legacyConnections) ||
+                TryGetArray(systemObj, "connections", out legacyConnections))
+            {
+                foreach (var connection in legacyConnections.EnumerateArray())
+                {
+                    string? connectionId = connection.ValueKind == JsonValueKind.String
+                        ? connection.GetString()
+                        : TryGetString(connection, "Id")
+                          ?? TryGetString(connection, "id")
+                          ?? TryGetString(connection, "system_id");
+
+                    if (!string.IsNullOrWhiteSpace(connectionId))
+                        connections.Add(connectionId);
+                }
+            }
+
             var poiList = new List<GalaxyPoiInfo>();
 
             if (TryGetArray(systemObj, "Pois", out var legacyPois) ||
@@ -127,6 +190,10 @@ internal static class GalaxyMapSnapshotFile
             systems.Add(new GalaxySystemInfo
             {
                 Id = systemId,
+                Empire = empire,
+                X = x,
+                Y = y,
+                Connections = connections,
                 Pois = poiList
             });
         }
@@ -174,6 +241,23 @@ internal static class GalaxyMapSnapshotFile
         return true;
     }
 
+    private static bool TryGetObject(JsonElement obj, string key, out JsonElement value)
+    {
+        value = default;
+
+        if (obj.ValueKind != JsonValueKind.Object)
+            return false;
+
+        if (!obj.TryGetProperty(key, out var prop) ||
+            prop.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        value = prop;
+        return true;
+    }
+
     private static string? TryGetString(JsonElement obj, string key)
     {
         if (obj.ValueKind != JsonValueKind.Object)
@@ -185,5 +269,19 @@ internal static class GalaxyMapSnapshotFile
         return prop.ValueKind == JsonValueKind.String
             ? prop.GetString()
             : null;
+    }
+
+    private static double? TryGetDouble(JsonElement obj, string key)
+    {
+        if (obj.ValueKind != JsonValueKind.Object)
+            return null;
+
+        if (!obj.TryGetProperty(key, out var prop))
+            return null;
+
+        if (prop.ValueKind == JsonValueKind.Number && prop.TryGetDouble(out double value))
+            return value;
+
+        return null;
     }
 }

@@ -4,12 +4,14 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Channels;
 
 public sealed class HtmxBotWindow : IAppUi
 {
     private readonly object _lock = new();
     private readonly string _prefix;
+    private readonly string _editorBootstrapJson;
     private bool _running;
     private HttpListener? _listener;
 
@@ -47,6 +49,7 @@ public sealed class HtmxBotWindow : IAppUi
     public HtmxBotWindow(string prefix = "http://localhost:5057/")
     {
         _prefix = EnsureTrailingSlash(prefix);
+        _editorBootstrapJson = BuildEditorBootstrapJson();
         _providers.Add("llamacpp");
         _modelsByProvider["llamacpp"] = new[] { "model" };
     }
@@ -250,6 +253,18 @@ public sealed class HtmxBotWindow : IAppUi
             return;
         }
 
+        if (req.HttpMethod == "GET" && path == "/bootstrap/editor-data")
+        {
+            WriteText(ctx.Response, _editorBootstrapJson, "application/json; charset=utf-8");
+            return;
+        }
+
+        if (req.HttpMethod == "GET" && path == "/partial/current-script")
+        {
+            WriteText(ctx.Response, BuildCurrentScriptStateJson(), "application/json; charset=utf-8");
+            return;
+        }
+
         if (req.HttpMethod == "POST" && path == "/api/prompt")
         {
             var form = ReadForm(req);
@@ -379,7 +394,14 @@ public sealed class HtmxBotWindow : IAppUi
         string selectedProvider;
         string selectedModel;
         string currentScript;
+        int? currentScriptLine;
         bool activeBotLoopEnabled;
+        var commandNames = CommandCatalog.All
+            .Select(c => c.Name)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         lock (_lock)
         {
@@ -387,6 +409,7 @@ public sealed class HtmxBotWindow : IAppUi
             selectedProvider = _selectedProvider;
             selectedModel = _selectedModel;
             currentScript = _snapshot.ControlInput ?? "";
+            currentScriptLine = _snapshot.CurrentScriptLine;
             activeBotLoopEnabled = _snapshot.ActiveBotLoopEnabled;
         }
 
@@ -408,7 +431,6 @@ public sealed class HtmxBotWindow : IAppUi
         sb.AppendLine("<link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css'>");
         sb.AppendLine("<link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css'>");
         sb.AppendLine("<script src='https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js'></script>");
-        sb.AppendLine("<script src='https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/mode/simple.min.js'></script>");
         sb.AppendLine("<style>");
         sb.AppendLine("html, body { height: 100%; }");
         sb.AppendLine("body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background:#0f1115; color:#d7dae0; margin:0; }");
@@ -444,6 +466,9 @@ public sealed class HtmxBotWindow : IAppUi
         sb.AppendLine(".catalog-list { display:flex; flex-direction:column; gap:4px; margin-top:6px; }");
         sb.AppendLine(".catalog-entry { white-space:pre-wrap; word-break:break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }");
         sb.AppendLine(".CodeMirror { border:1px solid #2a2e38; border-radius:6px; height:190px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px; }");
+        sb.AppendLine("#live-script-editor .CodeMirror { height:140px; }");
+        sb.AppendLine(".CodeMirror .run-line-active { background: rgba(90, 201, 119, 0.12); }");
+        sb.AppendLine(".cm-s-material-darker .cm-atom { color:#ffd166; font-weight:600; }");
         sb.AppendLine(".script-code { white-space:pre-wrap; word-break:break-word; }");
         sb.AppendLine("#state-panel { overflow-y:auto; }");
         sb.AppendLine("#right-panel { overflow-y:auto; }");
@@ -488,6 +513,10 @@ public sealed class HtmxBotWindow : IAppUi
         sb.AppendLine("</div>");
 
         sb.AppendLine("<div class='card'><h3>Script</h3>");
+        sb.AppendLine("<h4>Current Script</h4><div id='live-script-editor'><textarea id='current-script-input' rows='5' readonly>")
+            .Append(E(currentScript))
+            .AppendLine("</textarea></div>");
+        sb.AppendLine("<h4>Script</h4>");
         sb.AppendLine("<form id='script-form' hx-post='/api/control-input' hx-swap='none' class='list'>");
         sb.Append("<textarea id='script-input' name='script' rows='7' placeholder='script'>").Append(E(currentScript)).AppendLine("</textarea>");
         sb.AppendLine("<button type='submit'>Set Script</button></form>");
@@ -541,33 +570,136 @@ public sealed class HtmxBotWindow : IAppUi
         sb.AppendLine("  });");
         sb.AppendLine("};");
         sb.AppendLine("window.ensureScriptEditor = function () {");
-        sb.AppendLine("  if (!window.CodeMirror || !CodeMirror.defineSimpleMode) return;");
+        sb.AppendLine("  if (!window.CodeMirror) return;");
         sb.AppendLine("  var input = document.getElementById('script-input');");
-        sb.AppendLine("  if (!input || window._scriptEditor) return;");
+        sb.AppendLine("  var liveInput = document.getElementById('current-script-input');");
+        sb.AppendLine("  if ((!input && !liveInput) || (window._scriptEditor && window._liveScriptEditor)) return;");
+        sb.Append("  var commands = [");
+        for (int i = 0; i < commandNames.Count; i++)
+        {
+            if (i > 0)
+                sb.Append(", ");
+            sb.Append("'").Append(Js(commandNames[i])).Append("'");
+        }
+        sb.AppendLine("];");
+        sb.AppendLine("  window.buildNameRegex = function (names, lineStartOnly) {");
+        sb.AppendLine("    if (!Array.isArray(names) || names.length === 0) return null;");
+        sb.AppendLine("    var escaped = names");
+        sb.AppendLine("      .filter(function (n) { return typeof n === 'string' && n.trim().length > 0; })");
+        sb.AppendLine("      .map(function (n) { return n.trim().replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'); })");
+        sb.AppendLine("      .sort(function (a, b) { return b.length - a.length; });");
+        sb.AppendLine("    if (escaped.length === 0) return null;");
+        sb.AppendLine("    var core = '(?:' + escaped.join('|') + ')';");
+        sb.AppendLine("    var pattern = lineStartOnly ? core + '\\\\b' : '\\\\b' + core + '\\\\b';");
+        sb.AppendLine("    return new RegExp(pattern, 'i');");
+        sb.AppendLine("  };");
+        sb.AppendLine("  window._scriptCommandRegex = window.buildNameRegex(commands, true);");
+        sb.AppendLine("  window._scriptSymbolRegex = null;");
+        sb.AppendLine("  window.setScriptSymbols = function (nextSymbols) {");
+        sb.AppendLine("    window._scriptSymbolRegex = window.buildNameRegex(nextSymbols || [], false);");
+        sb.AppendLine("    if (window._scriptEditor) window._scriptEditor.refresh();");
+        sb.AppendLine("    if (window._liveScriptEditor) window._liveScriptEditor.refresh();");
+        sb.AppendLine("  };");
+        sb.AppendLine("  window.loadEditorBootstrap = function () {");
+        sb.AppendLine("    if (window._editorBootstrapLoaded) return;");
+        sb.AppendLine("    window._editorBootstrapLoaded = true;");
+        sb.AppendLine("    fetch('/bootstrap/editor-data', { cache: 'no-store' })");
+        sb.AppendLine("      .then(function (res) { return res.ok ? res.json() : null; })");
+        sb.AppendLine("      .then(function (data) {");
+        sb.AppendLine("        if (!data) return;");
+        sb.AppendLine("        if (Array.isArray(data.scriptHighlightNames)) window.setScriptSymbols(data.scriptHighlightNames);");
+        sb.AppendLine("        if (data.galaxyMap) window._galaxyMap = data.galaxyMap;");
+        sb.AppendLine("      })");
+        sb.AppendLine("      .catch(function () { });");
+        sb.AppendLine("  };");
         sb.AppendLine("  if (!CodeMirror.modes.spacemolt) {");
-        sb.AppendLine("    CodeMirror.defineSimpleMode('spacemolt', {");
-        sb.AppendLine("      start: [");
-        sb.AppendLine("        { regex: /^\\s*;.*$/, token: 'comment' },");
-        sb.AppendLine("        { regex: /^\\s*([A-Za-z_][A-Za-z0-9_]*)/, token: 'keyword' }");
-        sb.AppendLine("      ],");
-        sb.AppendLine("      meta: { lineComment: ';' }");
+        sb.AppendLine("    CodeMirror.defineMode('spacemolt', function () {");
+        sb.AppendLine("      return {");
+        sb.AppendLine("        startState: function () { return { lineStart: true }; },");
+        sb.AppendLine("        token: function (stream, state) {");
+        sb.AppendLine("          if (stream.sol()) state.lineStart = true;");
+        sb.AppendLine("          if (stream.eatSpace()) return null;");
+        sb.AppendLine("          if (state.lineStart && window._scriptCommandRegex && stream.match(window._scriptCommandRegex, true, true)) {");
+        sb.AppendLine("            state.lineStart = false;");
+        sb.AppendLine("            return 'keyword';");
+        sb.AppendLine("          }");
+        sb.AppendLine("          if (stream.peek() === ';') {");
+        sb.AppendLine("            stream.next();");
+        sb.AppendLine("            state.lineStart = false;");
+        sb.AppendLine("            return 'operator';");
+        sb.AppendLine("          }");
+        sb.AppendLine("          if (window._scriptSymbolRegex && stream.match(window._scriptSymbolRegex, true, true)) {");
+        sb.AppendLine("            state.lineStart = false;");
+        sb.AppendLine("            return 'atom';");
+        sb.AppendLine("          }");
+        sb.AppendLine("          stream.next();");
+        sb.AppendLine("          state.lineStart = false;");
+        sb.AppendLine("          return null;");
+        sb.AppendLine("        }");
+        sb.AppendLine("      };");
         sb.AppendLine("    });");
         sb.AppendLine("  }");
-        sb.AppendLine("  var editor = CodeMirror.fromTextArea(input, {");
-        sb.AppendLine("    mode: 'spacemolt',");
-        sb.AppendLine("    theme: 'material-darker',");
-        sb.AppendLine("    lineNumbers: true,");
-        sb.AppendLine("    indentUnit: 2,");
-        sb.AppendLine("    tabSize: 2,");
-        sb.AppendLine("    indentWithTabs: false");
-        sb.AppendLine("  });");
-        sb.AppendLine("  window._scriptEditor = editor;");
-        sb.AppendLine("  var form = document.getElementById('script-form');");
-        sb.AppendLine("  if (form) form.addEventListener('submit', function () { editor.save(); });");
+        sb.AppendLine("  if (input && !window._scriptEditor) {");
+        sb.AppendLine("    var editor = CodeMirror.fromTextArea(input, {");
+        sb.AppendLine("      mode: 'spacemolt',");
+        sb.AppendLine("      theme: 'material-darker',");
+        sb.AppendLine("      lineNumbers: true,");
+        sb.AppendLine("      indentUnit: 2,");
+        sb.AppendLine("      tabSize: 2,");
+        sb.AppendLine("      indentWithTabs: false");
+        sb.AppendLine("    });");
+        sb.AppendLine("    window._scriptEditor = editor;");
+        sb.AppendLine("    var form = document.getElementById('script-form');");
+        sb.AppendLine("    if (form) form.addEventListener('submit', function () { editor.save(); });");
+        sb.AppendLine("  }");
+        sb.AppendLine("  if (liveInput && !window._liveScriptEditor) {");
+        sb.AppendLine("    window._liveScriptEditor = CodeMirror.fromTextArea(liveInput, {");
+        sb.AppendLine("      mode: 'spacemolt',");
+        sb.AppendLine("      theme: 'material-darker',");
+        sb.AppendLine("      lineNumbers: true,");
+        sb.AppendLine("      readOnly: true");
+        sb.AppendLine("    });");
+        sb.AppendLine("    window._liveScriptRunLineHandle = null;");
+        sb.AppendLine("    window._liveScriptRunLineNumber = null;");
+        sb.AppendLine("  }");
+        sb.AppendLine("  window.setLiveScriptRunLine = function (lineNumber) {");
+        sb.AppendLine("    var editor = window._liveScriptEditor;");
+        sb.AppendLine("    if (!editor) return;");
+        sb.AppendLine("    var prev = window._liveScriptRunLineHandle;");
+        sb.AppendLine("    if (typeof prev === 'number' && prev >= 0 && prev < editor.lineCount()) {");
+        sb.AppendLine("      editor.removeLineClass(prev, 'background', 'run-line-active');");
+        sb.AppendLine("    }");
+        sb.AppendLine("    var next = (typeof lineNumber === 'number' && lineNumber > 0) ? Math.min(editor.lineCount() - 1, lineNumber - 1) : -1;");
+        sb.AppendLine("    if (next >= 0) {");
+        sb.AppendLine("      editor.addLineClass(next, 'background', 'run-line-active');");
+        sb.AppendLine("      window._liveScriptRunLineHandle = next;");
+        sb.AppendLine("    } else {");
+        sb.AppendLine("      window._liveScriptRunLineHandle = null;");
+        sb.AppendLine("    }");
+        sb.AppendLine("    window._liveScriptRunLineNumber = (typeof lineNumber === 'number') ? lineNumber : null;");
+        sb.AppendLine("  };");
+        sb.AppendLine("  window.syncCurrentScript = function () {");
+        sb.AppendLine("    fetch('/partial/current-script', { cache: 'no-store' })");
+        sb.AppendLine("      .then(function (res) { return res.ok ? res.json() : null; })");
+        sb.AppendLine("      .then(function (state) {");
+        sb.AppendLine("        if (!state || !window._liveScriptEditor) return;");
+        sb.AppendLine("        var text = typeof state.script === 'string' ? state.script : '';");
+        sb.AppendLine("        var current = window._liveScriptEditor.getValue();");
+        sb.AppendLine("        if (current !== text) window._liveScriptEditor.setValue(text);");
+        sb.AppendLine("        var nextLine = (typeof state.currentScriptLine === 'number') ? state.currentScriptLine : null;");
+        sb.AppendLine("        if (window._liveScriptRunLineNumber !== nextLine) window.setLiveScriptRunLine(nextLine);");
+        sb.AppendLine("      })");
+        sb.AppendLine("      .catch(function () { });");
+        sb.AppendLine("  };");
+        sb.AppendLine("  window.loadEditorBootstrap();");
+        sb.AppendLine("  window.syncCurrentScript();");
+        sb.AppendLine("  window.setLiveScriptRunLine(").Append(currentScriptLine?.ToString() ?? "null").AppendLine(");");
+        sb.AppendLine("  if (!window._liveScriptPoller) window._liveScriptPoller = setInterval(window.syncCurrentScript, 1000);");
         sb.AppendLine("};");
         sb.AppendLine("document.addEventListener('htmx:afterSwap', function () {");
         sb.AppendLine("  window.ensureScriptEditor();");
         sb.AppendLine("  if (window._scriptEditor) window._scriptEditor.refresh();");
+        sb.AppendLine("  if (window._liveScriptEditor) window._liveScriptEditor.refresh();");
         sb.AppendLine("});");
         sb.AppendLine("window.ensureScriptEditor();");
         sb.AppendLine("</script>");
@@ -691,7 +823,6 @@ public sealed class HtmxBotWindow : IAppUi
         lock (_lock) snapshot = _snapshot;
         var sb = new StringBuilder();
         sb.AppendLine($"<div class='small'>Loop: {(snapshot.ActiveBotLoopEnabled ? "ON" : "OFF")}</div>");
-        sb.AppendLine("<h4>Current Script (live)</h4><pre class='script-code live-script'>").Append(E(snapshot.ControlInput ?? "(none)")).AppendLine("</pre>");
         if (snapshot.ActiveMissionPrompts.Count > 0)
         {
             sb.AppendLine("<h4>Mission Prompts</h4><pre>");
@@ -730,6 +861,130 @@ public sealed class HtmxBotWindow : IAppUi
         }
 
         return $"<span class='small'>LLM: {E(provider)}/{E(model)}</span>";
+    }
+
+    private static string BuildEditorBootstrapJson()
+    {
+        var highlightNames = LoadScriptHighlightNamesFromCache()
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var galaxyMap = GalaxyMapSnapshotFile.Load(AppPaths.GalaxyMapFile);
+
+        return JsonSerializer.Serialize(new
+        {
+            scriptHighlightNames = highlightNames,
+            galaxyMap
+        });
+    }
+
+    private static IReadOnlyCollection<string> LoadScriptHighlightNamesFromCache()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void AddName(string? value)
+        {
+            var trimmed = (value ?? string.Empty).Trim();
+            if (!string.IsNullOrWhiteSpace(trimmed))
+                names.Add(trimmed);
+        }
+
+        try
+        {
+            var map = GalaxyMapSnapshotFile.Load(AppPaths.GalaxyMapFile);
+            foreach (var system in map.Systems ?? new List<GalaxySystemInfo>())
+                AddName(system?.Id);
+        }
+        catch
+        {
+            // Keep startup resilient if cache parsing fails.
+        }
+
+        AddCatalogueNamesFromCache(AppPaths.ItemCatalogByIdCacheFile, names);
+        AddCatalogueNamesFromCache(AppPaths.ShipCatalogByIdCacheFile, names);
+        return names;
+    }
+
+    private static void AddCatalogueNamesFromCache(string path, HashSet<string> names)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return;
+
+            JsonElement entries;
+            if (root.TryGetProperty("Entries", out var wrappedEntries) &&
+                wrappedEntries.ValueKind == JsonValueKind.Object)
+            {
+                entries = wrappedEntries;
+            }
+            else
+            {
+                entries = root;
+            }
+
+            foreach (var entry in entries.EnumerateObject())
+            {
+                if (entry.Value.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                if (!TryGetStringPropertyCaseInsensitive(entry.Value, "name", out var name))
+                    continue;
+
+                var trimmed = name.Trim();
+                if (trimmed.Length > 0)
+                    names.Add(trimmed);
+            }
+        }
+        catch
+        {
+            // Ignore malformed cache files.
+        }
+    }
+
+    private static bool TryGetStringPropertyCaseInsensitive(
+        JsonElement element,
+        string propertyName,
+        out string value)
+    {
+        value = string.Empty;
+        if (element.ValueKind != JsonValueKind.Object)
+            return false;
+
+        foreach (var prop in element.EnumerateObject())
+        {
+            if (!prop.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (prop.Value.ValueKind != JsonValueKind.String)
+                return false;
+
+            value = prop.Value.GetString() ?? string.Empty;
+            return true;
+        }
+
+        return false;
+    }
+
+    private string BuildCurrentScriptStateJson()
+    {
+        string script;
+        int? currentScriptLine;
+        lock (_lock)
+        {
+            script = _snapshot.ControlInput ?? string.Empty;
+            currentScriptLine = _snapshot.CurrentScriptLine;
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            script,
+            currentScriptLine
+        });
     }
 
     private static string BuildLoopButtonFormHtml(bool loopEnabled)
@@ -795,6 +1050,12 @@ public sealed class HtmxBotWindow : IAppUi
         => Uri.UnescapeDataString((value ?? "").Replace("+", " "));
 
     private static string E(string value) => WebUtility.HtmlEncode(value ?? "");
+    private static string Js(string value)
+        => (value ?? string.Empty)
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("'", "\\'", StringComparison.Ordinal)
+            .Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal);
 
     private static string EnsureTrailingSlash(string prefix)
         => string.IsNullOrWhiteSpace(prefix)

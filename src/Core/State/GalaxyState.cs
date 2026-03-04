@@ -337,6 +337,12 @@ internal static class GalaxyStateHub
                 .Select(system => new GalaxySystemInfo
                 {
                     Id = system.Id,
+                    Empire = system.Empire,
+                    X = system.X,
+                    Y = system.Y,
+                    Connections = (system.Connections ?? new List<string>())
+                        .Where(c => !string.IsNullOrWhiteSpace(c))
+                        .ToList(),
                     Pois = (system.Pois ?? new List<GalaxyPoiInfo>())
                         .Select(poi => new GalaxyPoiInfo { Id = poi.Id })
                         .ToList()

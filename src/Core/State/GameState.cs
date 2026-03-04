@@ -779,6 +779,10 @@ public class GalaxyMapSnapshot
 public class GalaxySystemInfo
 {
     public string Id { get; set; } = "";
+    public string Empire { get; set; } = "";
+    public double? X { get; set; }
+    public double? Y { get; set; }
+    public List<string> Connections { get; set; } = new();
     public List<GalaxyPoiInfo> Pois { get; set; } = new();
 }
 

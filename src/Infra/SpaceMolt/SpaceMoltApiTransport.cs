@@ -131,7 +131,7 @@ internal sealed class SpaceMoltApiTransport
                     retryAfterSeconds);
             }
 
-            throw new Exception($"API Error: {code} - {message}");
+            throw new SpaceMoltApiException($"API Error: {code ?? "unknown"} - {message ?? "Unknown API error"}");
         }
 
         response.EnsureSuccessStatusCode();

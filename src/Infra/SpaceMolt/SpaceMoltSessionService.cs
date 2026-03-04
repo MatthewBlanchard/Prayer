@@ -25,7 +25,7 @@ internal sealed class SpaceMoltSessionService
         var sessionId = json.GetProperty("session").GetProperty("id").GetString();
 
         if (string.IsNullOrWhiteSpace(sessionId))
-            throw new Exception("Failed to create session.");
+            throw new SpaceMoltApiException("Failed to create session.");
 
         return sessionId;
     }
@@ -73,6 +73,6 @@ internal sealed class SpaceMoltSessionService
                 return password;
         }
 
-        throw new Exception("Register succeeded but no password was returned by the API.");
+        throw new SpaceMoltApiException("Register succeeded but no password was returned by the API.");
     }
 }

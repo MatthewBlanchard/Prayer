@@ -1,5 +1,0 @@
-Low: broad Exception throws reduce error semantics
-Generic exceptions are used in API/session paths instead of typed failures.
-SpaceMoltSessionService.cs (line 28)
-SpaceMoltSessionService.cs (line 76)
-SpaceMoltApiTransport.cs (line 134)

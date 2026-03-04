@@ -1,10 +1,3 @@
-Low: duplicated fuzzy-match logic (DRY smell)
-Near-identical token overlap + Levenshtein code exists in both Agent and DslFuzzyMatcher.
-Agent.cs (line 1372)
-Agent.cs (line 1400)
-DslFuzzyMatcher.cs (line 326)
-DslFuzzyMatcher.cs (line 354)
-
 Low: broad Exception throws reduce error semantics
 Generic exceptions are used in API/session paths instead of typed failures.
 SpaceMoltSessionService.cs (line 28)

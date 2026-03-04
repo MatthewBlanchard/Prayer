@@ -5,8 +5,8 @@ public static class AppPaths
     public const string LogDir = "log";
     public const string CacheDir = "cache";
     public const string MarketsDir = "markets";
-    public const string ShipyardsDir = "shipyards";
-    public const string CatalogsDir = "catalogs";
+    public static readonly string ShipyardsDir = Path.Combine(CacheDir, "shipyards");
+    public static readonly string CatalogsDir = Path.Combine(CacheDir, "catalogs");
 
     public static readonly string LlmLogFile = Path.Combine(LogDir, "llm.log");
     public static readonly string PlannerPromptLogFile = Path.Combine(LogDir, "planner_prompts.log");

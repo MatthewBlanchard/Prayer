@@ -22,6 +22,7 @@ public static class AppPaths
     public static readonly string ScriptWriterContextLogFile = Path.Combine(LogDir, "script_writer_context.log");
     public static readonly string ScriptGenerationExamplesFile = Path.Combine(CacheDir, "script_generation_examples.json");
     public static readonly string SavedBotsFile = Path.Combine(CacheDir, "saved_bots.json");
+    public static readonly string SavedLlmSelectionFile = Path.Combine(CacheDir, "saved_llm_selection.json");
     public static readonly string ItemCatalogByIdCacheFile = Path.Combine(CacheDir, "item_catalog_by_id.json");
     public static readonly string ShipCatalogByIdCacheFile = Path.Combine(CacheDir, "ship_catalog_by_id.json");
 

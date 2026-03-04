@@ -244,6 +244,12 @@ public sealed class HtmxBotWindow : IAppUi
             return;
         }
 
+        if (req.HttpMethod == "GET" && path == "/partial/llm-summary")
+        {
+            WriteText(ctx.Response, BuildLlmSummaryHtml(), "text/html; charset=utf-8");
+            return;
+        }
+
         if (req.HttpMethod == "POST" && path == "/api/prompt")
         {
             var form = ReadForm(req);
@@ -410,6 +416,19 @@ public sealed class HtmxBotWindow : IAppUi
         sb.AppendLine("pre { margin:0; white-space:pre-wrap; word-break:break-word; }");
         sb.AppendLine("textarea, select, input, button { width:100%; box-sizing:border-box; background:#0f1115; color:#d7dae0; border:1px solid #2a2e38; border-radius:6px; padding:6px; }");
         sb.AppendLine("button { cursor:pointer; } .row { display:flex; gap:8px; } .row > * { flex:1; } .small { font-size:12px; color:#9ca3b2; } .list { display:flex; flex-direction:column; gap:6px; } .active { border-color:#5ac977; }");
+        sb.AppendLine(".sidebar { position:relative; overflow:hidden; }");
+        sb.AppendLine(".sidebar-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }");
+        sb.AppendLine(".sidebar-header h3 { margin:0; }");
+        sb.AppendLine(".sidebar-actions { display:flex; gap:6px; }");
+        sb.AppendLine(".sidebar-llm { display:flex; align-items:center; gap:6px; margin-bottom:8px; }");
+        sb.AppendLine(".sidebar-llm-name { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }");
+        sb.AppendLine(".icon-btn { width:auto; min-width:34px; padding:6px 10px; font-weight:700; line-height:1; }");
+        sb.AppendLine(".panel-layer { position:absolute; inset:0; background:rgba(8,10,14,0.86); display:none; align-items:flex-start; justify-content:center; padding:10px; box-sizing:border-box; z-index:10; }");
+        sb.AppendLine(".panel-layer.open { display:flex; }");
+        sb.AppendLine(".panel-card { width:100%; max-height:100%; overflow-y:auto; border:1px solid #2a2e38; background:#171a21; border-radius:8px; padding:10px; box-sizing:border-box; }");
+        sb.AppendLine(".panel-card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:8px; }");
+        sb.AppendLine(".panel-card-header h4 { margin:0; }");
+        sb.AppendLine(".panel-card-close { width:auto; min-width:68px; }");
         sb.AppendLine(".tabs { display:flex; gap:6px; margin-bottom:8px; }");
         sb.AppendLine(".tab-btn { width:auto; flex:1; background:#0f1115; border:1px solid #2a2e38; color:#d7dae0; border-radius:6px; padding:6px 8px; font-size:12px; }");
         sb.AppendLine(".tab-btn.active { border-color:#5ac977; color:#e8ffef; }");
@@ -429,7 +448,12 @@ public sealed class HtmxBotWindow : IAppUi
         sb.AppendLine("#right-panel { overflow-y:auto; }");
         sb.AppendLine("</style></head><body><div class='app'><div class='grid'>");
 
-        sb.AppendLine("<div class='card'><h3>Control</h3>");
+        sb.AppendLine("<div class='card sidebar'><div class='sidebar-header'><h3>Bots</h3><div class='sidebar-actions'><button id='open-add-bot' class='icon-btn' type='button' title='Add Bot'>+</button></div></div>");
+        sb.AppendLine("<div class='sidebar-llm'><div id='llm-summary' class='sidebar-llm-name' hx-get='/partial/llm-summary' hx-trigger='load, every 1000ms' hx-swap='innerHTML'>"
+            + BuildLlmSummaryHtml()
+            + "</div><button id='open-llm-settings' class='icon-btn' type='button' title='LLM Settings'>⚙</button></div>");
+        sb.AppendLine("<div id='bots-panel' hx-get='/partial/bots' hx-trigger='load, every 1000ms' hx-swap='innerHTML'></div>");
+        sb.AppendLine("<div id='llm-panel-layer' class='panel-layer' data-layer><div class='panel-card'><div class='panel-card-header'><h4>LLM Settings</h4><button class='panel-card-close' data-close-layer type='button'>Close</button></div>");
         sb.AppendLine("<form hx-post='/api/llm-select' hx-swap='none' class='list'>");
         sb.AppendLine("<label class='small'>Provider</label><select name='provider' hx-get='/partial/models' hx-target='#model-select' hx-swap='outerHTML' hx-trigger='change'>");
         foreach (var provider in providers)
@@ -440,12 +464,11 @@ public sealed class HtmxBotWindow : IAppUi
         }
         sb.AppendLine("</select><label class='small'>Model</label>");
         sb.AppendLine(BuildModelSelectHtml(selectedProvider, selectedModel));
-        sb.AppendLine("<button type='submit'>Apply LLM</button></form>");
-        sb.AppendLine("<h4>Bots</h4><div id='bots-panel' hx-get='/partial/bots' hx-trigger='load, every 1000ms' hx-swap='innerHTML'></div>");
-        sb.AppendLine("<h4>Add Bot</h4><form hx-post='/api/add-bot' hx-swap='none' class='list'>");
+        sb.AppendLine("<button type='submit'>Apply LLM</button></form></div></div>");
+        sb.AppendLine("<div id='add-bot-panel-layer' class='panel-layer' data-layer><div class='panel-card'><div class='panel-card-header'><h4>Add Bot</h4><button class='panel-card-close' data-close-layer type='button'>Close</button></div><form hx-post='/api/add-bot' hx-swap='none' class='list'>");
         sb.AppendLine("<select name='mode'><option value='login'>login</option><option value='register'>register</option></select>");
         sb.AppendLine("<input name='username' placeholder='username'><input name='password' placeholder='password'><input name='registration_code' placeholder='registration code'><input name='empire' placeholder='empire (for register)'>");
-        sb.AppendLine("<button type='submit'>Add Bot</button></form></div>");
+        sb.AppendLine("<button type='submit'>Add Bot</button></form></div></div></div>");
 
         sb.AppendLine("<div id='state-panel' class='card'>");
         sb.AppendLine("<h3>State</h3>");
@@ -487,6 +510,29 @@ public sealed class HtmxBotWindow : IAppUi
         sb.AppendLine("  panel.querySelectorAll('.tab-pane').forEach(function (p) { p.classList.remove('active'); });");
         sb.AppendLine("  var target = document.getElementById('state-pane-' + tab);");
         sb.AppendLine("  if (target) target.classList.add('active');");
+        sb.AppendLine("});");
+        sb.AppendLine("window.closeAllSidebarLayers = function () {");
+        sb.AppendLine("  document.querySelectorAll('.panel-layer.open').forEach(function (layer) { layer.classList.remove('open'); });");
+        sb.AppendLine("};");
+        sb.AppendLine("window.openSidebarLayer = function (id) {");
+        sb.AppendLine("  window.closeAllSidebarLayers();");
+        sb.AppendLine("  var layer = document.getElementById(id);");
+        sb.AppendLine("  if (layer) layer.classList.add('open');");
+        sb.AppendLine("};");
+        sb.AppendLine("document.addEventListener('click', function (e) {");
+        sb.AppendLine("  var addBtn = e.target.closest('#open-add-bot');");
+        sb.AppendLine("  if (addBtn) { window.openSidebarLayer('add-bot-panel-layer'); return; }");
+        sb.AppendLine("  var llmBtn = e.target.closest('#open-llm-settings');");
+        sb.AppendLine("  if (llmBtn) { window.openSidebarLayer('llm-panel-layer'); return; }");
+        sb.AppendLine("  var closeBtn = e.target.closest('[data-close-layer]');");
+        sb.AppendLine("  if (closeBtn) { window.closeAllSidebarLayers(); return; }");
+        sb.AppendLine("  var openLayer = e.target.closest('.panel-layer.open');");
+        sb.AppendLine("  if (openLayer && e.target === openLayer) window.closeAllSidebarLayers();");
+        sb.AppendLine("});");
+        sb.AppendLine("document.addEventListener('keydown', function (e) { if (e.key === 'Escape') window.closeAllSidebarLayers(); });");
+        sb.AppendLine("document.body.addEventListener('htmx:afterRequest', function (e) {");
+        sb.AppendLine("  var path = (((e || {}).detail || {}).pathInfo || {}).requestPath || '';");
+        sb.AppendLine("  if (path === '/api/add-bot' || path === '/api/llm-select') window.closeAllSidebarLayers();");
         sb.AppendLine("});");
         sb.AppendLine("window.filterCatalogEntries = function (query) {");
         sb.AppendLine("  var q = (query || '').toLowerCase().trim();");
@@ -677,6 +723,19 @@ public sealed class HtmxBotWindow : IAppUi
         bool loopEnabled;
         lock (_lock) loopEnabled = _snapshot.ActiveBotLoopEnabled;
         return BuildLoopButtonFormHtml(loopEnabled);
+    }
+
+    private string BuildLlmSummaryHtml()
+    {
+        string provider;
+        string model;
+        lock (_lock)
+        {
+            provider = _selectedProvider;
+            model = _selectedModel;
+        }
+
+        return $"<span class='small'>LLM: {E(provider)}/{E(model)}</span>";
     }
 
     private static string BuildLoopButtonFormHtml(bool loopEnabled)

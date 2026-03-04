@@ -71,6 +71,9 @@ class Program
             return llmProvider.CreateClient(normalizedModel);
         }
 
+        var savedLlmSelectionStore = new SavedLlmSelectionStore();
+        var savedLlmSelection = savedLlmSelectionStore.Load();
+
         var requestedProvider = NormalizeProvider(Environment.GetEnvironmentVariable("LLM_PROVIDER"));
         var initialProvider = providersById.ContainsKey(requestedProvider)
             ? requestedProvider
@@ -86,6 +89,17 @@ class Program
                     ? Environment.GetEnvironmentVariable("OPENAI_MODEL")
                     : Environment.GetEnvironmentVariable("LLAMACPP_MODEL"))
             ?? ResolveDefaultModel(initialProvider);
+        if (savedLlmSelection != null)
+        {
+            var savedProvider = NormalizeProvider(savedLlmSelection.Provider);
+            if (providersById.ContainsKey(savedProvider))
+            {
+                initialProvider = savedProvider;
+                initialModel = string.IsNullOrWhiteSpace(savedLlmSelection.Model)
+                    ? ResolveDefaultModel(savedProvider)
+                    : savedLlmSelection.Model.Trim();
+            }
+        }
 
         ILLMClient initialPlanningClient = CreatePlanningClient(initialProvider, initialModel);
         var planningLlm = new SwappableLlmClient(initialPlanningClient);
@@ -556,6 +570,7 @@ class Program
                             planningLlm.SetInner(updatedClient);
                             currentPlannerProvider = selectedProvider;
                             currentPlannerModel = selectedModel;
+                            savedLlmSelectionStore.Save(currentPlannerProvider, currentPlannerModel);
                             channels.Status.Writer.TryWrite(
                                 $"Planner LLM set to {currentPlannerProvider}/{currentPlannerModel}");
                             LogAuth(

@@ -46,6 +46,7 @@ public static class DslParser
         {
             ["go"] = new[] { "destination" },
             ["mine"] = new[] { "target" },
+            ["seek"] = new[] { "resource" },
             ["buy"] = new[] { "item", "count" },
             ["sell"] = new[] { "item" },
             ["cancel_buy"] = new[] { "item" },

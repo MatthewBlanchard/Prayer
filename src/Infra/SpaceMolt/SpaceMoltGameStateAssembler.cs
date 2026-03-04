@@ -45,7 +45,12 @@ internal sealed class SpaceMoltGameStateAssembler
                 .ToArray()
             : Array.Empty<POIInfo>();
 
+        await EnrichCurrentPoiFromGetPoiAsync(currentPOI);
+
         await _owner.ObserveSeenPoisAsync(
+            currentSystem,
+            new[] { currentPOI }.Concat(pois));
+        GalaxyStateHub.MergeResourceLocations(
             currentSystem,
             new[] { currentPOI }.Concat(pois));
 
@@ -304,6 +309,53 @@ internal sealed class SpaceMoltGameStateAssembler
             return Array.Empty<PoiResourceInfo>();
         }
 
+        return ParseResourcesArray(resources);
+    }
+
+    private async Task EnrichCurrentPoiFromGetPoiAsync(POIInfo currentPOI)
+    {
+        try
+        {
+            var poiResult = await _owner.ExecuteAsync("get_poi");
+            if (poiResult.ValueKind != JsonValueKind.Object)
+                return;
+
+            if (poiResult.TryGetProperty("poi", out var poiObj) &&
+                poiObj.ValueKind == JsonValueKind.Object)
+            {
+                currentPOI.Description = TryGetString(poiObj, "description") ?? currentPOI.Description;
+                currentPOI.Hidden = TryGetBool(poiObj, "hidden") ?? currentPOI.Hidden;
+                currentPOI.SystemId = TryGetString(poiObj, "system_id") ?? currentPOI.SystemId;
+
+                if (poiObj.TryGetProperty("position", out var positionObj) &&
+                    positionObj.ValueKind == JsonValueKind.Object)
+                {
+                    currentPOI.X = TryGetDouble(positionObj, "x") ?? currentPOI.X;
+                    currentPOI.Y = TryGetDouble(positionObj, "y") ?? currentPOI.Y;
+                }
+            }
+
+            if (poiResult.TryGetProperty("resources", out var resourcesObj) &&
+                resourcesObj.ValueKind == JsonValueKind.Array)
+            {
+                currentPOI.Resources = ParseResourcesArray(resourcesObj);
+            }
+            else if (poiResult.TryGetProperty("poi", out var nestedPoiObj) &&
+                     nestedPoiObj.ValueKind == JsonValueKind.Object &&
+                     nestedPoiObj.TryGetProperty("resources", out var nestedResources) &&
+                     nestedResources.ValueKind == JsonValueKind.Array)
+            {
+                currentPOI.Resources = ParseResourcesArray(nestedResources);
+            }
+        }
+        catch
+        {
+            // Optional enrichment: keep get_system snapshot even if get_poi fails.
+        }
+    }
+
+    private static PoiResourceInfo[] ParseResourcesArray(JsonElement resources)
+    {
         return resources
             .EnumerateArray()
             .Where(r => r.ValueKind == JsonValueKind.Object)

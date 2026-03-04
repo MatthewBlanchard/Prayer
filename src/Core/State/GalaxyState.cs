@@ -7,7 +7,14 @@ public class GalaxyState
     public GalaxyMapSnapshot Map { get; set; } = new();
     public GalaxyMarket Market { get; set; } = new();
     public GalaxyCatalog Catalog { get; set; } = new();
+    public GalaxyResources Resources { get; set; } = new();
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+}
+
+public class GalaxyResources
+{
+    public Dictionary<string, string[]> SystemsByResource { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, string[]> PoisByResource { get; set; } = new(StringComparer.Ordinal);
 }
 
 public class GalaxyMarket
@@ -31,6 +38,8 @@ internal static class GalaxyStateHub
     private static readonly Dictionary<string, MarketState> MarketsByStation = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, CatalogueEntry> ItemCatalogById = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, CatalogueEntry> ShipCatalogById = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, HashSet<string>> ResourceSystemsById = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, HashSet<string>> ResourcePoisById = new(StringComparer.Ordinal);
     private static GalaxyState _snapshot = new();
 
     public static void MergeMap(GalaxyMapSnapshot? map)
@@ -108,6 +117,61 @@ internal static class GalaxyStateHub
         }
     }
 
+    public static void MergeResourceLocations(
+        string defaultSystemId,
+        IEnumerable<POIInfo>? pois)
+    {
+        if (pois == null)
+            return;
+
+        bool changed = false;
+
+        lock (Sync)
+        {
+            foreach (var poi in pois)
+            {
+                if (poi == null || string.IsNullOrWhiteSpace(poi.Id))
+                    continue;
+
+                if (poi.Resources == null || poi.Resources.Length == 0)
+                    continue;
+
+                string systemId = !string.IsNullOrWhiteSpace(poi.SystemId)
+                    ? poi.SystemId
+                    : defaultSystemId;
+                if (string.IsNullOrWhiteSpace(systemId))
+                    continue;
+
+                foreach (var resource in poi.Resources)
+                {
+                    string resourceId = resource?.ResourceId ?? "";
+                    if (string.IsNullOrWhiteSpace(resourceId))
+                        continue;
+
+                    if (!ResourceSystemsById.TryGetValue(resourceId, out var systemSet))
+                    {
+                        systemSet = new HashSet<string>(StringComparer.Ordinal);
+                        ResourceSystemsById[resourceId] = systemSet;
+                    }
+
+                    if (!ResourcePoisById.TryGetValue(resourceId, out var poiSet))
+                    {
+                        poiSet = new HashSet<string>(StringComparer.Ordinal);
+                        ResourcePoisById[resourceId] = poiSet;
+                    }
+
+                    if (systemSet.Add(systemId))
+                        changed = true;
+                    if (poiSet.Add(poi.Id))
+                        changed = true;
+                }
+            }
+
+            if (changed)
+                RebuildSnapshotNoLock();
+        }
+    }
+
     public static GalaxyState Snapshot()
     {
         lock (Sync)
@@ -136,8 +200,25 @@ internal static class GalaxyStateHub
                 ItemsById = CloneCatalogById(ItemCatalogById),
                 ShipsById = CloneCatalogById(ShipCatalogById)
             },
+            Resources = new GalaxyResources
+            {
+                SystemsByResource = BuildResourceIndexSnapshot(ResourceSystemsById),
+                PoisByResource = BuildResourceIndexSnapshot(ResourcePoisById)
+            },
             UpdatedAtUtc = DateTime.UtcNow
         };
+    }
+
+    private static Dictionary<string, string[]> BuildResourceIndexSnapshot(
+        Dictionary<string, HashSet<string>> index)
+    {
+        return index.ToDictionary(
+            kvp => kvp.Key,
+            kvp => kvp.Value
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .OrderBy(v => v, StringComparer.Ordinal)
+                .ToArray(),
+            StringComparer.Ordinal);
     }
 
     private static Dictionary<string, CatalogueEntry> CloneCatalogById(
@@ -325,8 +406,26 @@ internal static class GalaxyStateHub
                 ItemsById = CloneCatalogById(source.Catalog.ItemsById),
                 ShipsById = CloneCatalogById(source.Catalog.ShipsById)
             },
+            Resources = new GalaxyResources
+            {
+                SystemsByResource = CloneResourceIndex(
+                    source.Resources?.SystemsByResource ?? new Dictionary<string, string[]>(StringComparer.Ordinal)),
+                PoisByResource = CloneResourceIndex(
+                    source.Resources?.PoisByResource ?? new Dictionary<string, string[]>(StringComparer.Ordinal))
+            },
             UpdatedAtUtc = source.UpdatedAtUtc
         };
+    }
+
+    private static Dictionary<string, string[]> CloneResourceIndex(
+        Dictionary<string, string[]> source)
+    {
+        return source.ToDictionary(
+            kvp => kvp.Key,
+            kvp => (kvp.Value ?? Array.Empty<string>())
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .ToArray(),
+            StringComparer.Ordinal);
     }
 
     private static GalaxyMapSnapshot CloneMap(GalaxyMapSnapshot source)

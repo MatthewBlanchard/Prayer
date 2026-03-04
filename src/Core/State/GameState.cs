@@ -307,6 +307,7 @@ Total Ships: {totalItems}
     internal string RenderSpaceLlmMarkdown()
     {
         var r = BuildRenderData();
+        string currentPoiResources = FormatPoiResources(CurrentPOI.Resources);
         return
 $@"
 Current System (your location): `{System}`
@@ -321,6 +322,7 @@ Hull: {Hull}/{MaxHull} ({r.HullPct}%)
 Shield: {Shield}/{MaxShield} ({r.ShieldPct}%)
 Cargo: {CargoUsed}/{CargoCapacity} ({r.CargoPct}% used, {r.CargoFree} free)
 Current POI Online: {CurrentPOI.Online}
+Current POI Resources: {currentPoiResources}
 
 ### POIs
 {r.PoisMarkdown}
@@ -339,6 +341,7 @@ Current POI Online: {CurrentPOI.Online}
     internal string RenderSpaceDisplayText()
     {
         var r = BuildRenderData();
+        string currentPoiResources = FormatPoiResources(CurrentPOI.Resources);
         string stationCreditsLine = Docked
             ? $"\nSTATION CREDITS: {StorageCredits}"
             : "";
@@ -357,6 +360,7 @@ SHIP
 - Shield: {Shield}/{MaxShield} ({r.ShieldPct}%)
 - Cargo: {CargoUsed}/{CargoCapacity} ({r.CargoPct}% used, {r.CargoFree} free)
 - POI Online: {CurrentPOI.Online}
+- POI Resources: {currentPoiResources}
 
 POIS
 {r.PoisDisplay}
@@ -447,6 +451,29 @@ CARGO
     private static string FormatCredits(decimal amount)
     {
         return $"{Math.Round(amount, 2):0.##}cr";
+    }
+
+    private static string FormatPoiResources(PoiResourceInfo[] resources)
+    {
+        if (resources == null || resources.Length == 0)
+            return "(none)";
+
+        var lines = resources
+            .Where(r => !string.IsNullOrWhiteSpace(r.ResourceId))
+            .Take(5)
+            .Select(r =>
+            {
+                string richness = r.Richness.HasValue
+                    ? r.Richness.Value.ToString()
+                    : (string.IsNullOrWhiteSpace(r.RichnessText) ? "?" : r.RichnessText);
+                string remaining = !string.IsNullOrWhiteSpace(r.RemainingDisplay)
+                    ? r.RemainingDisplay
+                    : (r.Remaining.HasValue ? r.Remaining.Value.ToString() : "?");
+                return $"{r.ResourceId} (richness: {richness}, remaining: {remaining})";
+            })
+            .ToList();
+
+        return lines.Count == 0 ? "(none)" : string.Join("; ", lines);
     }
 
     internal Dictionary<string, decimal> BuildEstimatedItemPrices()

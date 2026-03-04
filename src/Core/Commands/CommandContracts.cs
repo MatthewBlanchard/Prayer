@@ -80,10 +80,3 @@ public interface IMultiTurnCommand : ICommand
         SpaceMoltHttpClient client,
         GameState state);
 }
-
-public interface IWarning
-{
-    bool ShouldWarn(GameState state);
-
-    string BuildWarning(GameState state);
-}

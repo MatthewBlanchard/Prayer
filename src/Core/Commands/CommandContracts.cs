@@ -18,12 +18,19 @@ public interface ICommand
     string BuildHelp(GameState state);
 }
 
+[Flags]
 public enum DslArgKind
 {
-    None,
-    Identifier,
-    Integer,
-    String
+    None = 0,
+    Any = 1 << 0,
+    Integer = 1 << 1,
+    System = 1 << 2,
+    Item = 1 << 3,
+    Enum = 1 << 4,
+
+    // Backward-compat aliases for older command syntax declarations.
+    Identifier = Any,
+    String = Any
 }
 
 public enum DslCommandGroup
@@ -38,14 +45,15 @@ public enum DslCommandGroup
 public sealed record DslArgumentSpec(
     DslArgKind Kind,
     bool Required = true,
-    string? DefaultValue = null);
+    string? DefaultValue = null,
+    string? EnumType = null,
+    IReadOnlyList<string>? EnumValues = null,
+    IReadOnlyDictionary<string, double>? ArgTypeWeights = null);
 
 public sealed record DslCommandSyntax(
     DslArgKind ArgKind = DslArgKind.None,
     bool ArgRequired = false,
     string? DefaultArg = null,
-    bool AllowsBlock = false,
-    DslCommandGroup? BlockBodyGroup = null,
     IReadOnlyList<DslArgumentSpec>? ArgSpecs = null);
 
 public interface IDslCommandGrammar

@@ -39,8 +39,6 @@ public abstract record DslAstNode;
 
 public sealed record DslCommandAstNode(string Name, IReadOnlyList<string> Args, int SourceLine = 0) : DslAstNode;
 
-public sealed record DslBlockAstNode(string Name, IReadOnlyList<DslAstNode> Body, int SourceLine = 0) : DslAstNode;
-
 public static class DslParser
 {
     private static readonly HashSet<string> FlattenedTradeCommands =
@@ -73,6 +71,8 @@ public static class DslParser
             ["commission_quote"] = new[] { "ship_class" },
             ["commission_ship"] = new[] { "ship_class" },
             ["commission_status"] = new[] { "commission" },
+            ["accept_mission"] = new[] { "mission_id" },
+            ["abandon_mission"] = new[] { "mission_id" },
             ["sell_ship"] = new[] { "ship" },
             ["list_ship_for_sale"] = new[] { "price" },
         };
@@ -113,20 +113,8 @@ public static class DslParser
         from _semi in Character.EqualTo(';')
         select (DslAstNode)new DslCommandAstNode(commandName, commandArgs);
 
-    private static readonly TextParser<DslAstNode> BlockAst =
-        from command in Identifier
-        from _ in Ws
-        from ___ in Character.EqualTo('{')
-        from _preBody in Ws
-        from inner in (
-            from statement in StatementAst!
-            select statement).Many()
-        from _postBody in Ws
-        from ______ in Character.EqualTo('}')
-        select (DslAstNode)new DslBlockAstNode(command, inner);
-
     private static readonly TextParser<DslAstNode> StatementAst =
-        from statement in BlockAst.Try().Or(CommandAst)
+        from statement in CommandAst
         from _ in Ws
         select statement;
 
@@ -180,25 +168,8 @@ public static class DslParser
             {
                 SourceLine = ConsumeLine(entries, ref entryIndex)
             },
-            DslBlockAstNode blockNode => AnnotateBlockNodeLine(blockNode, entries, ref entryIndex),
             _ => node
         };
-    }
-
-    private static DslBlockAstNode AnnotateBlockNodeLine(
-        DslBlockAstNode blockNode,
-        IReadOnlyList<StatementLineEntry> entries,
-        ref int entryIndex)
-    {
-        var sourceLine = ConsumeLine(entries, ref entryIndex);
-        var body = new List<DslAstNode>(blockNode.Body.Count);
-        foreach (var child in blockNode.Body)
-            body.Add(AnnotateNodeLine(child, entries, ref entryIndex));
-
-        return new DslBlockAstNode(
-            blockNode.Name,
-            body,
-            sourceLine);
     }
 
     private static int ConsumeLine(
@@ -215,7 +186,6 @@ public static class DslParser
     {
         var entries = new List<StatementLineEntry>();
         bool expectingCommand = true;
-        string? currentCommand = null;
         int currentCommandLine = 1;
         int line = 1;
 
@@ -237,15 +207,8 @@ public static class DslParser
                 if (IsIdentifierStart(c))
                 {
                     currentCommandLine = line;
-                    currentCommand = ReadIdentifier(text, ref i);
+                    _ = ReadIdentifier(text, ref i);
                     expectingCommand = false;
-                    continue;
-                }
-
-                if (c == '}')
-                {
-                    i++;
-                    expectingCommand = true;
                     continue;
                 }
 
@@ -253,12 +216,9 @@ public static class DslParser
                 continue;
             }
 
-            if (c == ';' || c == '{')
+            if (c == ';')
             {
-                if (!string.IsNullOrWhiteSpace(currentCommand))
-                    entries.Add(new StatementLineEntry(currentCommandLine));
-
-                currentCommand = null;
+                entries.Add(new StatementLineEntry(currentCommandLine));
                 expectingCommand = true;
                 i++;
                 continue;
@@ -342,25 +302,12 @@ public static class DslParser
             .Select(c => (Command: c, Syntax: CommandSyntaxByName[c.Name]))
             .ToList();
 
-        var blockSignatures = entries
-            .Where(e => e.Syntax.AllowsBlock)
-            .Select(e => $"{e.Command.Name} {{ ... }}")
-            .ToList();
-
         var commandSignatures = entries
-            .Where(e => !e.Syntax.AllowsBlock)
             .Select(e => BuildPromptCommandSignature(e.Command.Name, e.Syntax))
             .ToList();
 
         var sb = new StringBuilder();
-        sb.AppendLine("DSL command/block reference (terminate commands with ;):");
-
-        if (blockSignatures.Count > 0)
-        {
-            sb.AppendLine("Blocks:");
-            foreach (var signature in blockSignatures)
-                sb.AppendLine($"- {signature}");
-        }
+        sb.AppendLine("DSL command reference (terminate commands with ;):");
 
         if (commandSignatures.Count > 0)
         {
@@ -371,9 +318,7 @@ public static class DslParser
 
         sb.AppendLine();
         sb.AppendLine("Rules:");
-        sb.AppendLine("- Commands with block forms must be used as blocks.");
-        sb.AppendLine("- `go` is not allowed inside blocks.");
-        sb.AppendLine("- `mine` is not allowed inside `dock { ... }`.");
+        sb.AppendLine("- Blocks are not supported. Use one command per line with ';'.");
         sb.AppendLine();
 
         return sb.ToString();
@@ -428,12 +373,15 @@ public static class DslParser
 
     internal static DslCommandGroup RootGroup => DslCommandGroup.Space;
 
-    internal static DslCommandGroup ResolveBlockBodyGroup(string commandName, DslCommandGroup currentGroup)
+    internal static IReadOnlyList<DslArgumentSpec> GetArgSpecsForCommand(string commandName)
     {
-        if (TryResolveBlockBodyGroup(commandName, currentGroup, out var bodyGroup))
-            return bodyGroup;
+        if (string.IsNullOrWhiteSpace(commandName))
+            return Array.Empty<DslArgumentSpec>();
 
-        return currentGroup;
+        if (!CommandSyntaxByName.TryGetValue(commandName, out var syntax))
+            return Array.Empty<DslArgumentSpec>();
+
+        return ResolveArgSpecs(syntax);
     }
 
     private static IReadOnlyDictionary<DslCommandGroup, IReadOnlyList<ICommand>> BuildCommandsByGroup()
@@ -509,17 +457,7 @@ public static class DslParser
             var commandRuleName = $"cmd_{groupName}_{RuleToken(commandName)}";
             var headPattern = BuildCommandHeadPattern(commandName, syntax);
 
-            if (syntax.AllowsBlock)
-            {
-                var bodyGroup = syntax.BlockBodyGroup ?? group;
-                var bodyGroupName = GroupRuleName(bodyGroup);
-                sb.AppendLine(
-                    $"{commandRuleName} ::= {headPattern} ws \"{{\" ws script_{bodyGroupName} ws \"}}\"");
-            }
-            else
-            {
-                sb.AppendLine($"{commandRuleName} ::= {headPattern} ws \";\"");
-            }
+            sb.AppendLine($"{commandRuleName} ::= {headPattern} ws \";\"");
 
             statementRules.Add(commandRuleName);
         }
@@ -606,18 +544,34 @@ public static class DslParser
     private static string InferPromptArgBaseName(DslArgKind kind)
         => kind switch
         {
-            DslArgKind.Integer => "count",
-            DslArgKind.String => "item",
-            _ => "item"
+            _ when kind.HasFlag(DslArgKind.Integer) &&
+                   !kind.HasFlag(DslArgKind.Item) &&
+                   !kind.HasFlag(DslArgKind.System) &&
+                   !kind.HasFlag(DslArgKind.Enum) &&
+                   !kind.HasFlag(DslArgKind.Any) => "count",
+            _ when kind.HasFlag(DslArgKind.Item) && kind.HasFlag(DslArgKind.System) => "target",
+            _ when kind.HasFlag(DslArgKind.Item) => "item",
+            _ when kind.HasFlag(DslArgKind.System) => "system",
+            _ when kind.HasFlag(DslArgKind.Enum) => "option",
+            _ => "value"
         };
 
     private static string ArgKindPattern(DslArgKind kind)
-        => kind switch
-        {
-            DslArgKind.Integer => "integer",
-            DslArgKind.String => "identifier",
-            _ => "identifier"
-        };
+    {
+        bool allowsInteger = kind.HasFlag(DslArgKind.Integer);
+        bool allowsIdentifier = kind.HasFlag(DslArgKind.Any) ||
+                                kind.HasFlag(DslArgKind.Item) ||
+                                kind.HasFlag(DslArgKind.System) ||
+                                kind.HasFlag(DslArgKind.Enum);
+
+        if (allowsInteger && allowsIdentifier)
+            return "(integer | identifier)";
+
+        if (allowsInteger)
+            return "integer";
+
+        return "identifier";
+    }
 
     private static string RuleToken(string value)
         => string.Concat(value.Select(ch => char.IsLetterOrDigit(ch) ? ch : '_'));
@@ -672,7 +626,11 @@ public static class DslParser
             if (specs.Count != 1)
                 continue;
             var firstKind = specs[0].Kind;
-            if (firstKind != DslArgKind.Identifier && firstKind != DslArgKind.String)
+            bool allowsIdentifier = firstKind.HasFlag(DslArgKind.Any) ||
+                                    firstKind.HasFlag(DslArgKind.Item) ||
+                                    firstKind.HasFlag(DslArgKind.System) ||
+                                    firstKind.HasFlag(DslArgKind.Enum);
+            if (!allowsIdentifier)
                 continue;
 
             var remainder = token[candidate.Length..];
@@ -689,14 +647,12 @@ public static class DslParser
 
     private static void ValidateTree(DslAstProgram tree, DslCommandGroup rootGroup)
     {
-        ValidateNodes(tree.Statements, rootGroup, inDockScope: false, inAnyBlock: false);
+        ValidateNodes(tree.Statements, rootGroup);
     }
 
     private static void ValidateNodes(
         IReadOnlyList<DslAstNode> nodes,
-        DslCommandGroup currentGroup,
-        bool inDockScope,
-        bool inAnyBlock)
+        DslCommandGroup currentGroup)
     {
         foreach (var node in nodes)
         {
@@ -707,23 +663,7 @@ public static class DslParser
                     var normalizedName = (commandNode.Name ?? "").Trim().ToLowerInvariant();
                     var args = commandNode.Args ?? Array.Empty<string>();
 
-                    if (CommandSyntaxByName.TryGetValue(normalizedName, out var syntax) && syntax.AllowsBlock)
-                    {
-                        throw new FormatException(
-                            $"Command '{normalizedName};' is not allowed. Use block syntax: {normalizedName} {{ ... }}");
-                    }
-
-                    if (inAnyBlock && string.Equals(normalizedName, "go", StringComparison.Ordinal))
-                    {
-                        throw new FormatException("Command 'go' is not allowed inside blocks.");
-                    }
-
-                    if (inDockScope && string.Equals(normalizedName, "mine", StringComparison.Ordinal))
-                    {
-                        throw new FormatException("Command 'mine' is not allowed inside dock blocks.");
-                    }
-
-                    if (!IsCommandAllowedInGroup(commandNode.Name, commandNode.Args, currentGroup))
+                    if (!IsCommandAllowedInGroup(normalizedName, args, currentGroup))
                     {
                         throw new FormatException(
                             $"Command '{commandNode.Name}' is not allowed in {currentGroup} scope.");
@@ -732,22 +672,6 @@ public static class DslParser
                     if (CommandSyntaxByName.TryGetValue(normalizedName, out var commandSyntax))
                         ValidateCommandArgs(normalizedName, args, commandSyntax);
 
-                    break;
-                }
-                case DslBlockAstNode blockNode:
-                {
-                    if (!TryResolveBlockBodyGroup(blockNode.Name, currentGroup, out var bodyGroup))
-                    {
-                        throw new FormatException(
-                            $"Block '{blockNode.Name}' is not allowed in {currentGroup} scope.");
-                    }
-
-                    var blockName = (blockNode.Name ?? "").Trim();
-                    var childInDockScope =
-                        inDockScope ||
-                        string.Equals(blockName, "dock", StringComparison.OrdinalIgnoreCase);
-
-                    ValidateNodes(blockNode.Body, bodyGroup, childInDockScope, inAnyBlock: true);
                     break;
                 }
                 default:
@@ -795,7 +719,7 @@ public static class DslParser
 
         for (int i = 0; i < args.Count; i++)
         {
-            if (!IsArgValueValid(args[i], specs[i].Kind))
+            if (!IsArgValueValid(args[i], specs[i]))
             {
                 throw new FormatException(
                     $"Command '{commandName}' argument {i + 1} must be {specs[i].Kind.ToString().ToLowerInvariant()}.");
@@ -803,32 +727,27 @@ public static class DslParser
         }
     }
 
-    private static bool IsArgValueValid(string value, DslArgKind kind)
-        => kind switch
-        {
-            DslArgKind.Integer => int.TryParse(value, out _),
-            DslArgKind.String => IsValidIdentifier(value),
-            DslArgKind.Identifier => IsValidIdentifier(value),
-            _ => false
-        };
-
-    private static bool TryResolveBlockBodyGroup(
-        string blockName,
-        DslCommandGroup currentGroup,
-        out DslCommandGroup bodyGroup)
+    private static bool IsArgValueValid(string value, DslArgumentSpec spec)
     {
-        var normalized = blockName.ToLowerInvariant();
+        var kind = spec.Kind;
+        if (kind == DslArgKind.None)
+            return false;
 
-        if (CommandNameSetsByGroup.TryGetValue(currentGroup, out var allowedInParent) &&
-            allowedInParent.Contains(normalized) &&
-            CommandSyntaxByName.TryGetValue(normalized, out var syntax) &&
-            syntax.AllowsBlock)
+        if (kind.HasFlag(DslArgKind.Integer) && int.TryParse(value, out _))
+            return true;
+
+        if (kind.HasFlag(DslArgKind.Enum) && IsValidIdentifier(value))
+            return true;
+
+        if ((kind.HasFlag(DslArgKind.Any) ||
+             kind.HasFlag(DslArgKind.Item) ||
+             kind.HasFlag(DslArgKind.System)) &&
+            IsValidIdentifier(value))
         {
-            bodyGroup = syntax.BlockBodyGroup ?? currentGroup;
             return true;
         }
 
-        bodyGroup = default;
         return false;
     }
+
 }

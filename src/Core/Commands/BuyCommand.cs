@@ -4,17 +4,18 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class BuyCommand : ISingleTurnCommand, IDslCommandGrammar
+public class BuyCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
 {
-    public string Name => "buy";
+    public override string Name => "buy";
+    protected override bool RequiresStation => true;
     public DslCommandSyntax GetDslSyntax() => new(
         ArgSpecs: new[]
         {
-            new DslArgumentSpec(DslArgKind.String, Required: true),
+            new DslArgumentSpec(DslArgKind.Item, Required: true),
             new DslArgumentSpec(DslArgKind.Integer, Required: true),
         });
 
-    public bool IsAvailable(GameState state)
+    protected override bool IsAvailableWhenDocked(GameState state)
     {
         if (!state.Docked || state.Shared.Market == null)
             return false;
@@ -28,10 +29,10 @@ public class BuyCommand : ISingleTurnCommand, IDslCommandGrammar
         return state.Shared.Market.SellOrders.Any(kvp => kvp.Value.Count > 0);
     }
 
-    public string BuildHelp(GameState state)
+    public override string BuildHelp(GameState state)
         => "- buy <itemId> <quantity:int> → buy at station market price";
 
-    public async Task<CommandExecutionResult?> ExecuteAsync(
+    protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
         SpaceMoltHttpClient client,
         CommandResult cmd,
         GameState state)

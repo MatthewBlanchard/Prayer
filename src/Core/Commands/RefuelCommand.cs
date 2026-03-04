@@ -4,16 +4,16 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class RefuelCommand : ISingleTurnCommand
+public class RefuelCommand : AutoDockSingleTurnCommand
 {
-    public string Name => "refuel";
+    public override string Name => "refuel";
 
-    public bool IsAvailable(GameState state)
+    protected override bool IsAvailableWhenDocked(GameState state)
         => state.Docked && state.Credits > 0;
-    public string BuildHelp(GameState state)
+    public override string BuildHelp(GameState state)
         => "- refuel";
 
-    public async Task<CommandExecutionResult?> ExecuteAsync(
+    protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
         SpaceMoltHttpClient client,
         CommandResult cmd,
         GameState state)
@@ -30,4 +30,3 @@ public class RefuelCommand : ISingleTurnCommand
 // =====================================================
 // TRAVEL
 // =====================================================
-

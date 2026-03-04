@@ -36,6 +36,7 @@ public class GameState
     public POIInfo[] POIs { get; set; } = Array.Empty<POIInfo>();
     public string[] Systems { get; set; } = Array.Empty<string>();
     public SharedGameState Shared { get; set; } = new();
+    public GalaxyState Galaxy { get; set; } = new();
     public Dictionary<string, ItemStack> Cargo { get; set; }
         = new Dictionary<string, ItemStack>();
 
@@ -53,7 +54,6 @@ public class GameState
     public int MaxFuel { get; set; }
     public int Credits { get; set; }
     public bool Docked { get; set; }
-    public GameContextMode Mode { get; set; } = SpaceContextMode.Instance;
     public string[] ShipyardShowroomLines { get; set; } = Array.Empty<string>();
     public string[] ShipyardListingLines { get; set; } = Array.Empty<string>();
     public Catalogue ShipCatalogue { get; set; } = new();
@@ -169,12 +169,12 @@ public class GameState
 
     public string ToLLMMarkdown()
     {
-        return Mode.ToLlmMarkdown(this);
+        return RenderSpaceLlmMarkdown();
     }
 
     public string ToDisplayText()
     {
-        return Mode.ToDisplayText(this);
+        return SpaceContextMode.Instance.ToDisplayText(this);
     }
 
     internal string RenderTradeLlmMarkdown()
@@ -566,16 +566,86 @@ Your Open Sell Orders:
                 : $"- `{o.ItemId}` @ {o.PriceEach:0.##} (qty {o.Quantity}) [order `{o.OrderId}`]"));
     }
 
-    private static string FormatMissions(MissionInfo[] missions)
+    internal static string FormatMissions(MissionInfo[] missions)
     {
         if (missions == null || missions.Length == 0)
             return "";
 
-        return string.Join("\n", missions.Select(m =>
-            $"- `{m.Id}` | {m.Description}" +
-            (string.IsNullOrWhiteSpace(m.ProgressText) ? "" : $" | {m.ProgressText}") +
-            (m.Completed ? " | ✅" : "")
-        ));
+        return string.Join("\n", missions.Select(FormatMission));
+    }
+
+    private static string FormatMission(MissionInfo mission)
+    {
+        var headerParts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(mission.Id))
+            headerParts.Add($"`{mission.Id}`");
+        if (!string.IsNullOrWhiteSpace(mission.Title))
+            headerParts.Add(mission.Title);
+        if (!string.IsNullOrWhiteSpace(mission.Type))
+            headerParts.Add($"type `{mission.Type}`");
+        if (mission.Difficulty.HasValue)
+            headerParts.Add($"difficulty {mission.Difficulty.Value}");
+
+        if (mission.Completed)
+            headerParts.Add("✅");
+
+        if (headerParts.Count == 0)
+            headerParts.Add("mission");
+
+        var lines = new List<string>
+        {
+            $"- {string.Join(" | ", headerParts.Where(p => !string.IsNullOrWhiteSpace(p)))}"
+        };
+
+        if (!string.IsNullOrWhiteSpace(mission.Description))
+            lines.Add($"  desc: {mission.Description}");
+
+        if (mission.ExpiresInTicks.HasValue)
+            lines.Add($"  expires_in_ticks: {mission.ExpiresInTicks.Value}");
+
+        if (!string.IsNullOrWhiteSpace(mission.AcceptedAt))
+            lines.Add($"  accepted_at: {mission.AcceptedAt}");
+
+        if (!string.IsNullOrWhiteSpace(mission.TemplateId))
+            lines.Add($"  template_id: `{mission.TemplateId}`");
+
+        if (!string.IsNullOrWhiteSpace(mission.MissionId))
+            lines.Add($"  mission_id: `{mission.MissionId}`");
+
+        if (!string.IsNullOrWhiteSpace(mission.IssuingBase))
+            lines.Add($"  issuing_base: `{mission.IssuingBase}`");
+
+        if (!string.IsNullOrWhiteSpace(mission.GiverName) || !string.IsNullOrWhiteSpace(mission.GiverTitle))
+            lines.Add($"  giver: {mission.GiverName}{(string.IsNullOrWhiteSpace(mission.GiverTitle) ? "" : $" ({mission.GiverTitle})")}");
+
+        if (mission.Repeatable.HasValue)
+            lines.Add($"  repeatable: {mission.Repeatable.Value}");
+
+        if (!string.IsNullOrWhiteSpace(mission.FactionId))
+            lines.Add($"  faction_id: `{mission.FactionId}`");
+
+        if (!string.IsNullOrWhiteSpace(mission.FactionName))
+            lines.Add($"  faction_name: {mission.FactionName}");
+
+        if (!string.IsNullOrWhiteSpace(mission.ChainNext))
+            lines.Add($"  chain_next: `{mission.ChainNext}`");
+
+        if (!string.IsNullOrWhiteSpace(mission.ProgressText))
+            lines.Add($"  progress_text: {mission.ProgressText}");
+
+        if (!string.IsNullOrWhiteSpace(mission.ProgressSummary))
+            lines.Add($"  progress: {mission.ProgressSummary}");
+
+        if (!string.IsNullOrWhiteSpace(mission.ObjectivesSummary))
+            lines.Add($"  objectives: {mission.ObjectivesSummary}");
+
+        if (!string.IsNullOrWhiteSpace(mission.RequirementsSummary))
+            lines.Add($"  requirements: {mission.RequirementsSummary}");
+
+        if (!string.IsNullOrWhiteSpace(mission.RewardsSummary))
+            lines.Add($"  rewards: {mission.RewardsSummary}");
+
+        return string.Join("\n", lines);
     }
 
     internal static string FormatShipyardShowroomLines(string[] lines)
@@ -809,10 +879,27 @@ public class POIInfo
 public class MissionInfo
 {
     public string Id { get; set; } = "";
+    public string MissionId { get; set; } = "";
+    public string TemplateId { get; set; } = "";
     public string Title { get; set; } = "";
+    public string Type { get; set; } = "";
     public string Description { get; set; } = "";
     public string ProgressText { get; set; } = "";
     public bool Completed { get; set; }
+    public int? Difficulty { get; set; }
+    public int? ExpiresInTicks { get; set; }
+    public string AcceptedAt { get; set; } = "";
+    public string IssuingBase { get; set; } = "";
+    public string GiverName { get; set; } = "";
+    public string GiverTitle { get; set; } = "";
+    public bool? Repeatable { get; set; }
+    public string FactionId { get; set; } = "";
+    public string FactionName { get; set; } = "";
+    public string ChainNext { get; set; } = "";
+    public string ObjectivesSummary { get; set; } = "";
+    public string ProgressSummary { get; set; } = "";
+    public string RequirementsSummary { get; set; } = "";
+    public string RewardsSummary { get; set; } = "";
 }
 
 public class GameNotification

@@ -1,35 +1,27 @@
 using System.Threading.Tasks;
 
-public class ShipCatalogCommand : ISingleTurnCommand
+public class ShipCatalogCommand : AutoDockSingleTurnCommand
 {
-    public string Name => "ship_catalog";
+    public override string Name => "ship_catalog";
 
-    public bool IsAvailable(GameState state)
+    protected override bool RequiresStation => true;
+
+    protected override bool IsAvailableWhenDocked(GameState state)
         => state.Docked &&
-           state.CurrentPOI.IsStation &&
-           state.Mode.Kind == GameContextKind.Shipyard;
-    public string BuildHelp(GameState state)
-        => "- ship_catalog → enter ShipCatalogState";
+           state.CurrentPOI.IsStation;
+    public override string BuildHelp(GameState state)
+        => "- ship_catalog → reset catalog to page 1";
 
-    public Task<CommandExecutionResult?> ExecuteAsync(
+    protected override Task<CommandExecutionResult?> ExecuteDockedAsync(
         SpaceMoltHttpClient client,
         CommandResult cmd,
         GameState state)
     {
-        if (!state.Docked || !state.CurrentPOI.IsStation)
-        {
-            return Task.FromResult<CommandExecutionResult?>(new CommandExecutionResult
-            {
-                ResultMessage = "Ship catalog is only available while docked at a station."
-            });
-        }
-
-        client.EnterShipCatalogMode();
-        state.Mode = ShipCatalogContextMode.Instance;
+        client.ResetShipCatalogPage();
 
         return Task.FromResult<CommandExecutionResult?>(new CommandExecutionResult
         {
-            ResultMessage = "Entered ShipCatalogState."
+            ResultMessage = "Viewing ship catalog page 1."
         });
     }
 }

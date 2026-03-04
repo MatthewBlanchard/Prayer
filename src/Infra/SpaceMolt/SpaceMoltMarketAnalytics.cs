@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 
-public partial class SpaceMoltHttpClient
+internal static class SpaceMoltMarketAnalytics
 {
-    private static bool TryParseStorageSnapshot(
+    public static bool TryParseStorageSnapshot(
         JsonElement storageResult,
         out int storageCredits,
         out Dictionary<string, ItemStack> storageItems)
@@ -51,7 +51,7 @@ public partial class SpaceMoltHttpClient
         return parsedAny;
     }
 
-    private static bool TryParseMarketSnapshot(
+    public static bool TryParseMarketSnapshot(
         JsonElement marketResult,
         string stationId,
         out MarketState market)
@@ -129,7 +129,7 @@ public partial class SpaceMoltHttpClient
         return true;
     }
 
-    private static bool TryParseOwnOrders(
+    public static bool TryParseOwnOrders(
         JsonElement ordersResult,
         out List<OpenOrderInfo> buyOrders,
         out List<OpenOrderInfo> sellOrders)
@@ -214,7 +214,7 @@ public partial class SpaceMoltHttpClient
         return parsedAny;
     }
 
-    private static Dictionary<string, ItemStack> CloneItems(Dictionary<string, ItemStack> source)
+    public static Dictionary<string, ItemStack> CloneItems(Dictionary<string, ItemStack> source)
     {
         return source.ToDictionary(
             kvp => kvp.Key,
@@ -222,7 +222,7 @@ public partial class SpaceMoltHttpClient
             StringComparer.Ordinal);
     }
 
-    private static MarketState? CloneMarket(MarketState? source)
+    public static MarketState? CloneMarket(MarketState? source)
     {
         if (source == null)
             return null;
@@ -259,9 +259,12 @@ public partial class SpaceMoltHttpClient
         return clone;
     }
 
-    private EconomyDeal[] BuildBestDealsForCurrentStation(string currentStationId, int maxDeals)
+    public static EconomyDeal[] BuildBestDealsForCurrentStation(
+        IReadOnlyDictionary<string, StationInfo> stationCache,
+        string currentStationId,
+        int maxDeals)
     {
-        if (!_stationCache.TryGetValue(currentStationId, out var current) || current.Market == null)
+        if (!stationCache.TryGetValue(currentStationId, out var current) || current.Market == null)
             return Array.Empty<EconomyDeal>();
 
         var deals = new List<EconomyDeal>();
@@ -271,7 +274,6 @@ public partial class SpaceMoltHttpClient
             if (sellOrders == null || sellOrders.Count == 0)
                 continue;
 
-            // Buy-side uses the best local ask (lowest sell price).
             decimal? buyPrice = sellOrders
                 .Where(o => o.Quantity > 0 && o.PriceEach > 0)
                 .Select(o => (decimal?)o.PriceEach)
@@ -283,7 +285,7 @@ public partial class SpaceMoltHttpClient
             string? bestSellStation = null;
             decimal bestSellPrice = 0;
 
-            foreach (var (stationId, stationInfo) in _stationCache)
+            foreach (var (stationId, stationInfo) in stationCache)
             {
                 if (string.Equals(stationId, currentStationId, StringComparison.Ordinal))
                     continue;
@@ -299,8 +301,7 @@ public partial class SpaceMoltHttpClient
                     continue;
                 }
 
-                // Sell-side uses remote bid median to reduce outlier sensitivity.
-                decimal? stationBidMedian = ComputeMedianPrice(buyOrders);
+                decimal? stationBidMedian = GalaxyStateHub.ComputeMedianPrice(buyOrders);
                 if (!stationBidMedian.HasValue || stationBidMedian.Value <= 0)
                     continue;
 
@@ -334,149 +335,5 @@ public partial class SpaceMoltHttpClient
             .ThenBy(d => d.ItemId, StringComparer.Ordinal)
             .Take(Math.Max(0, maxDeals))
             .ToArray();
-    }
-
-    private Dictionary<string, decimal> BuildGlobalWeightedMidPrices()
-    {
-        var bidsByItem = new Dictionary<string, List<MarketOrder>>(StringComparer.Ordinal);
-        var asksByItem = new Dictionary<string, List<MarketOrder>>(StringComparer.Ordinal);
-
-        foreach (var station in _stationCache.Values)
-        {
-            if (station.Market == null)
-                continue;
-
-            foreach (var (itemId, bids) in station.Market.BuyOrders)
-            {
-                if (!bidsByItem.TryGetValue(itemId, out var list))
-                {
-                    list = new List<MarketOrder>();
-                    bidsByItem[itemId] = list;
-                }
-                list.AddRange(bids);
-            }
-
-            foreach (var (itemId, asks) in station.Market.SellOrders)
-            {
-                if (!asksByItem.TryGetValue(itemId, out var list))
-                {
-                    list = new List<MarketOrder>();
-                    asksByItem[itemId] = list;
-                }
-                list.AddRange(asks);
-            }
-        }
-
-        var itemIds = new HashSet<string>(bidsByItem.Keys, StringComparer.Ordinal);
-        itemIds.UnionWith(asksByItem.Keys);
-
-        var result = new Dictionary<string, decimal>(StringComparer.Ordinal);
-
-        foreach (var itemId in itemIds)
-        {
-            bidsByItem.TryGetValue(itemId, out var bids);
-            asksByItem.TryGetValue(itemId, out var asks);
-
-            decimal? bidMedian = ComputeMedianPrice(bids);
-            decimal? askMedian = ComputeMedianPrice(asks);
-
-            decimal? mid = bidMedian.HasValue && askMedian.HasValue
-                ? (bidMedian.Value + askMedian.Value) / 2m
-                : (bidMedian ?? askMedian);
-
-            if (mid.HasValue && mid.Value > 0)
-                result[itemId] = mid.Value;
-        }
-
-        return result;
-    }
-
-    private Dictionary<string, decimal> BuildGlobalMedianBuyPrices()
-    {
-        var bidsByItem = new Dictionary<string, List<MarketOrder>>(StringComparer.Ordinal);
-
-        foreach (var station in _stationCache.Values)
-        {
-            if (station.Market == null)
-                continue;
-
-            foreach (var (itemId, bids) in station.Market.BuyOrders)
-            {
-                if (!bidsByItem.TryGetValue(itemId, out var list))
-                {
-                    list = new List<MarketOrder>();
-                    bidsByItem[itemId] = list;
-                }
-                list.AddRange(bids);
-            }
-        }
-
-        var result = new Dictionary<string, decimal>(StringComparer.Ordinal);
-        foreach (var (itemId, bids) in bidsByItem)
-        {
-            decimal? median = ComputeMedianPrice(bids);
-            if (median.HasValue && median.Value > 0)
-                result[itemId] = median.Value;
-        }
-
-        return result;
-    }
-
-    private Dictionary<string, decimal> BuildGlobalMedianSellPrices()
-    {
-        var asksByItem = new Dictionary<string, List<MarketOrder>>(StringComparer.Ordinal);
-
-        foreach (var station in _stationCache.Values)
-        {
-            if (station.Market == null)
-                continue;
-
-            foreach (var (itemId, asks) in station.Market.SellOrders)
-            {
-                if (!asksByItem.TryGetValue(itemId, out var list))
-                {
-                    list = new List<MarketOrder>();
-                    asksByItem[itemId] = list;
-                }
-                list.AddRange(asks);
-            }
-        }
-
-        var result = new Dictionary<string, decimal>(StringComparer.Ordinal);
-        foreach (var (itemId, asks) in asksByItem)
-        {
-            decimal? median = ComputeMedianPrice(asks);
-            if (median.HasValue && median.Value > 0)
-                result[itemId] = median.Value;
-        }
-
-        return result;
-    }
-
-    private static decimal? ComputeMedianPrice(List<MarketOrder>? orders)
-    {
-        if (orders == null || orders.Count == 0)
-            return null;
-
-        var expanded = new List<decimal>();
-
-        foreach (var order in orders.Where(o => o.Quantity > 0 && o.PriceEach > 0))
-        {
-            // Weight median by quantity by expanding prices by order size.
-            for (int i = 0; i < order.Quantity; i++)
-                expanded.Add(order.PriceEach);
-        }
-
-        if (expanded.Count == 0)
-            return null;
-
-        expanded.Sort();
-        int n = expanded.Count;
-        int mid = n / 2;
-
-        if (n % 2 == 1)
-            return expanded[mid];
-
-        return (expanded[mid - 1] + expanded[mid]) / 2m;
     }
 }

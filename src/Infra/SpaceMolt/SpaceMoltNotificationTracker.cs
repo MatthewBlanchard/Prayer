@@ -3,9 +3,67 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 
-public partial class SpaceMoltHttpClient
+internal sealed class SpaceMoltNotificationTracker
 {
-    private void QueueNotifications(JsonElement content)
+    private readonly List<GameNotification> _pendingNotifications = new();
+    private readonly List<GameChatMessage> _recentChatMessages = new();
+    private readonly int _maxQueuedNotifications;
+    private readonly int _maxChatMessages;
+
+    public SpaceMoltNotificationTracker(int maxQueuedNotifications, int maxChatMessages)
+    {
+        _maxQueuedNotifications = Math.Max(1, maxQueuedNotifications);
+        _maxChatMessages = Math.Max(1, maxChatMessages);
+    }
+
+    public void ObservePayload(JsonElement payload, ref int currentTick)
+    {
+        ObserveTickFromPayload(payload, ref currentTick);
+        QueueNotifications(payload, currentTick);
+    }
+
+    public bool ObserveTickFromPayload(JsonElement payload, ref int currentTick)
+    {
+        int? parsedTick = TryExtractTick(payload);
+        if (!parsedTick.HasValue)
+            return false;
+
+        currentTick = Math.Max(currentTick, parsedTick.Value);
+        return true;
+    }
+
+    public GameNotification[] DrainPendingNotifications(int maxCount)
+    {
+        if (_pendingNotifications.Count == 0)
+            return Array.Empty<GameNotification>();
+
+        var latest = _pendingNotifications
+            .TakeLast(Math.Max(0, maxCount))
+            .ToArray();
+
+        _pendingNotifications.Clear();
+        return latest;
+    }
+
+    public GameChatMessage[] SnapshotChatMessages(int maxCount)
+    {
+        if (_recentChatMessages.Count == 0 || maxCount <= 0)
+            return Array.Empty<GameChatMessage>();
+
+        return _recentChatMessages
+            .TakeLast(maxCount)
+            .Select(m => new GameChatMessage
+            {
+                MessageId = m.MessageId,
+                Channel = m.Channel,
+                Sender = m.Sender,
+                Content = m.Content,
+                SeenTick = m.SeenTick
+            })
+            .ToArray();
+    }
+
+    private void QueueNotifications(JsonElement content, int currentTick)
     {
         if (content.ValueKind != JsonValueKind.Object)
             return;
@@ -21,7 +79,7 @@ public partial class SpaceMoltHttpClient
             if (notification.ValueKind != JsonValueKind.Object)
                 continue;
 
-            string type = TryGetString(notification, "type") ?? "notification";
+            string type = SpaceMoltJson.TryGetString(notification, "type") ?? "notification";
             string summary = BuildNotificationSummary(notification);
             string payloadJson = notification.GetRawText();
 
@@ -32,28 +90,14 @@ public partial class SpaceMoltHttpClient
                 PayloadJson = payloadJson
             });
 
-            TrackChatNotification(notification);
+            TrackChatNotification(notification, currentTick);
         }
 
-        if (_pendingNotifications.Count > MaxQueuedNotifications)
+        if (_pendingNotifications.Count > _maxQueuedNotifications)
         {
-            int removeCount = _pendingNotifications.Count - MaxQueuedNotifications;
+            int removeCount = _pendingNotifications.Count - _maxQueuedNotifications;
             _pendingNotifications.RemoveRange(0, removeCount);
         }
-
-    }
-
-    private GameNotification[] DrainPendingNotifications(int maxCount)
-    {
-        if (_pendingNotifications.Count == 0)
-            return Array.Empty<GameNotification>();
-
-        var latest = _pendingNotifications
-            .TakeLast(Math.Max(0, maxCount))
-            .ToArray();
-
-        _pendingNotifications.Clear();
-        return latest;
     }
 
     private static string BuildNotificationSummary(JsonElement payload)
@@ -61,8 +105,8 @@ public partial class SpaceMoltHttpClient
         if (payload.ValueKind != JsonValueKind.Object)
             return "notification";
 
-        string type = TryGetString(payload, "type") ?? "notification";
-        string msgType = TryGetString(payload, "msg_type") ?? "";
+        string type = SpaceMoltJson.TryGetString(payload, "type") ?? "notification";
+        string msgType = SpaceMoltJson.TryGetString(payload, "msg_type") ?? "";
 
         JsonElement data = payload;
         if (payload.TryGetProperty("data", out var dataElement) &&
@@ -76,12 +120,11 @@ public partial class SpaceMoltHttpClient
             data = payloadElement;
         }
 
-        // Common SpaceMolt event envelope: { type, msg_type, data, ... }.
         if (string.Equals(msgType, "chat_message", StringComparison.OrdinalIgnoreCase))
         {
-            string sender = TryGetString(data, "sender") ?? "unknown";
-            string content = TryGetString(data, "content") ?? "";
-            string channel = TryGetString(data, "channel") ?? "";
+            string sender = SpaceMoltJson.TryGetString(data, "sender") ?? "unknown";
+            string content = SpaceMoltJson.TryGetString(data, "content") ?? "";
+            string channel = SpaceMoltJson.TryGetString(data, "channel") ?? "";
 
             if (!string.IsNullOrWhiteSpace(channel))
                 return string.IsNullOrWhiteSpace(content)
@@ -95,26 +138,26 @@ public partial class SpaceMoltHttpClient
 
         if (string.Equals(msgType, "pirate_warning", StringComparison.OrdinalIgnoreCase))
         {
-            string pirate = TryGetString(data, "pirate_name") ?? "Pirate";
-            string message = TryGetString(data, "message") ?? "";
+            string pirate = SpaceMoltJson.TryGetString(data, "pirate_name") ?? "Pirate";
+            string message = SpaceMoltJson.TryGetString(data, "message") ?? "";
             return string.IsNullOrWhiteSpace(message)
                 ? $"warning: {pirate}"
                 : $"warning: {pirate}: {message}";
         }
 
-        string? topMessage = TryGetString(payload, "message");
+        string? topMessage = SpaceMoltJson.TryGetString(payload, "message");
         if (!string.IsNullOrWhiteSpace(topMessage))
             return $"{type}: {topMessage}";
 
-        string? dataMessage = TryGetString(data, "message");
+        string? dataMessage = SpaceMoltJson.TryGetString(data, "message");
         if (!string.IsNullOrWhiteSpace(dataMessage))
             return $"{type}: {dataMessage}";
 
         if (string.Equals(type, "mining_yield", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(msgType, "mining_yield", StringComparison.OrdinalIgnoreCase))
         {
-            string resource = TryGetString(data, "resource_id") ?? "resource";
-            int? quantity = TryGetInt(data, "quantity");
+            string resource = SpaceMoltJson.TryGetString(data, "resource_id") ?? "resource";
+            int? quantity = SpaceMoltJson.TryGetInt(data, "quantity");
             return quantity.HasValue
                 ? $"mining_yield: {resource} x{quantity.Value}"
                 : $"mining_yield: {resource}";
@@ -129,7 +172,7 @@ public partial class SpaceMoltHttpClient
             : msgType;
     }
 
-    private void TrackChatNotification(JsonElement payload)
+    private void TrackChatNotification(JsonElement payload, int currentTick)
     {
         if (!TryParseChatMessage(payload, out var chat))
             return;
@@ -140,12 +183,12 @@ public partial class SpaceMoltHttpClient
             return;
         }
 
-        chat.SeenTick = _currentTick;
+        chat.SeenTick = currentTick;
         _recentChatMessages.Add(chat);
 
-        if (_recentChatMessages.Count > MaxChatMessages)
+        if (_recentChatMessages.Count > _maxChatMessages)
         {
-            int removeCount = _recentChatMessages.Count - MaxChatMessages;
+            int removeCount = _recentChatMessages.Count - _maxChatMessages;
             _recentChatMessages.RemoveRange(0, removeCount);
         }
     }
@@ -156,8 +199,8 @@ public partial class SpaceMoltHttpClient
         if (payload.ValueKind != JsonValueKind.Object)
             return false;
 
-        string type = TryGetString(payload, "type") ?? "";
-        string msgType = TryGetString(payload, "msg_type") ?? "";
+        string type = SpaceMoltJson.TryGetString(payload, "type") ?? "";
+        string msgType = SpaceMoltJson.TryGetString(payload, "msg_type") ?? "";
 
         if (!string.Equals(msgType, "chat_message", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(type, "chat_message", StringComparison.OrdinalIgnoreCase))
@@ -179,40 +222,12 @@ public partial class SpaceMoltHttpClient
 
         chat = new GameChatMessage
         {
-            MessageId = TryGetString(data, "id") ?? "",
-            Channel = TryGetString(data, "channel") ?? "",
-            Sender = TryGetString(data, "sender") ?? "unknown",
-            Content = TryGetString(data, "content") ?? ""
+            MessageId = SpaceMoltJson.TryGetString(data, "id") ?? "",
+            Channel = SpaceMoltJson.TryGetString(data, "channel") ?? "",
+            Sender = SpaceMoltJson.TryGetString(data, "sender") ?? "unknown",
+            Content = SpaceMoltJson.TryGetString(data, "content") ?? ""
         };
 
-        return true;
-    }
-
-    private GameChatMessage[] SnapshotChatMessages(int maxCount)
-    {
-        if (_recentChatMessages.Count == 0 || maxCount <= 0)
-            return Array.Empty<GameChatMessage>();
-
-        return _recentChatMessages
-            .TakeLast(maxCount)
-            .Select(m => new GameChatMessage
-            {
-                MessageId = m.MessageId,
-                Channel = m.Channel,
-                Sender = m.Sender,
-                Content = m.Content,
-                SeenTick = m.SeenTick
-            })
-            .ToArray();
-    }
-
-    private bool ObserveTickFromPayload(JsonElement payload)
-    {
-        int? parsedTick = TryExtractTick(payload);
-        if (!parsedTick.HasValue)
-            return false;
-
-        _currentTick = Math.Max(_currentTick, parsedTick.Value);
         return true;
     }
 
@@ -221,14 +236,14 @@ public partial class SpaceMoltHttpClient
         if (payload.ValueKind != JsonValueKind.Object)
             return null;
 
-        int? topTick = TryGetInt(payload, "current_tick", "tick");
+        int? topTick = SpaceMoltJson.TryGetInt(payload, "current_tick", "tick");
         if (topTick.HasValue)
             return topTick;
 
         if (payload.TryGetProperty("result", out var result) &&
             result.ValueKind == JsonValueKind.Object)
         {
-            int? resultTick = TryGetInt(result, "current_tick", "tick", "arrival_tick");
+            int? resultTick = SpaceMoltJson.TryGetInt(result, "current_tick", "tick", "arrival_tick");
             if (resultTick.HasValue)
                 return resultTick;
         }
@@ -236,7 +251,7 @@ public partial class SpaceMoltHttpClient
         if (payload.TryGetProperty("data", out var data) &&
             data.ValueKind == JsonValueKind.Object)
         {
-            int? dataTick = TryGetInt(data, "current_tick", "tick");
+            int? dataTick = SpaceMoltJson.TryGetInt(data, "current_tick", "tick");
             if (dataTick.HasValue)
                 return dataTick;
         }

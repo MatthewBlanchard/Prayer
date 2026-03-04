@@ -7,7 +7,18 @@ using System.Threading.Tasks;
 public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
 {
     public string Name => "go";
-    public DslCommandSyntax GetDslSyntax() => new(DslArgKind.Identifier, ArgRequired: true);
+    public DslCommandSyntax GetDslSyntax() => new(
+        ArgSpecs: new[]
+        {
+            new DslArgumentSpec(
+                DslArgKind.System | DslArgKind.Any,
+                Required: true,
+                ArgTypeWeights: new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["system"] = 1.08,
+                    ["poi"] = 1.00
+                })
+        });
 
     private string? _target;
     private string? _resolvedSystemTarget;

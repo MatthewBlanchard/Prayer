@@ -1,35 +1,25 @@
 using System.Threading.Tasks;
 
-public class HangarCommand : ISingleTurnCommand
+public class HangarCommand : AutoDockSingleTurnCommand
 {
-    public string Name => "hangar";
+    public override string Name => "hangar";
 
-    public bool IsAvailable(GameState state)
+    protected override bool RequiresStation => true;
+
+    protected override bool IsAvailableWhenDocked(GameState state)
         => state.Docked &&
-           state.CurrentPOI.IsStation &&
-           state.Mode.Kind == GameContextKind.Space;
-    public string BuildHelp(GameState state)
-        => "- hangar → enter HangarState (manage owned ships)";
+           state.CurrentPOI.IsStation;
+    public override string BuildHelp(GameState state)
+        => "- hangar → manage owned ships at station";
 
-    public Task<CommandExecutionResult?> ExecuteAsync(
+    protected override Task<CommandExecutionResult?> ExecuteDockedAsync(
         SpaceMoltHttpClient client,
         CommandResult cmd,
         GameState state)
     {
-        if (!state.Docked || !state.CurrentPOI.IsStation)
-        {
-            return Task.FromResult<CommandExecutionResult?>(new CommandExecutionResult
-            {
-                ResultMessage = "Hangar is only available while docked at a station."
-            });
-        }
-
-        client.SetMode(GameContextKind.Hangar);
-        state.Mode = HangarContextMode.Instance;
-
         return Task.FromResult<CommandExecutionResult?>(new CommandExecutionResult
         {
-            ResultMessage = "Entered HangarState."
+            ResultMessage = "Hangar actions are always available while docked."
         });
     }
 }

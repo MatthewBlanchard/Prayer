@@ -18,11 +18,15 @@ public static class AppPaths
     public static readonly string AnalyzeMarketLogFile = Path.Combine(LogDir, "analyze_market.log");
     public static readonly string ItemCatalogLogFile = Path.Combine(LogDir, "item_catalog.log");
     public static readonly string CommandExecutionLogFile = Path.Combine(LogDir, "command_execution.log");
+    public static readonly string FuzzyMatchLogFile = Path.Combine(LogDir, "fuzzy_match.log");
+    public static readonly string ScriptNormalizationLogFile = Path.Combine(LogDir, "script_normalization.log");
+    public static readonly string ScriptWriterContextLogFile = Path.Combine(LogDir, "script_writer_context.log");
     public static readonly string ScriptGenerationExamplesFile = Path.Combine(CacheDir, "script_generation_examples.json");
     public static readonly string SavedBotsFile = Path.Combine(CacheDir, "saved_bots.json");
+    public static readonly string ItemCatalogByIdCacheFile = Path.Combine(CacheDir, "item_catalog_by_id.json");
+    public static readonly string ShipCatalogByIdCacheFile = Path.Combine(CacheDir, "ship_catalog_by_id.json");
 
-    public static readonly string GalaxyMapCacheFile = Path.Combine(CacheDir, "galaxy_map_cache.json");
-    public static readonly string RawMapCacheFile = Path.Combine(CacheDir, "map.cache");
+    public static readonly string GalaxyMapFile = Path.Combine(CacheDir, "galaxy_map.json");
 
     public static void EnsureDirectories()
     {

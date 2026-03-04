@@ -4,17 +4,23 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class SellCommand : IMultiTurnCommand, IDslCommandGrammar
+public class SellCommand : AutoDockMultiTurnCommand, IDslCommandGrammar
 {
-    public string Name => "sell";
+    public override string Name => "sell";
+    protected override bool RequiresStation => true;
     public DslCommandSyntax GetDslSyntax() => new(
-        DslArgKind.Identifier,
-        ArgRequired: false,
-        DefaultArg: "cargo");
+        ArgSpecs: new[]
+        {
+            new DslArgumentSpec(
+                DslArgKind.Item | DslArgKind.Enum,
+                Required: false,
+                DefaultValue: "cargo",
+                EnumType: "cargo_keyword")
+        });
 
     private List<string>? _sellQueue;
 
-    public bool IsAvailable(GameState state)
+    protected override bool IsAvailableWhenDocked(GameState state)
     {
         if (!state.Docked || state.Shared.Market == null)
             return false;
@@ -22,10 +28,10 @@ public class SellCommand : IMultiTurnCommand, IDslCommandGrammar
         return state.Cargo.Any(kvp => kvp.Value.Quantity > 0 && IsSellable(state, kvp.Key));
     }
 
-    public string BuildHelp(GameState state)
+    public override string BuildHelp(GameState state)
         => "- sell <item|cargo> → sell one item or all cargo";
 
-    public async Task<CommandExecutionResult?> StartAsync(
+    protected override async Task<CommandExecutionResult?> StartDockedAsync(
         SpaceMoltHttpClient client,
         CommandResult cmd,
         GameState state)
@@ -59,7 +65,7 @@ public class SellCommand : IMultiTurnCommand, IDslCommandGrammar
         return await SellOneAsync(client, state, first);
     }
 
-    public async Task<(bool finished, CommandExecutionResult? result)> ContinueAsync(
+    protected override async Task<(bool finished, CommandExecutionResult? result)> ContinueDockedAsync(
         SpaceMoltHttpClient client,
         GameState state)
     {

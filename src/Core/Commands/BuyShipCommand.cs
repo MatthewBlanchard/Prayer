@@ -2,16 +2,17 @@ using System;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class BuyShipCommand : ISingleTurnCommand
+public class BuyShipCommand : AutoDockSingleTurnCommand
 {
-    public string Name => "buy_ship";
+    public override string Name => "buy_ship";
+    protected override bool RequiresStation => true;
 
-    public bool IsAvailable(GameState state)
-        => state.Mode.Kind == GameContextKind.Shipyard && state.Docked && state.CurrentPOI.IsStation;
-    public string BuildHelp(GameState state)
+    protected override bool IsAvailableWhenDocked(GameState state)
+        => state.Docked && state.CurrentPOI.IsStation;
+    public override string BuildHelp(GameState state)
         => "- buy_ship <shipClassId> → buy a showroom ship";
 
-    public async Task<CommandExecutionResult?> ExecuteAsync(
+    protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
         SpaceMoltHttpClient client,
         CommandResult cmd,
         GameState state)

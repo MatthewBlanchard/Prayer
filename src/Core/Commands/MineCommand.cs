@@ -10,7 +10,10 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
     public DslCommandSyntax GetDslSyntax() => new(
         ArgSpecs: new[]
         {
-            new DslArgumentSpec(DslArgKind.Identifier, Required: false)
+            new DslArgumentSpec(
+                DslArgKind.Enum,
+                Required: false,
+                EnumType: "mining_target")
         });
 
     private bool _stopRequested;

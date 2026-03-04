@@ -20,6 +20,7 @@ public sealed class BotRuntime
     private readonly Action<GameState> _publishSnapshot;
     private readonly Action<string> _publishStatus;
     private readonly Action<string> _log;
+    private readonly Action<string> _triggerGlobalStop;
     private readonly Func<string, CommandResult> _parseCommand;
     private readonly int _scriptGenerationMaxAttempts;
 
@@ -39,6 +40,7 @@ public sealed class BotRuntime
         Action<GameState> publishSnapshot,
         Action<string> publishStatus,
         Action<string> log,
+        Action<string> triggerGlobalStop,
         Func<string, CommandResult> parseCommand,
         int scriptGenerationMaxAttempts)
     {
@@ -57,6 +59,7 @@ public sealed class BotRuntime
         _publishSnapshot = publishSnapshot;
         _publishStatus = publishStatus;
         _log = log;
+        _triggerGlobalStop = triggerGlobalStop;
         _parseCommand = parseCommand;
         _scriptGenerationMaxAttempts = scriptGenerationMaxAttempts;
     }
@@ -77,7 +80,7 @@ public sealed class BotRuntime
                             continue;
 
                         _agent.InterruptActiveCommand("Interrupted by control input update");
-                        var scriptState = _getLatestState() ?? await _client.GetGameStateAsync().WaitAsync(token);
+                        var scriptState = _getLatestState() ?? _client.GetGameState();
                         _setLatestState(scriptState);
 
                         try
@@ -101,7 +104,7 @@ public sealed class BotRuntime
                         _agent.InterruptActiveCommand("Interrupted by script generation request");
                         _publishStatus($"[{_label}] Generating script");
 
-                        var scriptState = _getLatestState() ?? await _client.GetGameStateAsync().WaitAsync(token);
+                        var scriptState = _getLatestState() ?? _client.GetGameState();
                         _setLatestState(scriptState);
 
                         try
@@ -138,14 +141,14 @@ public sealed class BotRuntime
 
                     while (_commandReader.TryRead(out var commandInput))
                     {
-                        await HandleDirectCommandAsync(commandInput, token);
+                        await HandleDirectCommandAsync(commandInput);
                     }
 
                     if (_agent.IsHalted)
                     {
                         if (_isLoopEnabled() && !string.IsNullOrWhiteSpace(_agent.CurrentControlInput))
                         {
-                            var scriptState = _getLatestState() ?? await _client.GetGameStateAsync().WaitAsync(token);
+                            var scriptState = _getLatestState() ?? _client.GetGameState();
                             _setLatestState(scriptState);
 
                             try
@@ -162,7 +165,7 @@ public sealed class BotRuntime
                         if (_getLatestState() == null ||
                             DateTime.UtcNow - _getLastHaltedSnapshotAt() > TimeSpan.FromSeconds(1))
                         {
-                            var haltedState = await _client.GetGameStateAsync().WaitAsync(token);
+                            var haltedState = _client.GetGameState();
                             _setLatestState(haltedState);
                             _publishSnapshot(haltedState);
                             _setLastHaltedSnapshotAt(DateTime.UtcNow);
@@ -172,7 +175,7 @@ public sealed class BotRuntime
                         continue;
                     }
 
-                    var currentState = await _client.GetGameStateAsync().WaitAsync(token);
+                    var currentState = _client.GetGameState();
                     _setLatestState(currentState);
                     _publishSnapshot(currentState);
 
@@ -217,8 +220,10 @@ public sealed class BotRuntime
 
                         try
                         {
-                            var postActionState = await _client.GetGameStateAsync().WaitAsync(token);
-                            postActionState = await TryAutoRefuelBetweenScriptStepsAsync(postActionState, token);
+                            var postActionState = _client.GetGameState();
+                            postActionState = await TryAutoDockedMaintenanceAsync(
+                                postActionState,
+                                includeScriptRefuel: true);
                             _setLatestState(postActionState);
                             _publishSnapshot(postActionState);
                         }
@@ -235,6 +240,13 @@ public sealed class BotRuntime
                 catch (OperationCanceledException)
                 {
                     throw;
+                }
+                catch (RateLimitStopException ex)
+                {
+                    _publishStatus($"[{_label}] {ex.Message}");
+                    _log($"bot_worker | {_label} | rate_limited_stop | {ex.Message}");
+                    _triggerGlobalStop(ex.Message);
+                    return;
                 }
                 catch (Exception ex)
                 {
@@ -254,14 +266,14 @@ public sealed class BotRuntime
         }
     }
 
-    private async Task HandleDirectCommandAsync(string input, CancellationToken token)
+    private async Task HandleDirectCommandAsync(string input)
     {
         if (string.IsNullOrWhiteSpace(input))
             return;
 
         _agent.InterruptActiveCommand("Interrupted by user command");
 
-        var state = _getLatestState() ?? await _client.GetGameStateAsync().WaitAsync(token);
+        var state = _getLatestState() ?? _client.GetGameState();
         _setLatestState(state);
 
         var cmd = _parseCommand(input);
@@ -269,7 +281,10 @@ public sealed class BotRuntime
 
         try
         {
-            var postActionState = await _client.GetGameStateAsync().WaitAsync(token);
+            var postActionState = _client.GetGameState();
+            postActionState = await TryAutoDockedMaintenanceAsync(
+                postActionState,
+                includeScriptRefuel: false);
             _setLatestState(postActionState);
             _publishSnapshot(postActionState);
         }
@@ -284,16 +299,95 @@ public sealed class BotRuntime
         return $"{step.SourceLine?.ToString() ?? "-"}|{step.Action}|{step.Arg1 ?? ""}|{step.Quantity?.ToString() ?? ""}";
     }
 
-    private async Task<GameState> TryAutoRefuelBetweenScriptStepsAsync(
+    private async Task<GameState> TryAutoDockedMaintenanceAsync(
         GameState state,
-        CancellationToken token)
+        bool includeScriptRefuel)
     {
-        if (_agent.CurrentControlModeKind != ControlModeKind.ScriptMode)
-            return state;
-
         if (!(state.Docked && state.CurrentPOI.IsStation))
             return state;
 
+        var current = state;
+        current = await TryAutoWithdrawStationCreditsAsync(current);
+        current = await TryAutoCompleteMissionsAsync(current);
+
+        if (includeScriptRefuel && _agent.CurrentControlModeKind == ControlModeKind.ScriptMode)
+            current = await TryAutoRefuelBetweenScriptStepsAsync(current);
+
+        return current;
+    }
+
+    private async Task<GameState> TryAutoWithdrawStationCreditsAsync(GameState state)
+    {
+        if (state.Shared.StorageCredits <= 0)
+            return state;
+
+        int storageCreditsBefore = state.Shared.StorageCredits;
+
+        try
+        {
+            await _client.ExecuteAsync("withdraw_credits", new { amount = storageCreditsBefore });
+            var refreshed = _client.GetGameState();
+            int withdrawn = Math.Max(0, storageCreditsBefore - refreshed.Shared.StorageCredits);
+
+            if (withdrawn > 0)
+                _publishStatus($"[{_label}] Auto-withdrew {withdrawn} station credits");
+
+            return refreshed;
+        }
+        catch
+        {
+            return state;
+        }
+    }
+
+    private async Task<GameState> TryAutoCompleteMissionsAsync(GameState state)
+    {
+        if (state.ActiveMissions == null || state.ActiveMissions.Length == 0)
+            return state;
+
+        var completableMissionIds = new List<string>();
+        var seenMissionIds = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var mission in state.ActiveMissions)
+        {
+            if (!mission.Completed)
+                continue;
+
+            string missionId = string.IsNullOrWhiteSpace(mission.MissionId)
+                ? mission.Id
+                : mission.MissionId;
+
+            if (string.IsNullOrWhiteSpace(missionId))
+                continue;
+
+            if (seenMissionIds.Add(missionId))
+                completableMissionIds.Add(missionId);
+        }
+
+        if (completableMissionIds.Count == 0)
+            return state;
+
+        try
+        {
+            foreach (var missionId in completableMissionIds)
+                await _client.ExecuteAsync("complete_mission", new { mission_id = missionId });
+
+            var refreshed = _client.GetGameState();
+            int completedCount = Math.Max(0, state.ActiveMissions.Length - refreshed.ActiveMissions.Length);
+
+            if (completedCount > 0)
+                _publishStatus($"[{_label}] Auto-completed {completedCount} mission(s)");
+
+            return refreshed;
+        }
+        catch
+        {
+            return state;
+        }
+    }
+
+    private async Task<GameState> TryAutoRefuelBetweenScriptStepsAsync(GameState state)
+    {
         if (state.Fuel >= state.MaxFuel || state.Credits <= 0)
             return state;
 
@@ -302,7 +396,7 @@ public sealed class BotRuntime
         try
         {
             await _client.ExecuteAsync("refuel", new { });
-            var refreshed = await _client.GetGameStateAsync().WaitAsync(token);
+            var refreshed = _client.GetGameState();
 
             if (refreshed.Fuel > fuelBefore)
                 _publishStatus($"[{_label}] Auto-refueled between script steps");

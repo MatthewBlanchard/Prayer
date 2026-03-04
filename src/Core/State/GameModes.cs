@@ -1,18 +1,8 @@
 using System.Collections.Generic;
 using System.Linq;
 
-public enum GameContextKind
-{
-    Space,
-    Trade,
-    Hangar,
-    Shipyard,
-    ShipCatalog
-}
-
 public abstract class GameContextMode
 {
-    public abstract GameContextKind Kind { get; }
     public abstract string Name { get; }
 
     public abstract IReadOnlyList<ICommand> GetCommands();
@@ -38,17 +28,6 @@ public abstract class GameContextMode
         return heading + "\n" + string.Join("\n", help) + "\n\n";
     }
 
-    public static GameContextMode FromKind(GameContextKind kind)
-    {
-        return kind switch
-        {
-            GameContextKind.Trade => TradeContextMode.Instance,
-            GameContextKind.Hangar => HangarContextMode.Instance,
-            GameContextKind.Shipyard => ShipyardContextMode.Instance,
-            GameContextKind.ShipCatalog => ShipCatalogContextMode.Instance,
-            _ => SpaceContextMode.Instance,
-        };
-    }
 }
 
 public sealed class SpaceContextMode : GameContextMode
@@ -62,13 +41,14 @@ public sealed class SpaceContextMode : GameContextMode
         {
             new MineCommand(),
             new GoCommand(),
+            new AcceptMissionCommand(),
+            new AbandonMissionCommand(),
             new DockCommand(),
             new RepairCommand(),
             new HaltCommand(),
         };
     }
 
-    public override GameContextKind Kind => GameContextKind.Space;
     public override string Name => "SpaceState";
 
     public override IReadOnlyList<ICommand> GetCommands() => _commands;
@@ -137,6 +117,8 @@ public sealed class TradeContextMode : GameContextMode
             new BuyCommand(),
             new CancelBuyCommand(),
             new CancelSellCommand(),
+            new AcceptMissionCommand(),
+            new AbandonMissionCommand(),
             new WithdrawItemsCommand(),
             new DepositItemsCommand(),
             new ExitCommand(),
@@ -144,7 +126,6 @@ public sealed class TradeContextMode : GameContextMode
         };
     }
 
-    public override GameContextKind Kind => GameContextKind.Trade;
     public override string Name => "TradeState";
 
     public override IReadOnlyList<ICommand> GetCommands() => _commands;
@@ -191,12 +172,13 @@ public sealed class HangarContextMode : GameContextMode
             new SwitchShipCommand(),
             new InstallModCommand(),
             new UninstallModCommand(),
+            new AcceptMissionCommand(),
+            new AbandonMissionCommand(),
             new ExitCommand(),
             new HaltCommand(),
         };
     }
 
-    public override GameContextKind Kind => GameContextKind.Hangar;
     public override string Name => "HangarState";
 
     public override IReadOnlyList<ICommand> GetCommands() => _commands;
@@ -245,6 +227,8 @@ public sealed class ShipyardContextMode : GameContextMode
             new CommissionQuoteCommand(),
             new CommissionShipCommand(),
             new CommissionStatusCommand(),
+            new AcceptMissionCommand(),
+            new AbandonMissionCommand(),
             new SellShipCommand(),
             new ListShipForSaleCommand(),
             new ShipCatalogCommand(),
@@ -253,7 +237,6 @@ public sealed class ShipyardContextMode : GameContextMode
         };
     }
 
-    public override GameContextKind Kind => GameContextKind.Shipyard;
     public override string Name => "ShipYardState";
 
     public override IReadOnlyList<ICommand> GetCommands() => _commands;
@@ -301,7 +284,6 @@ public sealed class ShipCatalogContextMode : GameContextMode
         };
     }
 
-    public override GameContextKind Kind => GameContextKind.ShipCatalog;
     public override string Name => "ShipCatalogState";
 
     public override IReadOnlyList<ICommand> GetCommands() => _commands;

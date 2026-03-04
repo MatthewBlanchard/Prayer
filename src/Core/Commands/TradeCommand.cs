@@ -1,36 +1,26 @@
 using System.Threading.Tasks;
 
-public class TradeCommand : ISingleTurnCommand, IDslCommandGrammar
+public class TradeCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
 {
-    public string Name => "trade";
+    public override string Name => "trade";
     public DslCommandSyntax GetDslSyntax() => new();
 
-    public bool IsAvailable(GameState state)
+    protected override bool RequiresStation => true;
+
+    protected override bool IsAvailableWhenDocked(GameState state)
         => state.Docked &&
-           state.CurrentPOI.IsStation &&
-           state.Mode.Kind == GameContextKind.Space;
-    public string BuildHelp(GameState state)
+           state.CurrentPOI.IsStation;
+    public override string BuildHelp(GameState state)
         => "- trade → use trading terminal";
 
-    public Task<CommandExecutionResult?> ExecuteAsync(
+    protected override Task<CommandExecutionResult?> ExecuteDockedAsync(
         SpaceMoltHttpClient client,
         CommandResult cmd,
         GameState state)
     {
-        if (!state.Docked || !state.CurrentPOI.IsStation)
-        {
-            return Task.FromResult<CommandExecutionResult?>(new CommandExecutionResult
-            {
-                ResultMessage = "Trade is only available while docked at a station."
-            });
-        }
-
-        client.SetMode(GameContextKind.Trade);
-        state.Mode = TradeContextMode.Instance;
-
         return Task.FromResult<CommandExecutionResult?>(new CommandExecutionResult
         {
-            ResultMessage = "Entered trading terminal."
+            ResultMessage = "Trading terminal is always available while docked."
         });
     }
 }

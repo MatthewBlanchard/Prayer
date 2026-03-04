@@ -5,7 +5,7 @@ public class NextPageCommand : ISingleTurnCommand
     public string Name => "next";
 
     public bool IsAvailable(GameState state)
-        => state.Mode.Kind == GameContextKind.ShipCatalog;
+        => state.Docked && state.CurrentPOI.IsStation;
     public string BuildHelp(GameState state)
         => "- next page → move to next catalog page";
 

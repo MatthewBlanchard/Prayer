@@ -2,16 +2,17 @@ using System;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class InstallModCommand : ISingleTurnCommand
+public class InstallModCommand : AutoDockSingleTurnCommand
 {
-    public string Name => "install_mod";
+    public override string Name => "install_mod";
+    protected override bool RequiresStation => true;
 
-    public bool IsAvailable(GameState state)
-        => state.Mode.Kind == GameContextKind.Hangar && state.Docked && state.CurrentPOI.IsStation;
-    public string BuildHelp(GameState state)
+    protected override bool IsAvailableWhenDocked(GameState state)
+        => state.Docked && state.CurrentPOI.IsStation;
+    public override string BuildHelp(GameState state)
         => "- install_mod <moduleId> → install a module on your active ship";
 
-    public async Task<CommandExecutionResult?> ExecuteAsync(
+    protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
         SpaceMoltHttpClient client,
         CommandResult cmd,
         GameState state)

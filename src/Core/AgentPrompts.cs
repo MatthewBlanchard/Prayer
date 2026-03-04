@@ -130,6 +130,7 @@ public static class AgentPrompts
     public static string BuildScriptFromUserInputPrompt(
         string baseSystemPrompt,
         string userInput,
+        string stateContextBlock,
         string examplesBlock,
         int attemptNumber = 1,
         string? previousScript = null,
@@ -150,23 +151,21 @@ public static class AgentPrompts
             "Output only DSL script text. No markdown fences and no explanation.\n" +
             "Terminate every command with a semicolon (;).\n" +
             "Use only the DSL syntax implied by the examples.\n" +
-            "Use blocks only when useful; prefer direct commands inside dock blocks (for example: sell cargo;).\n" +
-            "Any command that has a block form must be used as a block (never as command;).\n" +
-            "Do not place mine commands inside dock blocks.\n" +
             "Keep scripts short, deterministic, and directly aligned to the user request.\n" +
-            "Prefer explicit movement steps with go <identifier>; before action blocks when needed.\n" +
+            "Prefer explicit movement steps with go <identifier>; before follow-up actions when needed.\n" +
             "Do not invent unsupported commands.\n" +
             "<|eot_id|>" +
             "<|start_header_id|>user<|end_header_id|>\n" +
             "Attempt: " + attemptNumber + "\n\n" +
             "User request:\n" + userInput + "\n\n" +
+            stateContextBlock + "\n\n" +
             DslCommandReferenceBlock +
             "Prompt -> script examples:\n" + examplesBlock + "\n\n" +
             retryContext +
             "Generate a DSL script now.\n" +
             "Checklist:\n" +
             "- every command ends with ;\n" +
-            "- braces are balanced\n" +
+            "- no block braces ({ or })\n" +
             "- no markdown fence\n" +
             "Return only the script text.\n" +
             "<|eot_id|>" +

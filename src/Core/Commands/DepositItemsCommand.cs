@@ -4,20 +4,25 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class DepositItemsCommand : ISingleTurnCommand, IDslCommandGrammar
+public class DepositItemsCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
 {
-    public string Name => "stash";
+    public override string Name => "stash";
     public DslCommandSyntax GetDslSyntax() => new(
-        DslArgKind.Identifier,
-        ArgRequired: true);
+        ArgSpecs: new[]
+        {
+            new DslArgumentSpec(
+                DslArgKind.Item | DslArgKind.Enum,
+                Required: true,
+                EnumType: "cargo_keyword")
+        });
 
-    public bool IsAvailable(GameState state)
+    protected override bool IsAvailableWhenDocked(GameState state)
         => state.Docked && state.Cargo.Count > 0;
 
-    public string BuildHelp(GameState state)
+    public override string BuildHelp(GameState state)
         => "- stash <itemId|cargo> → move one stack or dump all cargo to storage";
 
-    public async Task<CommandExecutionResult?> ExecuteAsync(
+    protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
         SpaceMoltHttpClient client,
         CommandResult cmd,
         GameState state)

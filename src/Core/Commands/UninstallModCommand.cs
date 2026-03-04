@@ -2,16 +2,17 @@ using System;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class UninstallModCommand : ISingleTurnCommand
+public class UninstallModCommand : AutoDockSingleTurnCommand
 {
-    public string Name => "uninstall_mod";
+    public override string Name => "uninstall_mod";
+    protected override bool RequiresStation => true;
 
-    public bool IsAvailable(GameState state)
-        => state.Mode.Kind == GameContextKind.Hangar && state.Docked && state.CurrentPOI.IsStation;
-    public string BuildHelp(GameState state)
+    protected override bool IsAvailableWhenDocked(GameState state)
+        => state.Docked && state.CurrentPOI.IsStation;
+    public override string BuildHelp(GameState state)
         => "- uninstall_mod <moduleId> → uninstall a module from your active ship";
 
-    public async Task<CommandExecutionResult?> ExecuteAsync(
+    protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
         SpaceMoltHttpClient client,
         CommandResult cmd,
         GameState state)

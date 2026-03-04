@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Threading.Channels;
 
@@ -12,6 +11,7 @@ using System.Threading.Channels;
 
 public class SpaceMoltAgent
 {
+    private const double PromptSearchMatchCutoff = 0.62d;
     private const string BaseSystemPrompt =
         "You are an autonomous agent playing the online game SpaceMolt. " +
         "Your objective is to pursue the active objective. " +
@@ -20,23 +20,17 @@ public class SpaceMoltAgent
     private const string DefaultScriptGenerationExamples =
         "Go, sell, then mine ->\n" +
         "go system_a;\n" +
-        "dock {\n" +
-        "  sell cargo;\n" +
-        "}\n" +
+        "sell cargo;\n" +
         "mine asteroid_belt;\n\n" +
         "Go to Sol ->\n" +
         "go sol;\n\n" +
         "Sell your cargo ->\n" +
-        "dock {\n" +
-        "  sell cargo;\n" +
-        "}\n\n" +
+        "sell cargo;\n\n" +
         "Go to system, mine, and sell at other system ->\n" +
         "go system_a;\n" +
         "mine asteroid_belt;\n" +
         "go system_b;\n" +
-        "dock {\n" +
-        "  sell cargo;\n" +
-        "}";
+        "sell cargo;";
 
     private readonly ILLMClient _plannerLlm;
     private readonly PromptScriptRag? _scriptExampleRag;
@@ -95,11 +89,16 @@ public class SpaceMoltAgent
         GameState? state = null,
         bool preserveAssociatedPrompt = false)
     {
-        _script = script ?? string.Empty;
+        var rawScript = script ?? string.Empty;
         _currentScriptLine = null;
-        var steps = state == null
-            ? DslInterpreter.Translate(_script)
-            : DslInterpreter.Translate(_script, state);
+        var steps = (state == null
+            ? DslInterpreter.Translate(rawScript)
+            : DslInterpreter.Translate(rawScript, state)).ToList();
+        _script = DslInterpreter.RenderScript(steps).TrimEnd();
+        LogScriptNormalization("set_script", rawScript, _script);
+
+        for (int i = 0; i < steps.Count; i++)
+            steps[i].SourceLine = i + 1;
 
         if (!preserveAssociatedPrompt &&
             !string.Equals(_script, _lastGeneratedScript, StringComparison.Ordinal))
@@ -129,6 +128,7 @@ public class SpaceMoltAgent
     {
         var attempts = Math.Max(1, maxAttempts);
         var generationInput = userInput.Trim();
+        var stateContextBlock = BuildScriptGenerationStateContextBlock(state, generationInput);
         var examplesBlock = await BuildScriptGenerationExamplesBlockAsync(generationInput);
         string? previousScript = null;
         string? previousError = null;
@@ -138,11 +138,21 @@ public class SpaceMoltAgent
             var prompt = AgentPrompts.BuildScriptFromUserInputPrompt(
                 baseSystemPrompt: BaseSystemPrompt,
                 userInput: generationInput,
+                stateContextBlock: stateContextBlock,
                 examplesBlock: examplesBlock,
                 attemptNumber: attempt,
                 previousScript: previousScript,
                 previousError: previousError);
 
+            await LogScriptWriterContextTokensAsync(
+                attempt,
+                attempts,
+                generationInput,
+                stateContextBlock,
+                examplesBlock,
+                previousScript,
+                previousError,
+                prompt);
             await LogPlannerPromptAsync($"script_generation_attempt_{attempt}", prompt);
 
             var result = await _plannerLlm.CompleteAsync(
@@ -155,11 +165,13 @@ public class SpaceMoltAgent
 
             try
             {
-                _ = DslInterpreter.Translate(script, state);
+                var steps = DslInterpreter.Translate(script, state).ToList();
+                var normalizedScript = DslInterpreter.RenderScript(steps).TrimEnd();
+                LogScriptNormalization($"generation_attempt_{attempt}", script, normalizedScript);
                 // Persist only the raw user request for prompt->script examples.
                 _lastScriptGenerationPrompt = generationInput;
-                _lastGeneratedScript = script;
-                return script;
+                _lastGeneratedScript = normalizedScript;
+                return normalizedScript;
             }
             catch (FormatException ex)
             {
@@ -303,14 +315,64 @@ public class SpaceMoltAgent
             .ToList();
     }
 
-    public (string SpaceStateMarkdown, string? TradeStateMarkdown) BuildUiState(GameState state)
+    public (string SpaceStateMarkdown, string? TradeStateMarkdown, string? ShipyardStateMarkdown, string? CantinaStateMarkdown) BuildUiState(GameState state)
     {
         var spaceState = SpaceContextMode.Instance.ToDisplayText(state);
         var tradeState = state.Docked
             ? TradeContextMode.Instance.ToDisplayText(state)
             : null;
+        var shipyardState = state.Docked && state.CurrentPOI.IsStation
+            ? BuildShipyardUiState(state)
+            : null;
+        var cantinaState = state.Docked && state.CurrentPOI.IsStation
+            ? BuildCantinaUiState(state)
+            : null;
 
-        return (spaceState, tradeState);
+        return (spaceState, tradeState, shipyardState, cantinaState);
+    }
+
+    private static string BuildShipyardUiState(GameState state)
+    {
+        var shipyardState = ShipyardContextMode.Instance.ToDisplayText(state);
+        int currentPage = state.ShipCatalogue.Page ?? 1;
+        int totalPages = state.ShipCatalogue.TotalPages ?? 1;
+        int totalItems = state.ShipCatalogue.Total ?? state.ShipCatalogue.TotalItems ?? 0;
+        int entriesOnPage = state.ShipCatalogue.NormalizedEntries.Length;
+        string catalogEntries = GameState.StripMarkdown(
+            GameState.FormatCatalogueEntries(state.ShipCatalogue.NormalizedEntries));
+
+        return
+$@"{shipyardState}
+
+CATALOG CACHE
+PAGE: {currentPage}/{totalPages}
+ENTRIES ON PAGE: {entriesOnPage}
+TOTAL SHIPS: {totalItems}
+
+SHIPS
+{catalogEntries}";
+    }
+
+    private static string BuildCantinaUiState(GameState state)
+    {
+        string activeMissions = GameState.StripMarkdown(GameState.FormatMissions(state.ActiveMissions));
+        string availableMissions = GameState.StripMarkdown(GameState.FormatMissions(state.AvailableMissions));
+
+        if (string.IsNullOrWhiteSpace(activeMissions))
+            activeMissions = "- _(none)_";
+        if (string.IsNullOrWhiteSpace(availableMissions))
+            availableMissions = "- _(none)_";
+
+        return
+$@"CONTEXT: CANTINA
+STATION: {state.CurrentPOI.Id}
+CREDITS: {state.Credits}
+
+ACTIVE MISSIONS
+{activeMissions}
+
+AVAILABLE MISSIONS
+{availableMissions}{state.BuildNotificationsDisplaySection()}";
     }
 
     public async Task ExecuteAsync(
@@ -536,7 +598,7 @@ public class SpaceMoltAgent
 
         try
         {
-            latestState = await client.GetGameStateAsync();
+            latestState = client.GetGameState();
         }
         catch
         {
@@ -708,17 +770,25 @@ public class SpaceMoltAgent
 
     private string BuildAvailableActionsBlock(GameState state, bool onlyAvailable)
     {
-        return state.Mode.BuildActionsBlock(state, onlyAvailable);
+        var help = _commands
+            .Where(c => !onlyAvailable || c.IsAvailable(state))
+            .Select(c => c.BuildHelp(state))
+            .ToList();
+
+        if (help.Count == 0)
+            return onlyAvailable
+                ? "Available actions:\n- none\n\n"
+                : "All actions:\n- none\n\n";
+
+        var heading = onlyAvailable ? "Available actions:" : "All actions:";
+        return heading + "\n" + string.Join("\n", help) + "\n\n";
     }
 
     private IEnumerable<ICommand> GetCandidateCommands(GameState state, bool onlyAvailable)
     {
-        var activeCommands = state.Mode.GetCommands();
-        var source = onlyAvailable
-            ? activeCommands.Where(c => c.IsAvailable(state))
-            : activeCommands.AsEnumerable();
-
-        return source;
+        return onlyAvailable
+            ? _commands.Where(c => c.IsAvailable(state))
+            : _commands;
     }
 
     private string BuildCurrentRationaleBlock()
@@ -828,6 +898,60 @@ public class SpaceMoltAgent
         return text.Substring(firstNewline + 1, lastFence - firstNewline - 1).Trim();
     }
 
+    private static async Task LogScriptWriterContextTokensAsync(
+        int attempt,
+        int maxAttempts,
+        string userInput,
+        string stateContextBlock,
+        string examplesBlock,
+        string? previousScript,
+        string? previousError,
+        string fullPrompt)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppPaths.LogDir);
+            var sb = new StringBuilder();
+            sb.AppendLine($"[{DateTime.UtcNow:O}] === script_writer_context ===");
+            sb.AppendLine($"attempt={attempt}/{maxAttempts}");
+            sb.AppendLine($"est_tokens.full_prompt={EstimateTokenCount(fullPrompt)}");
+            sb.AppendLine($"est_tokens.user_input={EstimateTokenCount(userInput)}");
+            sb.AppendLine($"est_tokens.state_context={EstimateTokenCount(stateContextBlock)}");
+            sb.AppendLine($"est_tokens.examples={EstimateTokenCount(examplesBlock)}");
+            sb.AppendLine($"est_tokens.previous_script={EstimateTokenCount(previousScript)}");
+            sb.AppendLine($"est_tokens.previous_error={EstimateTokenCount(previousError)}");
+            sb.AppendLine($"chars.full_prompt={(fullPrompt ?? string.Empty).Length}");
+            sb.AppendLine($"chars.user_input={(userInput ?? string.Empty).Length}");
+            sb.AppendLine($"chars.state_context={(stateContextBlock ?? string.Empty).Length}");
+            sb.AppendLine($"chars.examples={(examplesBlock ?? string.Empty).Length}");
+            sb.AppendLine($"chars.previous_script={(previousScript ?? string.Empty).Length}");
+            sb.AppendLine($"chars.previous_error={(previousError ?? string.Empty).Length}");
+            sb.AppendLine();
+
+            await File.AppendAllTextAsync(AppPaths.ScriptWriterContextLogFile, sb.ToString());
+        }
+        catch
+        {
+            // Context metrics logging should never block script generation.
+        }
+    }
+
+    private static int EstimateTokenCount(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return 0;
+
+        int nonWhitespaceChars = 0;
+        foreach (char ch in text)
+        {
+            if (!char.IsWhiteSpace(ch))
+                nonWhitespaceChars++;
+        }
+
+        // Rough cross-model heuristic: ~1 token per 4 non-whitespace chars.
+        return (int)Math.Ceiling(nonWhitespaceChars / 4d);
+    }
+
     private static async Task LogPlannerPromptAsync(string stage, string prompt)
     {
         try
@@ -842,6 +966,26 @@ public class SpaceMoltAgent
         catch
         {
             // Prompt logging should never block gameplay.
+        }
+    }
+
+    private static void LogScriptNormalization(string source, string inputScript, string outputScript)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppPaths.LogDir);
+            var sb = new StringBuilder();
+            sb.AppendLine($"[{DateTime.UtcNow:O}] === script_normalization ({source}) ===");
+            sb.AppendLine("INPUT:");
+            sb.AppendLine(inputScript ?? string.Empty);
+            sb.AppendLine("OUTPUT:");
+            sb.AppendLine(outputScript ?? string.Empty);
+            sb.AppendLine();
+            File.AppendAllText(AppPaths.ScriptNormalizationLogFile, sb.ToString());
+        }
+        catch
+        {
+            // Script normalization logging should never block gameplay.
         }
     }
 
@@ -915,6 +1059,379 @@ public class SpaceMoltAgent
             return $"{cmd.Action} {cmd.Arg1}";
 
         return cmd.Action;
+    }
+
+    private static string BuildScriptGenerationStateContextBlock(GameState state, string userInput)
+    {
+        var searchTerms = BuildPromptSearchTerms(userInput);
+
+        var topPoiMatches = FindTopMatches(
+            searchTerms,
+            BuildPoiAliasMap(state),
+            maxMatches: 3);
+        var topSystemMatches = FindTopMatches(
+            searchTerms,
+            BuildSystemAliasMap(state),
+            maxMatches: 3);
+        var topItemMatches = FindTopMatches(
+            searchTerms,
+            BuildItemAliasMap(state),
+            maxMatches: 3);
+
+        var poiPrimary = state.POIs
+            .Select(p => (Key: p.Id, Label: $"{p.Id} ({p.Type})"))
+            .ToList();
+        var systemPrimary = state.Systems
+            .Select(s => (Key: s, Label: s))
+            .ToList();
+        var cargoPrimary = state.Cargo.Values
+            .OrderByDescending(c => c.Quantity)
+            .Select(c => (Key: c.ItemId, Label: c.ItemId))
+            .ToList();
+
+        var poiLines = InterleaveWithTopMatches(
+            poiPrimary,
+            topPoiMatches,
+            match => match);
+        var systemLines = InterleaveWithTopMatches(
+            systemPrimary,
+            topSystemMatches,
+            match => match);
+        var cargoLines = InterleaveWithTopMatches(
+            cargoPrimary,
+            topItemMatches,
+            match => match);
+
+        string currentPoiId = state.CurrentPOI?.Id ?? "-";
+        string currentPoiType = state.CurrentPOI?.Type ?? "-";
+
+        return
+            "Current location:\n" +
+            $"- system: {state.System}\n" +
+            $"- poi: {currentPoiId} ({currentPoiType})\n\n" +
+            "POIs:\n" + FormatPromptSectionLines(poiLines) + "\n\n" +
+            "Systems:\n" + FormatPromptSectionLines(systemLines) + "\n\n" +
+            "Items:\n" + FormatPromptSectionLines(cargoLines);
+    }
+
+    private static IReadOnlyList<string> BuildPromptSearchTerms(string userInput)
+    {
+        if (string.IsNullOrWhiteSpace(userInput))
+            return Array.Empty<string>();
+
+        var tokens = new List<string>();
+        var sb = new StringBuilder();
+
+        foreach (char ch in userInput)
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                sb.Append(char.ToLowerInvariant(ch));
+                continue;
+            }
+
+            if (sb.Length > 0)
+            {
+                tokens.Add(sb.ToString());
+                sb.Clear();
+            }
+        }
+
+        if (sb.Length > 0)
+            tokens.Add(sb.ToString());
+
+        if (tokens.Count == 0)
+            return Array.Empty<string>();
+
+        var terms = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        void AddTerm(string value)
+        {
+            string normalized = DslFuzzyMatcher.Normalize(value);
+            if (string.IsNullOrWhiteSpace(normalized))
+                return;
+
+            if (seen.Add(normalized))
+                terms.Add(normalized);
+        }
+
+        int maxN = Math.Min(3, tokens.Count);
+        for (int n = maxN; n >= 1; n--)
+        {
+            for (int i = 0; i + n <= tokens.Count; i++)
+                AddTerm(string.Join('_', tokens.Skip(i).Take(n)));
+        }
+
+        return terms;
+    }
+
+    private static Dictionary<string, HashSet<string>> BuildSystemAliasMap(GameState state)
+    {
+        var aliases = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        AddPromptAlias(aliases, state.System, state.System);
+        foreach (var systemId in state.Systems)
+            AddPromptAlias(aliases, systemId, systemId);
+
+        var map = state.Galaxy?.Map?.Systems?.Count > 0
+            ? state.Galaxy.Map
+            : LoadMapCache();
+        foreach (var system in map.Systems)
+            AddPromptAlias(aliases, system.Id, system.Id);
+
+        return aliases;
+    }
+
+    private static Dictionary<string, HashSet<string>> BuildPoiAliasMap(GameState state)
+    {
+        var aliases = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        AddPromptAlias(aliases, state.CurrentPOI?.Id, state.CurrentPOI?.Id);
+        foreach (var poi in state.POIs)
+        {
+            AddPromptAlias(aliases, poi.Id, poi.Id);
+            AddPromptAlias(aliases, poi.Id, poi.Name);
+        }
+
+        var map = state.Galaxy?.Map?.Systems?.Count > 0
+            ? state.Galaxy.Map
+            : LoadMapCache();
+        foreach (var system in map.Systems)
+        {
+            foreach (var poi in system.Pois)
+                AddPromptAlias(aliases, poi.Id, poi.Id);
+        }
+
+        return aliases;
+    }
+
+    private static Dictionary<string, HashSet<string>> BuildItemAliasMap(GameState state)
+    {
+        var aliases = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var itemId in state.Cargo.Keys)
+            AddPromptAlias(aliases, itemId, itemId);
+
+        if (state.Shared.StorageItems != null)
+        {
+            foreach (var itemId in state.Shared.StorageItems.Keys)
+                AddPromptAlias(aliases, itemId, itemId);
+        }
+
+        if (state.Galaxy?.Catalog?.ItemsById != null)
+        {
+            foreach (var (itemId, entry) in state.Galaxy.Catalog.ItemsById)
+            {
+                AddPromptAlias(aliases, itemId, itemId);
+                AddPromptAlias(aliases, itemId, entry?.Name);
+            }
+        }
+
+        return aliases;
+    }
+
+    private static IReadOnlyList<string> FindTopMatches(
+        IReadOnlyList<string> searchTerms,
+        IReadOnlyDictionary<string, HashSet<string>> aliasesByCanonical,
+        int maxMatches)
+    {
+        if (searchTerms.Count == 0 ||
+            aliasesByCanonical.Count == 0 ||
+            maxMatches <= 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var scored = new List<(string Canonical, double Score, int Distance)>();
+
+        foreach (var (canonical, aliases) in aliasesByCanonical)
+        {
+            double bestScore = -1d;
+            int bestDistance = int.MaxValue;
+
+            foreach (var alias in aliases)
+            {
+                foreach (var term in searchTerms)
+                {
+                    double score = ComputePromptMatchScore(term, alias);
+                    int distance = LevenshteinDistance(term, alias);
+
+                    if (score > bestScore ||
+                        (Math.Abs(score - bestScore) < 0.0001d && distance < bestDistance))
+                    {
+                        bestScore = score;
+                        bestDistance = distance;
+                    }
+                }
+            }
+
+            if (bestScore >= PromptSearchMatchCutoff)
+                scored.Add((canonical, bestScore, bestDistance));
+        }
+
+        return scored
+            .OrderByDescending(s => s.Score)
+            .ThenBy(s => s.Distance)
+            .ThenBy(s => s.Canonical, StringComparer.Ordinal)
+            .Take(maxMatches)
+            .Select(s => s.Canonical)
+            .ToList();
+    }
+
+    private static IReadOnlyList<string> InterleaveWithTopMatches(
+        IReadOnlyList<(string Key, string Label)> primaryEntries,
+        IReadOnlyList<string> topMatches,
+        Func<string, string> matchLabelFactory)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        int primaryIndex = 0;
+        int matchIndex = 0;
+
+        while (primaryIndex < primaryEntries.Count || matchIndex < topMatches.Count)
+        {
+            if (primaryIndex < primaryEntries.Count)
+            {
+                var primary = primaryEntries[primaryIndex++];
+                string key = DslFuzzyMatcher.Normalize(primary.Key);
+                if (!string.IsNullOrWhiteSpace(key) && seen.Add(key))
+                    result.Add(primary.Label);
+            }
+
+            if (matchIndex < topMatches.Count)
+            {
+                string match = topMatches[matchIndex++];
+                string key = DslFuzzyMatcher.Normalize(match);
+                if (!string.IsNullOrWhiteSpace(key) && seen.Add(key))
+                    result.Add(matchLabelFactory(match));
+            }
+        }
+
+        return result;
+    }
+
+    private static string FormatPromptSectionLines(IReadOnlyList<string> lines)
+    {
+        if (lines == null || lines.Count == 0)
+            return "- none";
+
+        return string.Join("\n", lines.Select(l => $"- {l}"));
+    }
+
+    private static void AddPromptAlias(
+        Dictionary<string, HashSet<string>> aliasesByCanonical,
+        string? canonicalRaw,
+        string? aliasRaw)
+    {
+        if (string.IsNullOrWhiteSpace(canonicalRaw))
+            return;
+
+        string canonical = canonicalRaw.Trim();
+        string alias = DslFuzzyMatcher.Normalize(aliasRaw ?? canonical);
+        if (string.IsNullOrWhiteSpace(alias))
+            alias = DslFuzzyMatcher.Normalize(canonical);
+
+        if (string.IsNullOrWhiteSpace(alias))
+            return;
+
+        if (!aliasesByCanonical.TryGetValue(canonical, out var aliases))
+        {
+            aliases = new HashSet<string>(StringComparer.Ordinal);
+            aliasesByCanonical[canonical] = aliases;
+        }
+
+        aliases.Add(alias);
+        aliases.Add(DslFuzzyMatcher.Normalize(canonical));
+    }
+
+    private static double ComputePromptMatchScore(string query, string candidateAlias)
+    {
+        if (query.Length == 0 || candidateAlias.Length == 0)
+            return -1d;
+
+        if (string.Equals(query, candidateAlias, StringComparison.Ordinal))
+            return 1d;
+
+        if (candidateAlias.StartsWith(query, StringComparison.Ordinal))
+            return 0.94d;
+
+        if (query.StartsWith(candidateAlias, StringComparison.Ordinal))
+            return 0.88d;
+
+        if (candidateAlias.Contains(query, StringComparison.Ordinal))
+            return 0.82d;
+
+        var tokenScore = TokenOverlapScore(query, candidateAlias);
+        var editScore = LevenshteinSimilarity(query, candidateAlias);
+
+        return (editScore * 0.65d) + (tokenScore * 0.35d);
+    }
+
+    private static double TokenOverlapScore(string a, string b)
+    {
+        var aTokens = a.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        var bTokens = b.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        if (aTokens.Length == 0 || bTokens.Length == 0)
+            return 0d;
+
+        var aSet = aTokens.ToHashSet(StringComparer.Ordinal);
+        var bSet = bTokens.ToHashSet(StringComparer.Ordinal);
+
+        int overlap = aSet.Count(t => bSet.Contains(t));
+        int union = aSet.Count + bSet.Count - overlap;
+        if (union <= 0)
+            return 0d;
+
+        return overlap / (double)union;
+    }
+
+    private static double LevenshteinSimilarity(string a, string b)
+    {
+        int maxLen = Math.Max(a.Length, b.Length);
+        if (maxLen == 0)
+            return 1d;
+
+        int distance = LevenshteinDistance(a, b);
+        return Math.Max(0d, 1d - (distance / (double)maxLen));
+    }
+
+    private static int LevenshteinDistance(string a, string b)
+    {
+        int n = a.Length;
+        int m = b.Length;
+        if (n == 0)
+            return m;
+        if (m == 0)
+            return n;
+
+        var prev = new int[m + 1];
+        var cur = new int[m + 1];
+
+        for (int j = 0; j <= m; j++)
+            prev[j] = j;
+
+        for (int i = 1; i <= n; i++)
+        {
+            cur[0] = i;
+            for (int j = 1; j <= m; j++)
+            {
+                int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                cur[j] = Math.Min(
+                    Math.Min(cur[j - 1] + 1, prev[j] + 1),
+                    prev[j - 1] + cost);
+            }
+
+            (prev, cur) = (cur, prev);
+        }
+
+        return prev[m];
+    }
+
+    private static GalaxyMapSnapshot LoadMapCache()
+    {
+        return GalaxyMapSnapshotFile.Load(AppPaths.GalaxyMapFile);
     }
 
     private async Task<string> BuildScriptGenerationExamplesBlockAsync(string generationInput)
@@ -1008,88 +1525,25 @@ public class SpaceMoltAgent
 
     private static string NormalizeScriptExampleForPrompt(string script)
     {
-        if (string.IsNullOrWhiteSpace(script))
-            return string.Empty;
-
-        var normalizedScript = FlattenLegacyTradeBlocksText(script);
-
-        DslAstProgram tree;
         try
         {
-            tree = DslParser.ParseTree(normalizedScript);
+            return DslInterpreter.NormalizeScript(script);
         }
         catch
         {
-            return normalizedScript.Trim();
-        }
-
-        var flattened = FlattenTradeBlocks(tree.Statements);
-        return RenderDslNodes(flattened, indentLevel: 0).TrimEnd();
-    }
-
-    private static string FlattenLegacyTradeBlocksText(string script)
-    {
-        var current = script ?? string.Empty;
-
-        // Flatten legacy "trade { ... }" wrappers so old examples still guide the model.
-        while (true)
-        {
-            var next = Regex.Replace(
-                current,
-                @"trade\s*\{\s*(.*?)\s*\}",
-                "$1",
-                RegexOptions.IgnoreCase | RegexOptions.Singleline);
-
-            if (string.Equals(next, current, StringComparison.Ordinal))
-                return next;
-
-            current = next;
+            return script?.Trim() ?? string.Empty;
         }
     }
 
-    private static IReadOnlyList<DslAstNode> FlattenTradeBlocks(IReadOnlyList<DslAstNode> nodes)
-    {
-        var result = new List<DslAstNode>();
-
-        foreach (var node in nodes)
-        {
-            switch (node)
-            {
-                case DslCommandAstNode command:
-                    result.Add(command);
-                    break;
-                case DslBlockAstNode block:
-                {
-                    var flattenedChildren = FlattenTradeBlocks(block.Body);
-                    if (string.Equals(block.Name, "trade", StringComparison.OrdinalIgnoreCase))
-                    {
-                        foreach (var child in flattenedChildren)
-                            result.Add(child);
-                    }
-                    else
-                    {
-                        result.Add(new DslBlockAstNode(block.Name, flattenedChildren, block.SourceLine));
-                    }
-
-                    break;
-                }
-            }
-        }
-
-        return result;
-    }
-
-    private static string RenderDslNodes(IReadOnlyList<DslAstNode> nodes, int indentLevel)
+    private static string RenderDslNodes(IReadOnlyList<DslAstNode> nodes)
     {
         var sb = new StringBuilder();
-        var indent = new string(' ', indentLevel * 2);
 
         foreach (var node in nodes)
         {
             switch (node)
             {
                 case DslCommandAstNode command:
-                    sb.Append(indent);
                     sb.Append(command.Name);
                     if (command.Args.Count > 0)
                     {
@@ -1098,14 +1552,6 @@ public class SpaceMoltAgent
                     }
 
                     sb.AppendLine(";");
-                    break;
-                case DslBlockAstNode block:
-                    sb.Append(indent);
-                    sb.Append(block.Name);
-                    sb.AppendLine(" {");
-                    sb.Append(RenderDslNodes(block.Body, indentLevel + 1));
-                    sb.Append(indent);
-                    sb.AppendLine("}");
                     break;
             }
         }

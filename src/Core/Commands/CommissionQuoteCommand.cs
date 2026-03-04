@@ -2,16 +2,17 @@ using System;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class CommissionQuoteCommand : ISingleTurnCommand
+public class CommissionQuoteCommand : AutoDockSingleTurnCommand
 {
-    public string Name => "commission_quote";
+    public override string Name => "commission_quote";
+    protected override bool RequiresStation => true;
 
-    public bool IsAvailable(GameState state)
-        => state.Mode.Kind == GameContextKind.Shipyard && state.Docked && state.CurrentPOI.IsStation;
-    public string BuildHelp(GameState state)
+    protected override bool IsAvailableWhenDocked(GameState state)
+        => state.Docked && state.CurrentPOI.IsStation;
+    public override string BuildHelp(GameState state)
         => "- commission_quote <shipClassId> → quote ship commission cost";
 
-    public async Task<CommandExecutionResult?> ExecuteAsync(
+    protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
         SpaceMoltHttpClient client,
         CommandResult cmd,
         GameState state)

@@ -1,6 +1,7 @@
 using Terminal.Gui;
 using System;
 using System.Collections.Generic;
+using System.Collections;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -11,15 +12,17 @@ public class BotWindow
     private enum StateTab
     {
         Space,
-        Trade
+        Trade,
+        Shipyard,
+        Cantina
     }
 
     private TextView _state;
     private ListView _objective;
     private ListView _memory;
-    private ListView _actions;
     private TextView _input;
     private Button _changeObjectiveButton;
+    private Button _useMissionPromptButton;
     private Button _saveExampleButton;
     private Button _executeButton;
     private CheckBox _loopCheckBox;
@@ -35,21 +38,28 @@ public class BotWindow
     private ChannelWriter<AddBotRequest>? _addBotWriter;
 
     private Window _win;
-    private FrameView _playerFrame;
+    private View _playerFrame;
     private View _playerStack;
     private View _topInfoBar;
+    private FrameView _executionStatusFrame;
+    private ListView _executionStatusList;
     private Button _spaceTabButton;
     private Button _tradeTabButton;
+    private Button _shipyardTabButton;
+    private Button _cantinaTabButton;
     private StateTab _selectedStateTab = StateTab.Space;
     private FrameView _objectiveFrame;
     private FrameView _memoryFrame;
-    private FrameView _actionsFrame;
     private FrameView _inputFrame;
     private ColorScheme _scriptSideScheme;
     private ColorScheme _activeBotScheme;
     private string? _currentControlInput;
     private string _lastSpaceStateMarkdown = "";
     private string? _lastTradeStateMarkdown;
+    private string? _lastShipyardStateMarkdown;
+    private string? _lastCantinaStateMarkdown;
+    private string _lastRenderedStateMarkdown = "";
+    private IReadOnlyList<MissionPromptOption> _activeMissionPrompts = Array.Empty<MissionPromptOption>();
     private readonly List<View> _playerControls = new();
     private string _lastPlayerSignature = "";
     private volatile bool _uiReady;
@@ -160,11 +170,11 @@ public class BotWindow
             ColorScheme = baseScheme
         };
 
-        _playerFrame = new FrameView("Players")
+        _playerFrame = new View
         {
             X = 0,
             Y = 0,
-            Width = 24,
+            Width = 18,
             Height = Dim.Fill(),
             ColorScheme = baseScheme
         };
@@ -181,7 +191,7 @@ public class BotWindow
         {
             X = Pos.Right(_playerFrame),
             Y = 0,
-            Width = Dim.Fill(40),
+            Width = Dim.Fill(48),
             Height = 1,
             ColorScheme = baseScheme
         };
@@ -195,7 +205,10 @@ public class BotWindow
         _spaceTabButton.Clicked += () =>
         {
             _selectedStateTab = StateTab.Space;
-            UpdateStateTabButtons(showTradeTab: _tradeTabButton.Visible);
+            UpdateStateTabButtons(
+                showTradeTab: _tradeTabButton.Visible,
+                showShipyardTab: _shipyardTabButton.Visible,
+                showCantinaTab: _cantinaTabButton.Visible);
             ApplySelectedStateTabText();
         };
 
@@ -210,12 +223,51 @@ public class BotWindow
         _tradeTabButton.Clicked += () =>
         {
             _selectedStateTab = StateTab.Trade;
-            UpdateStateTabButtons(showTradeTab: true);
+            UpdateStateTabButtons(
+                showTradeTab: true,
+                showShipyardTab: _shipyardTabButton.Visible,
+                showCantinaTab: _cantinaTabButton.Visible);
             ApplySelectedStateTabText();
         };
 
-        _topInfoBar.Add(_spaceTabButton, _tradeTabButton);
-        UpdateStateTabButtons(showTradeTab: false);
+        _shipyardTabButton = new Button("Shipyard")
+        {
+            X = Pos.Right(_tradeTabButton) + 1,
+            Y = 0,
+            Width = 11,
+            Height = 1,
+            Visible = false
+        };
+        _shipyardTabButton.Clicked += () =>
+        {
+            _selectedStateTab = StateTab.Shipyard;
+            UpdateStateTabButtons(
+                showTradeTab: _tradeTabButton.Visible,
+                showShipyardTab: true,
+                showCantinaTab: _cantinaTabButton.Visible);
+            ApplySelectedStateTabText();
+        };
+
+        _cantinaTabButton = new Button("Cantina")
+        {
+            X = Pos.Right(_shipyardTabButton) + 1,
+            Y = 0,
+            Width = 10,
+            Height = 1,
+            Visible = false
+        };
+        _cantinaTabButton.Clicked += () =>
+        {
+            _selectedStateTab = StateTab.Cantina;
+            UpdateStateTabButtons(
+                showTradeTab: _tradeTabButton.Visible,
+                showShipyardTab: _shipyardTabButton.Visible,
+                showCantinaTab: true);
+            ApplySelectedStateTabText();
+        };
+
+        _topInfoBar.Add(_spaceTabButton, _tradeTabButton, _shipyardTabButton, _cantinaTabButton);
+        UpdateStateTabButtons(showTradeTab: false, showShipyardTab: false, showCantinaTab: false);
 
         RefreshPlayerStack(Array.Empty<BotTab>(), null);
 
@@ -226,8 +278,8 @@ public class BotWindow
         {
             X = Pos.Right(_playerFrame),
             Y = 1,
-            Width = Dim.Fill(40),
-            Height = Dim.Fill(),
+            Width = Dim.Fill(48),
+            Height = Dim.Fill(5),
             ColorScheme = stateScheme
         };
 
@@ -240,11 +292,27 @@ public class BotWindow
 
         stateFrame.Add(_state);
 
+        _executionStatusFrame = new FrameView("Execution")
+        {
+            X = Pos.Right(_playerFrame),
+            Y = Pos.AnchorEnd(5),
+            Width = Dim.Fill(48),
+            Height = 5,
+            ColorScheme = stateScheme
+        };
+
+        _executionStatusList = new ListView()
+        {
+            Width = Dim.Fill(),
+            Height = Dim.Fill()
+        };
+        _executionStatusFrame.Add(_executionStatusList);
+
         _objectiveFrame = new FrameView("Script")
         {
             X = Pos.Right(stateFrame),
             Y = 0,
-            Width = 40,
+            Width = 48,
             Height = Dim.Percent(16),
             ColorScheme = _scriptSideScheme
         };
@@ -283,9 +351,18 @@ public class BotWindow
         };
         _changeObjectiveButton.Clicked += OpenObjectiveEditor;
 
-        _saveExampleButton = new Button("Thumbs Up")
+        _useMissionPromptButton = new Button("Mission -> Prompt")
         {
             X = Pos.Right(_changeObjectiveButton) + 1,
+            Y = Pos.AnchorEnd(1),
+            Width = 18,
+            Height = 1
+        };
+        _useMissionPromptButton.Clicked += OpenMissionPromptPicker;
+
+        _saveExampleButton = new Button("Thumbs Up")
+        {
+            X = Pos.Right(_useMissionPromptButton) + 1,
             Y = Pos.AnchorEnd(1),
             Width = 12,
             Height = 1
@@ -296,14 +373,15 @@ public class BotWindow
         _objectiveFrame.Add(_loopCheckBox);
         _objectiveFrame.Add(_executeButton);
         _objectiveFrame.Add(_changeObjectiveButton);
+        _objectiveFrame.Add(_useMissionPromptButton);
         _objectiveFrame.Add(_saveExampleButton);
 
         _memoryFrame = new FrameView("Memory")
         {
             X = Pos.Right(stateFrame),
             Y = Pos.Bottom(_objectiveFrame),
-            Width = 40,
-            Height = Dim.Percent(30),
+            Width = 48,
+            Height = Dim.Fill(5),
             ColorScheme = _scriptSideScheme
         };
 
@@ -315,28 +393,11 @@ public class BotWindow
 
         _memoryFrame.Add(_memory);
 
-        _actionsFrame = new FrameView("Available Actions")
-        {
-            X = Pos.Right(stateFrame),
-            Y = Pos.Bottom(_memoryFrame),
-            Width = 40,
-            Height = Dim.Fill(3),
-            ColorScheme = _scriptSideScheme
-        };
-
-        _actions = new ListView()
-        {
-            Width = Dim.Fill(),
-            Height = Dim.Fill()
-        };
-
-        _actionsFrame.Add(_actions);
-
         _inputFrame = new FrameView("Prompt")
         {
             X = Pos.Right(stateFrame),
             Y = Pos.AnchorEnd(5),
-            Width = 40,
+            Width = 48,
             Height = 5,
             ColorScheme = _scriptSideScheme
         };
@@ -358,7 +419,7 @@ public class BotWindow
             }
         };
 
-        _win.Add(_playerFrame, _topInfoBar, stateFrame, _memoryFrame, _objectiveFrame, _actionsFrame, _inputFrame);
+        _win.Add(_playerFrame, _topInfoBar, stateFrame, _executionStatusFrame, _memoryFrame, _objectiveFrame, _inputFrame);
         Application.Top.Add(_win);
 
         ApplyControlMode(ControlModeKind.ScriptMode);
@@ -386,9 +447,7 @@ public class BotWindow
             {
                 while (_statusReader.TryRead(out var status))
                 {
-                    if (status.StartsWith("Switched to ", StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    _win.Title = $"Servator - {status}";
+                    // Drain legacy status updates; execution statuses are rendered via snapshots.
                 }
             }
             return true;
@@ -410,7 +469,11 @@ public class BotWindow
     public void Render(
         string spaceStateMarkdown,
         string? tradeStateMarkdown,
+        string? shipyardStateMarkdown,
+        string? cantinaStateMarkdown,
+        IReadOnlyList<MissionPromptOption> activeMissionPrompts,
         IReadOnlyList<string> memory,
+        IReadOnlyList<string> executionStatusLines,
         string? controlInput,
         int? currentScriptLine,
         ControlModeKind mode,
@@ -428,19 +491,31 @@ public class BotWindow
             _currentControlInput = controlInput;
             RefreshPlayerStack(bots, activeBotId);
             bool showTradeTab = !string.IsNullOrWhiteSpace(tradeStateMarkdown);
-            UpdateStateTabButtons(showTradeTab);
+            bool showShipyardTab = !string.IsNullOrWhiteSpace(shipyardStateMarkdown);
+            bool showCantinaTab = !string.IsNullOrWhiteSpace(cantinaStateMarkdown);
+            UpdateStateTabButtons(showTradeTab, showShipyardTab, showCantinaTab);
             _lastSpaceStateMarkdown = spaceStateMarkdown ?? "";
             _lastTradeStateMarkdown = tradeStateMarkdown;
+            _lastShipyardStateMarkdown = shipyardStateMarkdown;
+            _lastCantinaStateMarkdown = cantinaStateMarkdown;
+            _activeMissionPrompts = activeMissionPrompts ?? Array.Empty<MissionPromptOption>();
+            _useMissionPromptButton.Visible = _activeMissionPrompts.Count > 0;
 
             ApplySelectedStateTabText();
 
             var memoryDisplay = (memory ?? new List<string>())
                 .Reverse()
                 .ToList();
-            _memory.SetSource((System.Collections.IList)memoryDisplay);
+            SetListSourcePreserveScroll(_memory, memoryDisplay);
+
+            var executionDisplay = (executionStatusLines ?? new List<string>())
+                .ToList();
+            if (executionDisplay.Count == 0)
+                executionDisplay.Add("(no recent execution messages)");
+            SetListSourcePreserveScroll(_executionStatusList, executionDisplay);
             if (string.IsNullOrWhiteSpace(controlInput))
             {
-                _objective.SetSource(new List<string>
+                SetListSourcePreserveScroll(_objective, new List<string>
                 {
                     "(no script loaded)"
                 });
@@ -460,19 +535,12 @@ public class BotWindow
                     })
                     .ToList();
 
-                _objective.SetSource(objectiveLines.Count > 0
+                SetListSourcePreserveScroll(_objective, objectiveLines.Count > 0
                     ? objectiveLines
                     : new List<string> { controlInput.Trim() });
             }
 
-            if (actions != null && actions.Count > 0)
-            {
-                _actions.SetSource((System.Collections.IList)actions);
-            }
-            else
-            {
-                _actions.SetSource(new List<string> { "(no actions available)" });
-            }
+            _ = actions;
         });
     }
 
@@ -696,6 +764,93 @@ public class BotWindow
         _input.SetFocus();
     }
 
+    private void OpenMissionPromptPicker()
+    {
+        if (_activeMissionPrompts.Count == 0)
+        {
+            MessageBox.Query("Active Missions", "No active missions available.", "OK");
+            _input.SetFocus();
+            return;
+        }
+
+        var useButton = new Button("Use Prompt");
+        var cancelButton = new Button("Cancel");
+        var dialog = new Dialog("Mission Prompt", 92, 17, useButton, cancelButton);
+
+        var missionLabel = new Label("Mission:")
+        {
+            X = 1,
+            Y = 1,
+            Width = 10
+        };
+
+        var missionNames = _activeMissionPrompts
+            .Select(m => m.Label)
+            .ToList();
+
+        var missionDropdown = new ComboBox(missionNames)
+        {
+            X = Pos.Right(missionLabel),
+            Y = Pos.Top(missionLabel),
+            Width = Dim.Fill(2),
+            Height = 1,
+            ReadOnly = true
+        };
+
+        var promptLabel = new Label("Prompt:")
+        {
+            X = 1,
+            Y = Pos.Bottom(missionLabel) + 1,
+            Width = 10
+        };
+
+        var promptPreview = new TextView()
+        {
+            X = Pos.Right(promptLabel),
+            Y = Pos.Top(promptLabel),
+            Width = Dim.Fill(2),
+            Height = 7,
+            ReadOnly = true,
+            WordWrap = true
+        };
+
+        void RefreshPromptPreview()
+        {
+            int idx = missionDropdown.SelectedItem;
+            if (idx < 0 || idx >= _activeMissionPrompts.Count)
+                idx = 0;
+
+            promptPreview.Text = _activeMissionPrompts[idx].Prompt;
+        }
+
+        missionDropdown.SelectedItemChanged += _ => RefreshPromptPreview();
+        missionDropdown.SelectedItem = 0;
+        RefreshPromptPreview();
+
+        dialog.Add(missionLabel, missionDropdown, promptLabel, promptPreview);
+
+        bool useSelection = false;
+        useButton.Clicked += () =>
+        {
+            useSelection = true;
+            Application.RequestStop();
+        };
+        cancelButton.Clicked += () => Application.RequestStop();
+
+        Application.Run(dialog);
+
+        if (useSelection)
+        {
+            int idx = missionDropdown.SelectedItem;
+            if (idx < 0 || idx >= _activeMissionPrompts.Count)
+                idx = 0;
+
+            _input.Text = _activeMissionPrompts[idx].Prompt;
+        }
+
+        _input.SetFocus();
+    }
+
     private void ExecuteScriptNow()
     {
         _executeScriptWriter?.TryWrite(true);
@@ -706,10 +861,9 @@ public class BotWindow
     {
         _objectiveFrame.ColorScheme = _scriptSideScheme;
         _memoryFrame.ColorScheme = _scriptSideScheme;
-        _actionsFrame.ColorScheme = _scriptSideScheme;
         _inputFrame.ColorScheme = _scriptSideScheme;
-        _objectiveFrame.Height = Dim.Percent(44);
-        _memoryFrame.Height = Dim.Percent(26);
+        _objectiveFrame.Height = Dim.Percent(58);
+        _memoryFrame.Height = Dim.Fill(5);
         _objectiveFrame.Title = "Script";
         _changeObjectiveButton.Text = "Edit Script";
         _executeButton.Visible = true;
@@ -734,16 +888,28 @@ public class BotWindow
     private void ApplySelectedStateTabText()
     {
         bool showTradeTab = !string.IsNullOrWhiteSpace(_lastTradeStateMarkdown);
-        var stateMarkdown = _selectedStateTab == StateTab.Trade && showTradeTab
-            ? _lastTradeStateMarkdown!
-            : _lastSpaceStateMarkdown;
+        bool showShipyardTab = !string.IsNullOrWhiteSpace(_lastShipyardStateMarkdown);
+        bool showCantinaTab = !string.IsNullOrWhiteSpace(_lastCantinaStateMarkdown);
+        var stateMarkdown = _selectedStateTab switch
+        {
+            StateTab.Trade when showTradeTab => _lastTradeStateMarkdown!,
+            StateTab.Shipyard when showShipyardTab => _lastShipyardStateMarkdown!,
+            StateTab.Cantina when showCantinaTab => _lastCantinaStateMarkdown!,
+            _ => _lastSpaceStateMarkdown
+        };
 
         int previousTopRow = _state.TopRow;
         int previousLeftColumn = _state.LeftColumn;
 
-        _state.Text = string.IsNullOrWhiteSpace(stateMarkdown)
+        string nextStateText = string.IsNullOrWhiteSpace(stateMarkdown)
             ? "(no state)"
             : stateMarkdown;
+
+        if (!string.Equals(_lastRenderedStateMarkdown, nextStateText, StringComparison.Ordinal))
+        {
+            _state.Text = nextStateText;
+            _lastRenderedStateMarkdown = nextStateText;
+        }
 
         int visibleRows = Math.Max(1, _state.Bounds.Height - 1);
         int totalRows = CountRows(_state.Text?.ToString() ?? "");
@@ -752,16 +918,44 @@ public class BotWindow
         _state.LeftColumn = Math.Max(0, previousLeftColumn);
     }
 
-    private void UpdateStateTabButtons(bool showTradeTab)
+    private static void SetListSourcePreserveScroll(ListView view, IList source)
+    {
+        int previousTopItem = Math.Max(0, view.TopItem);
+        int previousSelectedItem = Math.Max(0, view.SelectedItem);
+
+        view.SetSource(source);
+
+        int count = source.Count;
+        if (count <= 0)
+            return;
+
+        int maxIndex = count - 1;
+        view.TopItem = Math.Min(previousTopItem, maxIndex);
+        view.SelectedItem = Math.Min(previousSelectedItem, maxIndex);
+    }
+
+    private void UpdateStateTabButtons(bool showTradeTab, bool showShipyardTab, bool showCantinaTab)
     {
         _tradeTabButton.Visible = showTradeTab;
+        _shipyardTabButton.Visible = showShipyardTab;
+        _cantinaTabButton.Visible = showCantinaTab;
         if (!showTradeTab && _selectedStateTab == StateTab.Trade)
+            _selectedStateTab = StateTab.Space;
+        if (!showShipyardTab && _selectedStateTab == StateTab.Shipyard)
+            _selectedStateTab = StateTab.Space;
+        if (!showCantinaTab && _selectedStateTab == StateTab.Cantina)
             _selectedStateTab = StateTab.Space;
 
         _spaceTabButton.ColorScheme = _selectedStateTab == StateTab.Space
             ? _activeBotScheme
             : _topInfoBar.ColorScheme;
         _tradeTabButton.ColorScheme = _selectedStateTab == StateTab.Trade
+            ? _activeBotScheme
+            : _topInfoBar.ColorScheme;
+        _shipyardTabButton.ColorScheme = _selectedStateTab == StateTab.Shipyard
+            ? _activeBotScheme
+            : _topInfoBar.ColorScheme;
+        _cantinaTabButton.ColorScheme = _selectedStateTab == StateTab.Cantina
             ? _activeBotScheme
             : _topInfoBar.ColorScheme;
     }

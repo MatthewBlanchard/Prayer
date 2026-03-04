@@ -5,7 +5,7 @@ public class LastPageCommand : ISingleTurnCommand
     public string Name => "last";
 
     public bool IsAvailable(GameState state)
-        => state.Mode.Kind == GameContextKind.ShipCatalog;
+        => state.Docked && state.CurrentPOI.IsStation;
     public string BuildHelp(GameState state)
         => "- last page → move to previous catalog page";
 

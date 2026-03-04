@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Channels;
@@ -11,6 +10,7 @@ using System.Threading.Tasks;
 class Program
 {
     private const int ScriptGenerationMaxAttempts = 3;
+    private const int ExecutionStatusHistoryLimit = 4;
 
     static async Task Main(string[] args)
     {
@@ -59,12 +59,13 @@ class Program
 
         var uiChannel = Channel.CreateUnbounded<UiSnapshot>();
         var cts = new CancellationTokenSource();
+        int globalStopTriggered = 0;
 
         var botSessions = new Dictionary<string, BotSession>(StringComparer.Ordinal);
         string? activeBotId = null;
         object botLock = new();
-        var savedBots = LoadSavedBots();
-        string lastLoggedBotTabSignature = "";
+        var savedBotStore = new SavedBotStore();
+        var savedBots = savedBotStore.Load();
 
         void LogAuth(string message)
         {
@@ -77,19 +78,6 @@ class Program
             {
                 // Never crash startup because logging failed.
             }
-        }
-
-        void LogBotTabsIfChanged(string context, IReadOnlyList<BotTab>? tabs = null, string? activeId = null)
-        {
-            var currentTabs = tabs ?? GetBotTabs();
-            var currentActiveId = activeId ?? activeBotId;
-            var labels = string.Join(",", currentTabs.Select(t => t.Label));
-            var signature = $"{currentTabs.Count}|{currentActiveId}|{labels}";
-            if (signature == lastLoggedBotTabSignature)
-                return;
-
-            lastLoggedBotTabSignature = signature;
-            LogAuth($"{context} | tabs_changed | count={currentTabs.Count} | active={currentActiveId ?? "(null)"} | labels=[{labels}]");
         }
 
         BotSession? GetActiveBot()
@@ -123,66 +111,66 @@ class Program
             }
         }
 
-        void PublishNoBotSnapshot(string? message = null)
+        IReadOnlyList<string> GetExecutionStatusLinesForBot(string? botId)
         {
-            var tabs = GetBotTabs();
-            LogBotTabsIfChanged("publish_no_bot_snapshot", tabs, activeBotId);
-            uiChannel.Writer.TryWrite(new UiSnapshot(
-                message ?? "No bot logged in. Use + to add one.",
-                null,
-                Array.Empty<string>(),
-                null,
-                null,
-                ControlModeKind.ScriptMode,
-                new List<string> { "(load a bot with +)" },
-                null,
-                tabs,
-                activeBotId));
-        }
-
-        void PublishSnapshotForBot(BotSession bot, GameState state)
-        {
-            var tabs = GetBotTabs();
-            var uiState = bot.Agent.BuildUiState(state);
-            LogBotTabsIfChanged("publish_snapshot", tabs, activeBotId);
-            uiChannel.Writer.TryWrite(new UiSnapshot(
-                uiState.SpaceStateMarkdown,
-                uiState.TradeStateMarkdown,
-                bot.Agent.GetMemoryList(),
-                bot.Agent.CurrentControlInput,
-                bot.Agent.CurrentScriptLine,
-                bot.Agent.CurrentControlModeKind,
-                bot.Agent.GetAvailableActions(state),
-                bot.Agent.LastScriptGenerationPrompt,
-                tabs,
-                activeBotId));
-        }
-
-        void PublishActiveSnapshot(string? noStateMessage = null)
-        {
-            var active = GetActiveBot();
-            if (active == null)
+            lock (botLock)
             {
-                PublishNoBotSnapshot();
+                if (botId == null || !botSessions.TryGetValue(botId, out var session))
+                    return Array.Empty<string>();
+
+                return session.ExecutionStatusLines.ToList();
+            }
+        }
+
+        string? GetActiveBotId()
+        {
+            lock (botLock)
+            {
+                return activeBotId;
+            }
+        }
+
+        var snapshotPublisher = new UiSnapshotPublisher(
+            uiChannel.Writer,
+            GetBotTabs,
+            GetActiveBotId,
+            GetActiveBot,
+            IsActiveBot,
+            GetExecutionStatusLinesForBot,
+            LogAuth);
+
+        void AppendExecutionStatus(BotSession bot, string message)
+        {
+            if (string.IsNullOrWhiteSpace(message))
                 return;
+
+            bool shouldRefresh = false;
+            lock (botLock)
+            {
+                bot.ExecutionStatusLines.Add(message.Trim());
+                if (bot.ExecutionStatusLines.Count > ExecutionStatusHistoryLimit)
+                    bot.ExecutionStatusLines.RemoveAt(0);
+                shouldRefresh = activeBotId == bot.Id;
             }
 
-            if (active.LatestState != null)
-            {
-                PublishSnapshotForBot(active, active.LatestState);
-                return;
-            }
-
-            PublishNoBotSnapshot(noStateMessage ?? $"Bot '{active.Label}' loaded; initial state unavailable.");
+            if (shouldRefresh)
+                snapshotPublisher.PublishActiveSnapshot();
         }
 
-        void PublishSnapshot(BotSession bot, GameState state)
+        void TriggerGlobalStop(string reason)
         {
-            bot.LatestState = state;
-            if (IsActiveBot(bot))
-                PublishSnapshotForBot(bot, state);
-            else
-                PublishActiveSnapshot();
+            if (Interlocked.Exchange(ref globalStopTriggered, 1) != 0)
+                return;
+
+            statusChannel.Writer.TryWrite($"Global stop: {reason}");
+            LogAuth($"global_stop | {reason}");
+            cts.Cancel();
+
+            lock (botLock)
+            {
+                foreach (var session in botSessions.Values)
+                    session.WorkerCts.Cancel();
+            }
         }
 
         async Task<(BotSession Session, string Password)> CreateBotSessionAsync(
@@ -230,6 +218,36 @@ class Program
                     LogAuth($"{flowLabel} | {label} | map_warmup_skipped | {ex.GetType().Name}: {ex.Message}");
                 }
 
+                try
+                {
+                    var itemsTimer = Stopwatch.StartNew();
+                    var itemCatalogById = await client.GetFullItemCatalogByIdAsync(forceRefresh: false)
+                        .WaitAsync(TimeSpan.FromSeconds(20));
+                    LogAuth(
+                        $"{flowLabel} | {label} | item_catalog_warmup_ok | count={itemCatalogById.Count} | {itemsTimer.ElapsedMilliseconds}ms");
+                }
+                catch (Exception ex)
+                {
+                    statusChannel.Writer.TryWrite(
+                        $"Item catalog warm-up skipped for '{label}': {ex.Message}");
+                    LogAuth($"{flowLabel} | {label} | item_catalog_warmup_skipped | {ex.GetType().Name}: {ex.Message}");
+                }
+
+                try
+                {
+                    var shipsTimer = Stopwatch.StartNew();
+                    var shipCatalogById = await client.GetFullShipCatalogByIdAsync(forceRefresh: false)
+                        .WaitAsync(TimeSpan.FromSeconds(20));
+                    LogAuth(
+                        $"{flowLabel} | {label} | ship_catalog_warmup_ok | count={shipCatalogById.Count} | {shipsTimer.ElapsedMilliseconds}ms");
+                }
+                catch (Exception ex)
+                {
+                    statusChannel.Writer.TryWrite(
+                        $"Ship catalog warm-up skipped for '{label}': {ex.Message}");
+                    LogAuth($"{flowLabel} | {label} | ship_catalog_warmup_skipped | {ex.GetType().Name}: {ex.Message}");
+                }
+
                 LogAuth($"{flowLabel} | {label} | session_ready | {totalTimer.ElapsedMilliseconds}ms");
 
                 return (
@@ -250,24 +268,10 @@ class Program
 
         void UpsertSavedBot(string username, string password)
         {
-            var normalizedUsername = username.Trim();
-
-            var existing = savedBots.FindIndex(b =>
-                string.Equals(b.Username, normalizedUsername, StringComparison.OrdinalIgnoreCase));
-
-            if (existing >= 0)
-            {
-                savedBots[existing] = new SavedBot(normalizedUsername, password);
-            }
-            else
-            {
-                savedBots.Add(new SavedBot(normalizedUsername, password));
-            }
-
-            SaveSavedBots(savedBots);
+            savedBotStore.Upsert(savedBots, username, password);
         }
 
-        PublishNoBotSnapshot();
+        snapshotPublisher.PublishNoBotSnapshot();
 
         if (savedBots.Count > 0)
         {
@@ -294,7 +298,7 @@ class Program
                         if (activeBotId == null)
                             activeBotId = session.Id;
                     }
-                    LogBotTabsIfChanged("startup_autologin_added");
+                    snapshotPublisher.LogBotTabsIfChanged("startup_autologin_added");
                 }
                 catch (Exception ex)
                 {
@@ -321,9 +325,10 @@ class Program
                 state => bot.LatestState = state,
                 () => bot.LastHaltedSnapshotAt,
                 value => bot.LastHaltedSnapshotAt = value,
-                state => PublishSnapshot(bot, state),
-                message => statusChannel.Writer.TryWrite(message),
+                state => snapshotPublisher.PublishSnapshot(bot, state),
+                message => AppendExecutionStatus(bot, message),
                 LogAuth,
+                TriggerGlobalStop,
                 ParseCommand,
                 ScriptGenerationMaxAttempts);
 
@@ -345,7 +350,7 @@ class Program
                 StartBotWorker(session);
         }
 
-        PublishActiveSnapshot();
+        snapshotPublisher.PublishActiveSnapshot();
 
         var botTask = Task.Run(async () =>
         {
@@ -419,12 +424,12 @@ class Program
                                 if (activeBotId == null)
                                     activeBotId = session.Id;
                             }
-                            LogBotTabsIfChanged("manual_add_added");
+                            snapshotPublisher.LogBotTabsIfChanged("manual_add_added");
                             UpsertSavedBot(username, passwordToSave);
                             StartBotWorker(session);
 
                             statusChannel.Writer.TryWrite($"Bot loaded: {session.Label}");
-                            PublishActiveSnapshot();
+                            snapshotPublisher.PublishActiveSnapshot();
                         }
                         catch (Exception ex)
                         {
@@ -452,7 +457,7 @@ class Program
                         }
 
                         statusChannel.Writer.TryWrite($"Switched to {switched.Label}");
-                        PublishActiveSnapshot();
+                        snapshotPublisher.PublishActiveSnapshot();
                     }
 
                     while (controlInputChannel.Reader.TryRead(out var newInput))
@@ -559,7 +564,11 @@ class Program
                     ui.Render(
                         snapshot.SpaceStateMarkdown,
                         snapshot.TradeStateMarkdown,
+                        snapshot.ShipyardStateMarkdown,
+                        snapshot.CantinaStateMarkdown,
+                        snapshot.ActiveMissionPrompts,
                         snapshot.Memory,
+                        snapshot.ExecutionStatusLines,
                         snapshot.ControlInput,
                         snapshot.CurrentScriptLine,
                         snapshot.Mode,
@@ -620,85 +629,4 @@ class Program
         };
     }
 
-    private static List<SavedBot> LoadSavedBots()
-    {
-        try
-        {
-            if (!File.Exists(AppPaths.SavedBotsFile))
-                return new List<SavedBot>();
-
-            var raw = File.ReadAllText(AppPaths.SavedBotsFile);
-            var loaded = JsonSerializer.Deserialize<List<SavedBot>>(raw);
-            return loaded?
-                .Where(b =>
-                    !string.IsNullOrWhiteSpace(b.Username) &&
-                    !string.IsNullOrWhiteSpace(b.Password))
-                .ToList() ?? new List<SavedBot>();
-        }
-        catch
-        {
-            return new List<SavedBot>();
-        }
-    }
-
-    private static void SaveSavedBots(List<SavedBot> bots)
-    {
-        var cleaned = bots
-            .Where(b =>
-                !string.IsNullOrWhiteSpace(b.Username) &&
-                !string.IsNullOrWhiteSpace(b.Password))
-            .Select(b => new SavedBot(
-                b.Username.Trim(),
-                b.Password))
-            .ToList();
-
-        var json = JsonSerializer.Serialize(cleaned, new JsonSerializerOptions
-        {
-            WriteIndented = true
-        });
-        File.WriteAllText(AppPaths.SavedBotsFile, json);
-    }
-
-    private sealed class BotSession
-    {
-        public BotSession(
-            string id,
-            string label,
-            SpaceMoltAgent agent,
-            SpaceMoltHttpClient client)
-        {
-            Id = id;
-            Label = label;
-            Agent = agent;
-            Client = client;
-        }
-
-        public string Id { get; }
-        public string Label { get; }
-        public SpaceMoltAgent Agent { get; }
-        public SpaceMoltHttpClient Client { get; }
-        public GameState? LatestState { get; set; }
-        public DateTime LastHaltedSnapshotAt { get; set; } = DateTime.MinValue;
-        public Channel<string> CommandQueue { get; } = Channel.CreateUnbounded<string>();
-        public Channel<string> ControlInputQueue { get; } = Channel.CreateUnbounded<string>();
-        public Channel<string> GenerateScriptQueue { get; } = Channel.CreateUnbounded<string>();
-        public Channel<bool> SaveExampleQueue { get; } = Channel.CreateUnbounded<bool>();
-        public CancellationTokenSource WorkerCts { get; } = new();
-        public Task? WorkerTask { get; set; }
-    }
-
-    private sealed record SavedBot(string Username, string Password);
-
-    private sealed record UiSnapshot(
-        string SpaceStateMarkdown,
-        string? TradeStateMarkdown,
-        IReadOnlyList<string> Memory,
-        string? ControlInput,
-        int? CurrentScriptLine,
-        ControlModeKind Mode,
-        IReadOnlyList<string> Actions,
-        string? LastGenerationPrompt,
-        IReadOnlyList<BotTab> Bots,
-        string? ActiveBotId
-    );
 }

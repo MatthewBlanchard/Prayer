@@ -1,35 +1,25 @@
 using System.Threading.Tasks;
 
-public class ShipyardCommand : ISingleTurnCommand
+public class ShipyardCommand : AutoDockSingleTurnCommand
 {
-    public string Name => "shipyard";
+    public override string Name => "shipyard";
 
-    public bool IsAvailable(GameState state)
+    protected override bool RequiresStation => true;
+
+    protected override bool IsAvailableWhenDocked(GameState state)
         => state.Docked &&
-           state.CurrentPOI.IsStation &&
-           state.Mode.Kind == GameContextKind.Space;
-    public string BuildHelp(GameState state)
-        => "- shipyard → enter ShipYardState";
+           state.CurrentPOI.IsStation;
+    public override string BuildHelp(GameState state)
+        => "- shipyard → show shipyard data";
 
-    public Task<CommandExecutionResult?> ExecuteAsync(
+    protected override Task<CommandExecutionResult?> ExecuteDockedAsync(
         SpaceMoltHttpClient client,
         CommandResult cmd,
         GameState state)
     {
-        if (!state.Docked || !state.CurrentPOI.IsStation)
-        {
-            return Task.FromResult<CommandExecutionResult?>(new CommandExecutionResult
-            {
-                ResultMessage = "Shipyard is only available while docked at a station."
-            });
-        }
-
-        client.SetMode(GameContextKind.Shipyard);
-        state.Mode = ShipyardContextMode.Instance;
-
         return Task.FromResult<CommandExecutionResult?>(new CommandExecutionResult
         {
-            ResultMessage = "Entered ShipYardState."
+            ResultMessage = "Shipyard data is always available while docked."
         });
     }
 }

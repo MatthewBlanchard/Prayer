@@ -4,17 +4,17 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class RepairCommand : ISingleTurnCommand
+public class RepairCommand : AutoDockSingleTurnCommand
 {
-    public string Name => "repair";
+    public override string Name => "repair";
 
-    public bool IsAvailable(GameState state)
+    protected override bool IsAvailableWhenDocked(GameState state)
         => state.Docked &&
            state.Hull < state.MaxHull;
-    public string BuildHelp(GameState state)
+    public override string BuildHelp(GameState state)
         => "- repair → restore hull";
 
-    public async Task<CommandExecutionResult?> ExecuteAsync(
+    protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
         SpaceMoltHttpClient client,
         CommandResult cmd,
         GameState state)
@@ -27,4 +27,3 @@ public class RepairCommand : ISingleTurnCommand
         };
     }
 }
-

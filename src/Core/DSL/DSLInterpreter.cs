@@ -1,9 +1,54 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 
 public static class DslInterpreter
 {
+    public static string NormalizeScript(string dslScript, GameState? state = null)
+    {
+        if (string.IsNullOrWhiteSpace(dslScript))
+            return string.Empty;
+
+        var commands = state == null
+            ? Translate(dslScript)
+            : Translate(dslScript, state);
+
+        return RenderScript(commands).TrimEnd();
+    }
+
+    public static string RenderScript(IReadOnlyList<CommandResult> commands)
+    {
+        if (commands == null || commands.Count == 0)
+            return string.Empty;
+
+        var sb = new StringBuilder();
+
+        foreach (var cmd in commands)
+        {
+            if (string.IsNullOrWhiteSpace(cmd.Action))
+                continue;
+
+            sb.Append(cmd.Action);
+
+            if (!string.IsNullOrWhiteSpace(cmd.Arg1))
+            {
+                sb.Append(' ');
+                sb.Append(cmd.Arg1);
+            }
+
+            if (cmd.Quantity.HasValue)
+            {
+                sb.Append(' ');
+                sb.Append(cmd.Quantity.Value);
+            }
+
+            sb.AppendLine(";");
+        }
+
+        return sb.ToString();
+    }
+
     public static IReadOnlyList<CommandResult> Translate(string dslScript)
     {
         var tree = DslParser.ParseTree(dslScript);
@@ -37,13 +82,12 @@ public static class DslInterpreter
             throw new ArgumentNullException(nameof(tree));
 
         var result = new List<CommandResult>();
-        InterpretNodes(tree.Statements, DslParser.RootGroup, state, result);
+        InterpretNodes(tree.Statements, state, result);
         return result;
     }
 
     private static void InterpretNodes(
         IReadOnlyList<DslAstNode> nodes,
-        DslCommandGroup currentGroup,
         GameState? state,
         List<CommandResult> output)
     {
@@ -54,26 +98,18 @@ public static class DslInterpreter
                 case DslCommandAstNode commandNode:
                 {
                     var command = new DslCommand(commandNode.Name, commandNode.Args);
-                    var result = command.ToValidCommand(state, command);
+                    CommandResult result;
+                    try
+                    {
+                        result = command.ToValidCommand(state, command);
+                    }
+                    catch (FormatException ex) when (commandNode.SourceLine > 0)
+                    {
+                        throw new FormatException($"Line {commandNode.SourceLine}: {ex.Message}", ex);
+                    }
+
                     result.SourceLine = commandNode.SourceLine;
                     output.Add(result);
-                    break;
-                }
-                case DslBlockAstNode blockNode:
-                {
-                    var block = DslBlockFactory.Create(blockNode);
-                    var enterSteps = block.Enter(state, block).ToList();
-                    foreach (var step in enterSteps)
-                        step.SourceLine = blockNode.SourceLine;
-                    output.AddRange(enterSteps);
-
-                    var bodyGroup = DslParser.ResolveBlockBodyGroup(block.Name, currentGroup);
-                    InterpretNodes(block.Body, bodyGroup, state, output);
-
-                    var leaveSteps = block.Leave(state, block).ToList();
-                    foreach (var step in leaveSteps)
-                        step.SourceLine = blockNode.SourceLine;
-                    output.AddRange(leaveSteps);
                     break;
                 }
                 default:

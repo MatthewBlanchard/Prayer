@@ -4,24 +4,25 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class CancelBuyCommand : ISingleTurnCommand, IDslCommandGrammar
+public class CancelBuyCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
 {
-    public string Name => "cancel_buy";
+    public override string Name => "cancel_buy";
+    protected override bool RequiresStation => true;
     public DslCommandSyntax GetDslSyntax() => new(
-        DslArgKind.Identifier,
+        DslArgKind.Item,
         ArgRequired: true);
 
-    public bool IsAvailable(GameState state)
+    protected override bool IsAvailableWhenDocked(GameState state)
     {
         return state.Docked &&
                state.Shared.OwnBuyOrders != null &&
                state.Shared.OwnBuyOrders.Any(o => !string.IsNullOrWhiteSpace(o.OrderId));
     }
 
-    public string BuildHelp(GameState state)
+    public override string BuildHelp(GameState state)
         => "- cancel_buy <itemId> → cancel your open buy orders for an item";
 
-    public async Task<CommandExecutionResult?> ExecuteAsync(
+    protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
         SpaceMoltHttpClient client,
         CommandResult cmd,
         GameState state)

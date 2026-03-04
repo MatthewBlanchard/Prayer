@@ -4,25 +4,25 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class WithdrawItemsCommand : ISingleTurnCommand, IDslCommandGrammar
+public class WithdrawItemsCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
 {
-    public string Name => "retrieve";
+    public override string Name => "retrieve";
     public DslCommandSyntax GetDslSyntax() => new(
         ArgSpecs: new[]
         {
-            new DslArgumentSpec(DslArgKind.Identifier, Required: true),
+            new DslArgumentSpec(DslArgKind.Item, Required: true),
             new DslArgumentSpec(DslArgKind.Integer, Required: false),
         });
 
-    public bool IsAvailable(GameState state)
+    protected override bool IsAvailableWhenDocked(GameState state)
         => state.Docked &&
            state.Shared.StorageItems.Count > 0 &&
            state.CargoUsed < state.CargoCapacity;
 
-    public string BuildHelp(GameState state)
+    public override string BuildHelp(GameState state)
         => "- retrieve <itemId> [quantity:int] → move item from storage to cargo";
 
-    public async Task<CommandExecutionResult?> ExecuteAsync(
+    protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
         SpaceMoltHttpClient client,
         CommandResult cmd,
         GameState state)

@@ -28,6 +28,7 @@ public sealed class BotSession
     public Channel<string> ControlInputQueue { get; } = Channel.CreateUnbounded<string>();
     public Channel<string> GenerateScriptQueue { get; } = Channel.CreateUnbounded<string>();
     public Channel<bool> SaveExampleQueue { get; } = Channel.CreateUnbounded<bool>();
+    public Channel<bool> HaltNowQueue { get; } = Channel.CreateUnbounded<bool>();
     public CancellationTokenSource WorkerCts { get; } = new();
     public Task? WorkerTask { get; set; }
 }

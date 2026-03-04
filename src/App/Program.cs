@@ -100,15 +100,16 @@ class Program
             scriptExampleRag = new PromptScriptRag(openAiApiKey, openAiEmbeddingModel);
         }
 
-        var ui = new BotWindow();
-
-        var orderedProviderIds = new List<string>();
-        if (providersById.ContainsKey("openai"))
-            orderedProviderIds.Add("openai");
-        if (providersById.ContainsKey("groq"))
-            orderedProviderIds.Add("groq");
-        if (providersById.ContainsKey("llamacpp"))
-            orderedProviderIds.Add("llamacpp");
+        var uiMode = (Environment.GetEnvironmentVariable("UI_MODE") ?? "htmx")
+            .Trim()
+            .ToLowerInvariant();
+        IAppUi ui = uiMode switch
+        {
+            "htmx" or "web" => new HtmxBotWindow(
+                Environment.GetEnvironmentVariable("UI_PREFIX") ?? "http://localhost:5057/"),
+            _ => new BotWindow()
+        };
+        var orderedProviderIds = new List<string> { "openai", "groq", "llamacpp" };
         foreach (var providerId in providersById.Keys)
         {
             if (!orderedProviderIds.Contains(providerId, StringComparer.OrdinalIgnoreCase))
@@ -116,6 +117,9 @@ class Program
         }
 
         ui.SetAvailableProviders(orderedProviderIds);
+        ui.SetProviderModels("openai", new[] { openAiDefaultModel });
+        ui.SetProviderModels("groq", new[] { groqDefaultModel });
+        ui.SetProviderModels("llamacpp", new[] { llamaCppModel });
         foreach (var provider in providersById.Values)
             ui.SetProviderModels(provider.ProviderId, new[] { provider.DefaultModel });
         ui.ConfigureInitialLlmSelection(initialProvider, initialModel);
@@ -403,6 +407,7 @@ class Program
                 bot.ControlInputQueue.Reader,
                 bot.GenerateScriptQueue.Reader,
                 bot.SaveExampleQueue.Reader,
+                bot.HaltNowQueue.Reader,
                 () => ui.LoopEnabled,
                 () => bot.LatestState,
                 state => bot.LatestState = state,
@@ -636,6 +641,18 @@ class Program
 
                         active.ControlInputQueue.Writer.TryWrite(script);
                         channels.Status.Writer.TryWrite($"Restarting script for {active.Label}");
+                    }
+
+                    while (channels.HaltNow.Reader.TryRead(out _))
+                    {
+                        var active = GetActiveBot();
+                        if (active == null)
+                        {
+                            channels.Status.Writer.TryWrite("No active bot selected.");
+                            continue;
+                        }
+
+                        active.HaltNowQueue.Writer.TryWrite(true);
                     }
 
                     await Task.Delay(50, cts.Token);

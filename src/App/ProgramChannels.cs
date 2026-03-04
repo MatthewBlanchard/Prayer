@@ -8,6 +8,7 @@ public sealed class ProgramChannels
         Channel<string> generateScript,
         Channel<bool> saveExample,
         Channel<bool> executeScript,
+        Channel<bool> haltNow,
         Channel<string> switchBot,
         Channel<AddBotRequest> addBot,
         Channel<LlmProviderSelection> llmSelection,
@@ -18,6 +19,7 @@ public sealed class ProgramChannels
         GenerateScript = generateScript;
         SaveExample = saveExample;
         ExecuteScript = executeScript;
+        HaltNow = haltNow;
         SwitchBot = switchBot;
         AddBot = addBot;
         LlmSelection = llmSelection;
@@ -29,17 +31,19 @@ public sealed class ProgramChannels
     public Channel<string> GenerateScript { get; }
     public Channel<bool> SaveExample { get; }
     public Channel<bool> ExecuteScript { get; }
+    public Channel<bool> HaltNow { get; }
     public Channel<string> SwitchBot { get; }
     public Channel<AddBotRequest> AddBot { get; }
     public Channel<LlmProviderSelection> LlmSelection { get; }
     public Channel<UiSnapshot> UiSnapshots { get; }
 
-    public static ProgramChannels CreateAndBind(BotWindow ui)
+    public static ProgramChannels CreateAndBind(IAppUi ui)
     {
         var channels = new ProgramChannels(
             Channel.CreateUnbounded<string>(),
             Channel.CreateUnbounded<string>(),
             Channel.CreateUnbounded<string>(),
+            Channel.CreateUnbounded<bool>(),
             Channel.CreateUnbounded<bool>(),
             Channel.CreateUnbounded<bool>(),
             Channel.CreateUnbounded<string>(),
@@ -51,6 +55,7 @@ public sealed class ProgramChannels
         ui.SetGenerateScriptWriter(channels.GenerateScript.Writer);
         ui.SetSaveExampleWriter(channels.SaveExample.Writer);
         ui.SetExecuteScriptWriter(channels.ExecuteScript.Writer);
+        ui.SetHaltNowWriter(channels.HaltNow.Writer);
         ui.SetSwitchBotWriter(channels.SwitchBot.Writer);
         ui.SetAddBotWriter(channels.AddBot.Writer);
         ui.SetLlmSelectionWriter(channels.LlmSelection.Writer);

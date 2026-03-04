@@ -11,6 +11,7 @@ public sealed class BotRuntime
     private readonly ChannelReader<string> _controlInputReader;
     private readonly ChannelReader<string> _generateScriptReader;
     private readonly ChannelReader<bool> _saveExampleReader;
+    private readonly ChannelReader<bool> _haltNowReader;
     private readonly Func<bool> _isLoopEnabled;
     private readonly Func<GameState?> _getLatestState;
     private readonly Action<GameState> _setLatestState;
@@ -29,6 +30,7 @@ public sealed class BotRuntime
         ChannelReader<string> controlInputReader,
         ChannelReader<string> generateScriptReader,
         ChannelReader<bool> saveExampleReader,
+        ChannelReader<bool> haltNowReader,
         Func<bool> isLoopEnabled,
         Func<GameState?> getLatestState,
         Action<GameState> setLatestState,
@@ -46,6 +48,7 @@ public sealed class BotRuntime
         _controlInputReader = controlInputReader;
         _generateScriptReader = generateScriptReader;
         _saveExampleReader = saveExampleReader;
+        _haltNowReader = haltNowReader;
         _isLoopEnabled = isLoopEnabled;
         _getLatestState = getLatestState;
         _setLatestState = setLatestState;
@@ -131,6 +134,27 @@ public sealed class BotRuntime
                         var latestState = _getLatestState();
                         if (latestState != null)
                             _publishSnapshot(latestState);
+                    }
+
+                    while (_haltNowReader.TryRead(out _))
+                    {
+                        _agent.InterruptActiveCommand("Interrupted by user halt");
+
+                        var haltState = _getLatestState() ?? _client.GetGameState();
+                        _setLatestState(haltState);
+
+                        try
+                        {
+                            _agent.SetScript(string.Empty, haltState, preserveAssociatedPrompt: true);
+                        }
+                        catch
+                        {
+                            // Never block force-halt because script clear failed.
+                        }
+
+                        _agent.Halt("Halted by user");
+                        _publishStatus($"[{_label}] Halted by user");
+                        _publishSnapshot(haltState);
                     }
 
                     if (_agent.IsHalted)

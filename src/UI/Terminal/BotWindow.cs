@@ -7,7 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Channels;
 
-public class BotWindow
+public class BotWindow : IAppUi
 {
     private enum StateTab
     {
@@ -32,6 +32,7 @@ public class BotWindow
     private ChannelWriter<string>? _generateScriptWriter;
     private ChannelWriter<bool>? _saveExampleWriter;
     private ChannelWriter<bool>? _executeScriptWriter;
+    private ChannelWriter<bool>? _haltNowWriter;
     private ChannelWriter<string>? _switchBotWriter;
     private ChannelWriter<AddBotRequest>? _addBotWriter;
     private ChannelWriter<LlmProviderSelection>? _llmSelectionWriter;
@@ -102,6 +103,11 @@ public class BotWindow
     public void SetExecuteScriptWriter(ChannelWriter<bool> writer)
     {
         _executeScriptWriter = writer;
+    }
+
+    public void SetHaltNowWriter(ChannelWriter<bool> writer)
+    {
+        _haltNowWriter = writer;
     }
 
     public void SetSwitchBotWriter(ChannelWriter<string> writer)
@@ -298,9 +304,11 @@ public class BotWindow
             Y = 1,
             Width = Dim.Fill(),
             Height = 1,
-            ReadOnly = true,
             Text = _initialLlmProvider
         };
+        int initialProviderIndex = providerSnapshot.FindIndex(
+            p => string.Equals(p, _initialLlmProvider, StringComparison.OrdinalIgnoreCase));
+        _providerDropdown.SelectedItem = initialProviderIndex >= 0 ? initialProviderIndex : 0;
 
         var modelLabel = new Label("Model:")
         {
@@ -315,7 +323,6 @@ public class BotWindow
             Y = 3,
             Width = Dim.Fill(),
             Height = 1,
-            ReadOnly = true,
             Text = _initialLlmModel
         };
 

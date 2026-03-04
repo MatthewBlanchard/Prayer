@@ -178,6 +178,12 @@ internal static class DslFuzzyMatcher
                 foreach (var poi in system.Pois)
                     AddAlias(poiMap, poi.Id, poi.Id);
             }
+
+            foreach (var poi in mapCache.KnownPois)
+            {
+                AddAlias(poiMap, poi.Id, poi.Id);
+                AddAlias(poiMap, poi.Id, poi.Name);
+            }
         }
 
         var candidates = new List<Candidate>();
@@ -307,6 +313,9 @@ internal static class DslFuzzyMatcher
 
     private static GalaxyMapSnapshot LoadMapCache()
     {
-        return GalaxyMapSnapshotFile.Load(AppPaths.GalaxyMapFile);
+        var map = GalaxyMapSnapshotFile.Load(AppPaths.GalaxyMapFile);
+        var knownPois = GalaxyKnownPoiSnapshotFile.Load(AppPaths.GalaxyKnownPoisFile);
+        GalaxyMapSnapshotFile.MergeKnownPois(map, knownPois);
+        return map;
     }
 }

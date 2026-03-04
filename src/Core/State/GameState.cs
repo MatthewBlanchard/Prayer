@@ -793,6 +793,7 @@ Your Open Sell Orders:
 public class GalaxyMapSnapshot
 {
     public List<GalaxySystemInfo> Systems { get; set; } = new();
+    public List<GalaxyKnownPoiInfo> KnownPois { get; set; } = new();
 }
 
 public class GalaxySystemInfo
@@ -808,6 +809,18 @@ public class GalaxySystemInfo
 public class GalaxyPoiInfo
 {
     public string Id { get; set; } = "";
+}
+
+public class GalaxyKnownPoiInfo
+{
+    public string Id { get; set; } = "";
+    public string SystemId { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Type { get; set; } = "";
+    public bool HasBase { get; set; }
+    public string? BaseId { get; set; }
+    public string? BaseName { get; set; }
+    public DateTime LastSeenUtc { get; set; } = DateTime.UtcNow;
 }
 
 public class MarketState

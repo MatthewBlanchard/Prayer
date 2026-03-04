@@ -133,6 +133,7 @@ public class SpaceMoltHttpClient : IDisposable
             catalogFetchPageSize: CatalogFetchPageSize);
         _mapService = new SpaceMoltMapService(
             AppPaths.GalaxyMapFile,
+            AppPaths.GalaxyKnownPoisFile,
             ExecuteAsync);
         _gameStateAssembler = new SpaceMoltGameStateAssembler(this);
 
@@ -266,6 +267,11 @@ public class SpaceMoltHttpClient : IDisposable
     public async Task<GalaxyMapSnapshot> GetMapSnapshotAsync(bool forceRefresh = false)
     {
         return await _mapService.GetMapSnapshotAsync(forceRefresh);
+    }
+
+    internal async Task ObserveSeenPoisAsync(string systemId, IEnumerable<POIInfo> pois)
+    {
+        await _mapService.ObserveSeenPoisAsync(systemId, pois);
     }
 
     public GameState GetGameState()

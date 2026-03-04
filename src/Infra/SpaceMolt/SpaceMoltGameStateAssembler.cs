@@ -61,6 +61,10 @@ internal sealed class SpaceMoltGameStateAssembler
             })
             .ToArray();
 
+        await _owner.ObserveSeenPoisAsync(
+            currentSystem,
+            new[] { currentPOI }.Concat(pois));
+
         var cargo = new Dictionary<string, ItemStack>();
         if (ship.TryGetProperty("cargo", out var cargoArray))
         {

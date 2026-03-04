@@ -27,6 +27,7 @@ public static class AppPaths
     public static readonly string ShipCatalogByIdCacheFile = Path.Combine(CacheDir, "ship_catalog_by_id.json");
 
     public static readonly string GalaxyMapFile = Path.Combine(CacheDir, "galaxy_map.json");
+    public static readonly string GalaxyKnownPoisFile = Path.Combine(CacheDir, "known_pois.json");
 
     public static void EnsureDirectories()
     {

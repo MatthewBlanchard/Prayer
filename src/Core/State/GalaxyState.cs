@@ -347,6 +347,19 @@ internal static class GalaxyStateHub
                         .Select(poi => new GalaxyPoiInfo { Id = poi.Id })
                         .ToList()
                 })
+                .ToList(),
+            KnownPois = (source.KnownPois ?? new List<GalaxyKnownPoiInfo>())
+                .Select(poi => new GalaxyKnownPoiInfo
+                {
+                    Id = poi.Id,
+                    SystemId = poi.SystemId,
+                    Name = poi.Name,
+                    Type = poi.Type,
+                    HasBase = poi.HasBase,
+                    BaseId = poi.BaseId,
+                    BaseName = poi.BaseName,
+                    LastSeenUtc = poi.LastSeenUtc
+                })
                 .ToList()
         };
     }

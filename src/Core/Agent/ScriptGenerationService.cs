@@ -292,6 +292,12 @@ public sealed class ScriptGenerationService
                 AddPromptAlias(aliases, poi.Id, poi.Id);
         }
 
+        foreach (var poi in map.KnownPois)
+        {
+            AddPromptAlias(aliases, poi.Id, poi.Id);
+            AddPromptAlias(aliases, poi.Id, poi.Name);
+        }
+
         return aliases;
     }
 
@@ -442,6 +448,9 @@ public sealed class ScriptGenerationService
 
     private static GalaxyMapSnapshot LoadMapCache()
     {
-        return GalaxyMapSnapshotFile.Load(AppPaths.GalaxyMapFile);
+        var map = GalaxyMapSnapshotFile.Load(AppPaths.GalaxyMapFile);
+        var knownPois = GalaxyKnownPoiSnapshotFile.Load(AppPaths.GalaxyKnownPoisFile);
+        GalaxyMapSnapshotFile.MergeKnownPois(map, knownPois);
+        return map;
     }
 }

@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Diagnostics;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 
 class Program
@@ -32,32 +31,7 @@ class Program
         bool hierarchicalPlanningEnabled = true;
 
         var ui = new BotWindow();
-
-        var statusChannel = Channel.CreateUnbounded<string>();
-        ui.SetStatusReader(statusChannel.Reader);
-
-        var inputChannel = Channel.CreateUnbounded<string>();
-        ui.SetCommandWriter(inputChannel.Writer);
-
-        var controlInputChannel = Channel.CreateUnbounded<string>();
-        ui.SetControlInputWriter(controlInputChannel.Writer);
-
-        var generateScriptChannel = Channel.CreateUnbounded<string>();
-        ui.SetGenerateScriptWriter(generateScriptChannel.Writer);
-
-        var saveExampleChannel = Channel.CreateUnbounded<bool>();
-        ui.SetSaveExampleWriter(saveExampleChannel.Writer);
-
-        var executeScriptChannel = Channel.CreateUnbounded<bool>();
-        ui.SetExecuteScriptWriter(executeScriptChannel.Writer);
-
-        var switchBotChannel = Channel.CreateUnbounded<string>();
-        ui.SetSwitchBotWriter(switchBotChannel.Writer);
-
-        var addBotChannel = Channel.CreateUnbounded<AddBotRequest>();
-        ui.SetAddBotWriter(addBotChannel.Writer);
-
-        var uiChannel = Channel.CreateUnbounded<UiSnapshot>();
+        var channels = ProgramChannels.CreateAndBind(ui);
         var cts = new CancellationTokenSource();
         int globalStopTriggered = 0;
 
@@ -131,7 +105,7 @@ class Program
         }
 
         var snapshotPublisher = new UiSnapshotPublisher(
-            uiChannel.Writer,
+            channels.UiSnapshots.Writer,
             GetBotTabs,
             GetActiveBotId,
             GetActiveBot,
@@ -162,7 +136,7 @@ class Program
             if (Interlocked.Exchange(ref globalStopTriggered, 1) != 0)
                 return;
 
-            statusChannel.Writer.TryWrite($"Global stop: {reason}");
+            channels.Status.Writer.TryWrite($"Global stop: {reason}");
             LogAuth($"global_stop | {reason}");
             cts.Cancel();
 
@@ -189,7 +163,7 @@ class Program
                 hierarchicalPlanningEnabled,
                 scriptExampleRag);
             agent.Halt("Awaiting script input");
-            agent.SetStatusWriter(statusChannel.Writer);
+            agent.SetStatusWriter(channels.Status.Writer);
 
             var client = new SpaceMoltHttpClient();
             client.DebugContext = label;
@@ -213,7 +187,7 @@ class Program
                 }
                 catch (Exception ex)
                 {
-                    statusChannel.Writer.TryWrite(
+                    channels.Status.Writer.TryWrite(
                         $"Map warm-up skipped for '{label}': {ex.Message}");
                     LogAuth($"{flowLabel} | {label} | map_warmup_skipped | {ex.GetType().Name}: {ex.Message}");
                 }
@@ -228,7 +202,7 @@ class Program
                 }
                 catch (Exception ex)
                 {
-                    statusChannel.Writer.TryWrite(
+                    channels.Status.Writer.TryWrite(
                         $"Item catalog warm-up skipped for '{label}': {ex.Message}");
                     LogAuth($"{flowLabel} | {label} | item_catalog_warmup_skipped | {ex.GetType().Name}: {ex.Message}");
                 }
@@ -243,7 +217,7 @@ class Program
                 }
                 catch (Exception ex)
                 {
-                    statusChannel.Writer.TryWrite(
+                    channels.Status.Writer.TryWrite(
                         $"Ship catalog warm-up skipped for '{label}': {ex.Message}");
                     LogAuth($"{flowLabel} | {label} | ship_catalog_warmup_skipped | {ex.GetType().Name}: {ex.Message}");
                 }
@@ -275,13 +249,13 @@ class Program
 
         if (savedBots.Count > 0)
         {
-            statusChannel.Writer.TryWrite($"Loading {savedBots.Count} saved bot(s)...");
+            channels.Status.Writer.TryWrite($"Loading {savedBots.Count} saved bot(s)...");
             LogAuth($"startup | begin_autoload | count={savedBots.Count}");
             foreach (var savedBot in savedBots.ToList())
             {
                 try
                 {
-                    statusChannel.Writer.TryWrite($"Auto-login saved bot '{savedBot.Username}'...");
+                    channels.Status.Writer.TryWrite($"Auto-login saved bot '{savedBot.Username}'...");
                     LogAuth($"startup | {savedBot.Username} | autologin_begin");
                     var (session, _) = await CreateBotSessionAsync(
                         savedBot.Username,
@@ -302,7 +276,7 @@ class Program
                 }
                 catch (Exception ex)
                 {
-                    statusChannel.Writer.TryWrite(
+                    channels.Status.Writer.TryWrite(
                         $"Failed to auto-login saved bot '{savedBot.Username}': {ex.Message}");
                     LogAuth($"startup | {savedBot.Username} | autologin_failed | {ex.GetType().Name}: {ex.Message}");
                 }
@@ -358,18 +332,18 @@ class Program
             {
                 while (!cts.Token.IsCancellationRequested)
                 {
-                    while (addBotChannel.Reader.TryRead(out var request))
+                    while (channels.AddBot.Reader.TryRead(out var request))
                     {
                         var username = request.Username.Trim();
                         if (string.IsNullOrWhiteSpace(username))
                         {
-                            statusChannel.Writer.TryWrite("Username is required.");
+                            channels.Status.Writer.TryWrite("Username is required.");
                             continue;
                         }
 
                         var display = username;
                         bool isLogin = request.Mode == AddBotMode.Login;
-                        statusChannel.Writer.TryWrite(isLogin
+                        channels.Status.Writer.TryWrite(isLogin
                             ? $"Logging in bot '{display}'..."
                             : $"Registering bot '{display}'...");
                         LogAuth(isLogin
@@ -389,7 +363,7 @@ class Program
                                 if (string.IsNullOrWhiteSpace(registrationCode) ||
                                     string.IsNullOrWhiteSpace(empire))
                                 {
-                                    statusChannel.Writer.TryWrite(
+                                    channels.Status.Writer.TryWrite(
                                         "Registration code and empire are required for register mode.");
                                     continue;
                                 }
@@ -404,7 +378,7 @@ class Program
                                 var password = request.Password ?? "";
                                 if (string.IsNullOrWhiteSpace(password))
                                 {
-                                    statusChannel.Writer.TryWrite("Password is required for login mode.");
+                                    channels.Status.Writer.TryWrite("Password is required for login mode.");
                                     continue;
                                 }
 
@@ -428,17 +402,17 @@ class Program
                             UpsertSavedBot(username, passwordToSave);
                             StartBotWorker(session);
 
-                            statusChannel.Writer.TryWrite($"Bot loaded: {session.Label}");
+                            channels.Status.Writer.TryWrite($"Bot loaded: {session.Label}");
                             snapshotPublisher.PublishActiveSnapshot();
                         }
                         catch (Exception ex)
                         {
-                            statusChannel.Writer.TryWrite($"Failed to load bot '{display}': {ex.Message}");
+                            channels.Status.Writer.TryWrite($"Failed to load bot '{display}': {ex.Message}");
                             LogAuth($"manual | {display} | load_failed | {ex.GetType().Name}: {ex.Message}");
                         }
                     }
 
-                    while (switchBotChannel.Reader.TryRead(out var botId))
+                    while (channels.SwitchBot.Reader.TryRead(out var botId))
                     {
                         BotSession? switched = null;
                         lock (botLock)
@@ -452,76 +426,76 @@ class Program
 
                         if (switched == null)
                         {
-                            statusChannel.Writer.TryWrite("Selected bot no longer exists.");
+                            channels.Status.Writer.TryWrite("Selected bot no longer exists.");
                             continue;
                         }
 
-                        statusChannel.Writer.TryWrite($"Switched to {switched.Label}");
+                        channels.Status.Writer.TryWrite($"Switched to {switched.Label}");
                         snapshotPublisher.PublishActiveSnapshot();
                     }
 
-                    while (controlInputChannel.Reader.TryRead(out var newInput))
+                    while (channels.ControlInput.Reader.TryRead(out var newInput))
                     {
                         var active = GetActiveBot();
                         if (active == null)
                         {
-                            statusChannel.Writer.TryWrite("No active bot selected.");
+                            channels.Status.Writer.TryWrite("No active bot selected.");
                             continue;
                         }
 
                         active.ControlInputQueue.Writer.TryWrite(newInput);
                     }
 
-                    while (generateScriptChannel.Reader.TryRead(out var generationInput))
+                    while (channels.GenerateScript.Reader.TryRead(out var generationInput))
                     {
                         var active = GetActiveBot();
                         if (active == null)
                         {
-                            statusChannel.Writer.TryWrite("No active bot selected.");
+                            channels.Status.Writer.TryWrite("No active bot selected.");
                             continue;
                         }
 
                         active.GenerateScriptQueue.Writer.TryWrite(generationInput);
                     }
 
-                    while (saveExampleChannel.Reader.TryRead(out _))
+                    while (channels.SaveExample.Reader.TryRead(out _))
                     {
                         var active = GetActiveBot();
                         if (active == null)
                         {
-                            statusChannel.Writer.TryWrite("No active bot selected.");
+                            channels.Status.Writer.TryWrite("No active bot selected.");
                             continue;
                         }
 
                         active.SaveExampleQueue.Writer.TryWrite(true);
                     }
 
-                    while (executeScriptChannel.Reader.TryRead(out _))
+                    while (channels.ExecuteScript.Reader.TryRead(out _))
                     {
                         var active = GetActiveBot();
                         if (active == null)
                         {
-                            statusChannel.Writer.TryWrite("No active bot selected.");
+                            channels.Status.Writer.TryWrite("No active bot selected.");
                             continue;
                         }
 
                         var script = active.Agent.CurrentControlInput;
                         if (string.IsNullOrWhiteSpace(script))
                         {
-                            statusChannel.Writer.TryWrite("No script loaded.");
+                            channels.Status.Writer.TryWrite("No script loaded.");
                             continue;
                         }
 
                         active.ControlInputQueue.Writer.TryWrite(script);
-                        statusChannel.Writer.TryWrite($"Restarting script for {active.Label}");
+                        channels.Status.Writer.TryWrite($"Restarting script for {active.Label}");
                     }
 
-                    while (inputChannel.Reader.TryRead(out var commandInput))
+                    while (channels.Input.Reader.TryRead(out var commandInput))
                     {
                         var active = GetActiveBot();
                         if (active == null)
                         {
-                            statusChannel.Writer.TryWrite("No active bot selected.");
+                            channels.Status.Writer.TryWrite("No active bot selected.");
                             continue;
                         }
 
@@ -546,10 +520,10 @@ class Program
             string lastRenderedTabSignature = "";
             try
             {
-                while (await uiChannel.Reader.WaitToReadAsync(cts.Token))
+                while (await channels.UiSnapshots.Reader.WaitToReadAsync(cts.Token))
                 {
-                    UiSnapshot snapshot = await uiChannel.Reader.ReadAsync(cts.Token);
-                    while (uiChannel.Reader.TryRead(out var newer))
+                    UiSnapshot snapshot = await channels.UiSnapshots.Reader.ReadAsync(cts.Token);
+                    while (channels.UiSnapshots.Reader.TryRead(out var newer))
                         snapshot = newer;
 
                     var renderedLabels = string.Join(",", snapshot.Bots.Select(b => b.Label));
@@ -588,7 +562,7 @@ class Program
         ui.Run();
 
         cts.Cancel();
-        uiChannel.Writer.TryComplete();
+        channels.UiSnapshots.Writer.TryComplete();
 
         List<BotSession> sessionsToDispose;
         List<Task> workerTasks;

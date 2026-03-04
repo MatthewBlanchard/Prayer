@@ -47,31 +47,47 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
 
         if (string.IsNullOrWhiteSpace(rawArg))
         {
-            var defaultLocalPoi = SelectDefaultMiningPoi(state);
-            if (defaultLocalPoi == null)
+            if (state.CurrentPOI?.IsMiningTarget == true && !string.IsNullOrWhiteSpace(state.CurrentPOI.Id))
             {
-                _stopRequested = true;
-                _stopReason = $"No local mining POI found in system {state.System}.";
-                return new CommandExecutionResult { ResultMessage = _stopReason };
+                _targetPoiId = state.CurrentPOI.Id;
             }
+            else
+            {
+                var defaultLocalPoi = SelectDefaultMiningPoi(state);
+                if (defaultLocalPoi == null)
+                {
+                    _stopRequested = true;
+                    _stopReason = $"No local mining POI found in system {state.System}.";
+                    return new CommandExecutionResult { ResultMessage = _stopReason };
+                }
 
-            _targetPoiId = defaultLocalPoi.Id;
+                _targetPoiId = defaultLocalPoi.Id;
+            }
         }
         else if (requestedType != null)
         {
-            var matchingLocalPoi = state.POIs
-                .Where(p => string.Equals(p.Type, requestedType, StringComparison.Ordinal))
-                .OrderByDescending(p => p.Online)
-                .FirstOrDefault();
-
-            if (matchingLocalPoi == null)
+            if (state.CurrentPOI != null &&
+                string.Equals(state.CurrentPOI.Type, requestedType, StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(state.CurrentPOI.Id))
             {
-                _stopRequested = true;
-                _stopReason = $"No local POI of type '{requestedType}' in system {state.System}.";
-                return new CommandExecutionResult { ResultMessage = _stopReason };
+                _targetPoiId = state.CurrentPOI.Id;
             }
+            else
+            {
+                var matchingLocalPoi = state.POIs
+                    .Where(p => string.Equals(p.Type, requestedType, StringComparison.Ordinal))
+                    .OrderByDescending(p => p.Online)
+                    .FirstOrDefault();
 
-            _targetPoiId = matchingLocalPoi.Id;
+                if (matchingLocalPoi == null)
+                {
+                    _stopRequested = true;
+                    _stopReason = $"No local POI of type '{requestedType}' in system {state.System}.";
+                    return new CommandExecutionResult { ResultMessage = _stopReason };
+                }
+
+                _targetPoiId = matchingLocalPoi.Id;
+            }
         }
         else
         {

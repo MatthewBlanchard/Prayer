@@ -1016,6 +1016,7 @@ public class MissionInfo
     public int? ExpiresInTicks { get; set; }
     public string AcceptedAt { get; set; } = "";
     public string IssuingBase { get; set; } = "";
+    public string IssuingBaseId { get; set; } = "";
     public string GiverName { get; set; } = "";
     public string GiverTitle { get; set; } = "";
     public bool? Repeatable { get; set; }

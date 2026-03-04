@@ -16,6 +16,10 @@ public sealed class CommandExecutionEngine
     private Queue<CommandResult> _scriptQueue = new();
     private readonly Dictionary<string, List<CommandResult>> _repeatBodies =
         new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<CommandResult>> _untilBodies =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _untilConditions =
+        new(StringComparer.Ordinal);
     private bool _isHalted;
     private IMultiTurnCommand? _activeCommand;
     private CommandResult? _activeCommandResult;
@@ -57,6 +61,7 @@ public sealed class CommandExecutionEngine
             steps[i].SourceLine = i + 1;
 
         BuildRepeatBodyIndex(steps);
+        BuildUntilBodyIndex(steps);
         _scriptQueue = new Queue<CommandResult>(steps);
         _isHalted = false;
 
@@ -112,9 +117,12 @@ public sealed class CommandExecutionEngine
 
     public IReadOnlyList<string> GetAvailableActions(GameState state)
     {
-        return _commands
+        var actions = _commands
             .Select(c => c.BuildHelp(state))
             .ToList();
+
+        actions.Add("- halt → pause and wait for user input");
+        return actions;
     }
 
     public async Task ExecuteAsync(
@@ -179,8 +187,7 @@ public sealed class CommandExecutionEngine
             shouldAddMemory = true;
             Halt("Halted: waiting for user input");
         }
-        else
-        if (_commandMap.TryGetValue(result.Action, out var command))
+        else if (_commandMap.TryGetValue(result.Action, out var command))
         {
             if (command is IMultiTurnCommand multiTurnCommand)
             {
@@ -196,15 +203,7 @@ public sealed class CommandExecutionEngine
                 var response = await singleTurnCommand.ExecuteAsync(client, result, state);
                 message = response?.ResultMessage;
                 shouldAddMemory = true;
-
-                if (string.Equals(result.Action, "halt", StringComparison.Ordinal))
-                {
-                    Halt("Halted: waiting for user input");
-                }
-                else
-                {
-                    _setStatus("Waiting");
-                }
+                _setStatus("Waiting");
             }
         }
 
@@ -280,10 +279,10 @@ public sealed class CommandExecutionEngine
         {
             var next = _scriptQueue.Dequeue();
 
-            if (TryHandleRuntimeRepeatControl(next))
+            if (TryHandleRuntimeControl(next, state))
                 continue;
 
-            if (string.IsNullOrWhiteSpace(next.Action) || !_commandMap.ContainsKey(next.Action))
+            if (!IsExecutableAction(next.Action))
             {
                 AddMemory(next, "invalid script command");
                 continue;
@@ -298,10 +297,70 @@ public sealed class CommandExecutionEngine
         return Task.FromResult<CommandResult?>(null);
     }
 
-    private bool TryHandleRuntimeRepeatControl(CommandResult next)
+    private bool TryHandleRuntimeControl(CommandResult next, GameState state)
     {
         if (string.IsNullOrWhiteSpace(next.Action))
             return false;
+
+        if (string.Equals(next.Action, DslInterpreter.IfStartAction, StringComparison.Ordinal))
+        {
+            if (!DslInterpreter.ParseIfStartArg(next.Arg1, out var ifId, out var condition))
+                return true;
+
+            if (!DslBooleanEvaluator.TryEvaluate(condition, state, out var conditionValue))
+                return true;
+
+            if (conditionValue)
+                return true;
+
+            SkipUntilIfEnd(ifId);
+            return true;
+        }
+
+        if (string.Equals(next.Action, DslInterpreter.IfEndAction, StringComparison.Ordinal))
+            return true;
+
+        if (string.Equals(next.Action, DslInterpreter.UntilStartAction, StringComparison.Ordinal))
+        {
+            if (!DslInterpreter.ParseUntilStartArg(next.Arg1, out var untilId, out var condition))
+                return true;
+
+            if (!DslBooleanEvaluator.TryEvaluate(condition, state, out var conditionValue))
+                return true;
+
+            if (!conditionValue)
+                return true;
+
+            SkipUntilBlockEnd(untilId);
+            return true;
+        }
+
+        if (string.Equals(next.Action, DslInterpreter.UntilEndAction, StringComparison.Ordinal))
+        {
+            var untilId = (next.Arg1 ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(untilId))
+                return true;
+
+            if (!_untilBodies.TryGetValue(untilId, out var untilBody) || untilBody.Count == 0)
+                return true;
+
+            if (!_untilConditions.TryGetValue(untilId, out var condition) ||
+                !DslBooleanEvaluator.TryEvaluate(condition, state, out var conditionValue))
+            {
+                return true;
+            }
+
+            if (conditionValue)
+                return true;
+
+            var untilReplay = untilBody
+                .Select(CloneStep)
+                .Append(CloneStep(next))
+                .Concat(_scriptQueue);
+
+            _scriptQueue = new Queue<CommandResult>(untilReplay);
+            return true;
+        }
 
         if (string.Equals(next.Action, DslInterpreter.RepeatStartAction, StringComparison.Ordinal))
             return true;
@@ -323,6 +382,32 @@ public sealed class CommandExecutionEngine
 
         _scriptQueue = new Queue<CommandResult>(replay);
         return true;
+    }
+
+    private void SkipUntilIfEnd(string ifId)
+    {
+        while (_scriptQueue.Count > 0)
+        {
+            var step = _scriptQueue.Dequeue();
+            if (!string.Equals(step.Action, DslInterpreter.IfEndAction, StringComparison.Ordinal))
+                continue;
+
+            if (string.Equals((step.Arg1 ?? string.Empty).Trim(), ifId, StringComparison.Ordinal))
+                return;
+        }
+    }
+
+    private void SkipUntilBlockEnd(string blockId)
+    {
+        while (_scriptQueue.Count > 0)
+        {
+            var step = _scriptQueue.Dequeue();
+            if (!string.Equals(step.Action, DslInterpreter.UntilEndAction, StringComparison.Ordinal))
+                continue;
+
+            if (string.Equals((step.Arg1 ?? string.Empty).Trim(), blockId, StringComparison.Ordinal))
+                return;
+        }
     }
 
     private void BuildRepeatBodyIndex(IReadOnlyList<CommandResult> steps)
@@ -364,6 +449,47 @@ public sealed class CommandExecutionEngine
         }
     }
 
+    private void BuildUntilBodyIndex(IReadOnlyList<CommandResult> steps)
+    {
+        _untilBodies.Clear();
+        _untilConditions.Clear();
+
+        var stack = new Stack<(string UntilId, string Condition, int StartIndex)>();
+
+        for (int i = 0; i < steps.Count; i++)
+        {
+            var step = steps[i];
+            var action = step.Action ?? string.Empty;
+
+            if (string.Equals(action, DslInterpreter.UntilStartAction, StringComparison.Ordinal))
+            {
+                if (DslInterpreter.ParseUntilStartArg(step.Arg1, out var untilId, out var condition))
+                    stack.Push((untilId, condition, i));
+                continue;
+            }
+
+            if (!string.Equals(action, DslInterpreter.UntilEndAction, StringComparison.Ordinal))
+                continue;
+
+            var endId = (step.Arg1 ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(endId) || stack.Count == 0)
+                continue;
+
+            var open = stack.Pop();
+            if (!string.Equals(open.UntilId, endId, StringComparison.Ordinal))
+                continue;
+
+            var body = steps
+                .Skip(open.StartIndex + 1)
+                .Take(i - open.StartIndex - 1)
+                .Select(CloneStep)
+                .ToList();
+
+            _untilBodies[endId] = body;
+            _untilConditions[endId] = open.Condition;
+        }
+    }
+
     private static CommandResult CloneStep(CommandResult step)
     {
         return new CommandResult
@@ -373,6 +499,17 @@ public sealed class CommandExecutionEngine
             Quantity = step.Quantity,
             SourceLine = step.SourceLine
         };
+    }
+
+    private bool IsExecutableAction(string? action)
+    {
+        if (string.IsNullOrWhiteSpace(action))
+            return false;
+
+        if (string.Equals(action, "halt", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return _commandMap.ContainsKey(action);
     }
 
     private void AddMemory(CommandResult result, string? message)

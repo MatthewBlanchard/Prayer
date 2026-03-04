@@ -214,6 +214,7 @@ internal static class SpaceMoltResponseParsers
             ExpiresInTicks = SpaceMoltJson.TryGetInt(mission, "expires_in_ticks"),
             AcceptedAt = SpaceMoltJson.TryGetString(mission, "accepted_at") ?? "",
             IssuingBase = SpaceMoltJson.TryGetString(mission, "issuing_base") ?? "",
+            IssuingBaseId = SpaceMoltJson.TryGetString(mission, "issuing_base_id") ?? "",
             GiverName = "",
             GiverTitle = "",
             Repeatable = SpaceMoltJson.TryGetBool(mission, "repeatable"),

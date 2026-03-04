@@ -597,7 +597,7 @@ public sealed class HtmxBotWindow : IAppUi
             sb.Append("'").Append(Js(commandNames[i])).Append("'");
         }
         sb.AppendLine("];");
-        sb.AppendLine("  var controlKeywords = ['repeat', 'halt'];");
+        sb.AppendLine("  var controlKeywords = ['repeat', 'until', 'if', 'halt'];");
         sb.AppendLine("  window.buildNameRegex = function (names, lineStartOnly) {");
         sb.AppendLine("    if (!Array.isArray(names) || names.length === 0) return null;");
         sb.AppendLine("    var escaped = names");
@@ -891,7 +891,7 @@ public sealed class HtmxBotWindow : IAppUi
             foreach (var mission in activeMissionPrompts)
             {
                 var objective = (mission.Prompt ?? string.Empty).Trim();
-                var issuingPoi = (mission.IssuingPoi ?? string.Empty).Trim();
+                var issuingPoi = (mission.IssuingPoiId ?? string.Empty).Trim();
 
                 if (!string.IsNullOrWhiteSpace(objective))
                 {

@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 class Program
 {
-    private const int ScriptGenerationMaxAttempts = 10;
+    private const int ScriptGenerationMaxAttempts = 3;
     private const int ExecutionStatusHistoryLimit = 4;
 
     static async Task Main(string[] args)

@@ -39,10 +39,18 @@ public abstract record DslAstNode;
 
 public sealed record DslCommandAstNode(string Name, IReadOnlyList<string> Args, int SourceLine = 0) : DslAstNode;
 public sealed record DslRepeatAstNode(IReadOnlyList<DslAstNode> Body, int SourceLine = 0) : DslAstNode;
+public sealed record DslIfAstNode(string Condition, IReadOnlyList<DslAstNode> Body, int SourceLine = 0) : DslAstNode;
+public sealed record DslUntilAstNode(string Condition, IReadOnlyList<DslAstNode> Body, int SourceLine = 0) : DslAstNode;
 
 public static class DslParser
 {
     private const string HaltKeyword = "halt";
+    private static readonly string[] BooleanTokens =
+    {
+        "MISSION_COMPLETE"
+    };
+    private static readonly HashSet<string> BooleanTokenSet =
+        BooleanTokens.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private static readonly IReadOnlyDictionary<string, string[]> PromptArgNameOverrides =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
@@ -115,8 +123,32 @@ public static class DslParser
         from _close in Character.EqualTo('}')
         select (DslAstNode)new DslRepeatAstNode(body);
 
+    private static readonly TextParser<DslAstNode> IfAst =
+        from _if in Span.EqualToIgnoreCase("if").Value(Unit.Value)
+        from _ in Ws1
+        from condition in Identifier
+        from __ in Ws
+        from _open in Character.EqualTo('{')
+        from ___ in Ws
+        from body in Superpower.Parse.Ref(() => StatementAst!).Many()
+        from ____ in Ws
+        from _close in Character.EqualTo('}')
+        select (DslAstNode)new DslIfAstNode(condition, body);
+
+    private static readonly TextParser<DslAstNode> UntilAst =
+        from _until in Span.EqualToIgnoreCase("until").Value(Unit.Value)
+        from _ in Ws1
+        from condition in Identifier
+        from __ in Ws
+        from _open in Character.EqualTo('{')
+        from ___ in Ws
+        from body in Superpower.Parse.Ref(() => StatementAst!).Many()
+        from ____ in Ws
+        from _close in Character.EqualTo('}')
+        select (DslAstNode)new DslUntilAstNode(condition, body);
+
     private static readonly TextParser<DslAstNode> StatementAst =
-        from statement in RepeatAst.Try().Or(CommandAst)
+        from statement in UntilAst.Try().Or(IfAst.Try()).Or(RepeatAst.Try()).Or(CommandAst)
         from _ in Ws
         select statement;
 
@@ -171,6 +203,8 @@ public static class DslParser
                 SourceLine = ConsumeLine(entries, ref entryIndex)
             },
             DslRepeatAstNode repeatNode => AnnotateRepeatNode(repeatNode, entries, ref entryIndex),
+            DslIfAstNode ifNode => AnnotateIfNode(ifNode, entries, ref entryIndex),
+            DslUntilAstNode untilNode => AnnotateUntilNode(untilNode, entries, ref entryIndex),
             _ => node
         };
     }
@@ -195,6 +229,46 @@ public static class DslParser
         };
     }
 
+    private static DslIfAstNode AnnotateIfNode(
+        DslIfAstNode ifNode,
+        IReadOnlyList<StatementLineEntry> entries,
+        ref int entryIndex)
+    {
+        var body = new List<DslAstNode>(ifNode.Body.Count);
+        foreach (var child in ifNode.Body)
+            body.Add(AnnotateNodeLine(child, entries, ref entryIndex));
+
+        int sourceLine = ifNode.SourceLine > 0
+            ? ifNode.SourceLine
+            : InferIfSourceLine(ifNode with { Body = body }, entries, entryIndex);
+
+        return ifNode with
+        {
+            SourceLine = sourceLine,
+            Body = body
+        };
+    }
+
+    private static DslUntilAstNode AnnotateUntilNode(
+        DslUntilAstNode untilNode,
+        IReadOnlyList<StatementLineEntry> entries,
+        ref int entryIndex)
+    {
+        var body = new List<DslAstNode>(untilNode.Body.Count);
+        foreach (var child in untilNode.Body)
+            body.Add(AnnotateNodeLine(child, entries, ref entryIndex));
+
+        int sourceLine = untilNode.SourceLine > 0
+            ? untilNode.SourceLine
+            : InferUntilSourceLine(untilNode with { Body = body }, entries, entryIndex);
+
+        return untilNode with
+        {
+            SourceLine = sourceLine,
+            Body = body
+        };
+    }
+
     private static int InferRepeatSourceLine(
         DslRepeatAstNode repeatNode,
         IReadOnlyList<StatementLineEntry> entries,
@@ -203,6 +277,42 @@ public static class DslParser
         if (repeatNode.Body != null && repeatNode.Body.Count > 0)
         {
             var firstLine = FindFirstCommandLine(repeatNode.Body);
+            if (firstLine > 0)
+                return firstLine;
+        }
+
+        if (entryIndex < entries.Count)
+            return entries[entryIndex].Line;
+
+        return 1;
+    }
+
+    private static int InferIfSourceLine(
+        DslIfAstNode ifNode,
+        IReadOnlyList<StatementLineEntry> entries,
+        int entryIndex)
+    {
+        if (ifNode.Body != null && ifNode.Body.Count > 0)
+        {
+            var firstLine = FindFirstCommandLine(ifNode.Body);
+            if (firstLine > 0)
+                return firstLine;
+        }
+
+        if (entryIndex < entries.Count)
+            return entries[entryIndex].Line;
+
+        return 1;
+    }
+
+    private static int InferUntilSourceLine(
+        DslUntilAstNode untilNode,
+        IReadOnlyList<StatementLineEntry> entries,
+        int entryIndex)
+    {
+        if (untilNode.Body != null && untilNode.Body.Count > 0)
+        {
+            var firstLine = FindFirstCommandLine(untilNode.Body);
             if (firstLine > 0)
                 return firstLine;
         }
@@ -224,6 +334,20 @@ public static class DslParser
                 case DslRepeatAstNode repeatNode:
                 {
                     var nested = FindFirstCommandLine(repeatNode.Body);
+                    if (nested > 0)
+                        return nested;
+                    break;
+                }
+                case DslIfAstNode ifNode:
+                {
+                    var nested = FindFirstCommandLine(ifNode.Body);
+                    if (nested > 0)
+                        return nested;
+                    break;
+                }
+                case DslUntilAstNode untilNode:
+                {
+                    var nested = FindFirstCommandLine(untilNode.Body);
                     if (nested > 0)
                         return nested;
                     break;
@@ -276,6 +400,18 @@ public static class DslParser
                         expectingCommand = true;
                         continue;
                     }
+                    if (IsIfToken(token, text, i))
+                    {
+                        SkipIfHeader(text, ref i, ref line);
+                        expectingCommand = true;
+                        continue;
+                    }
+                    if (IsUntilToken(token, text, i))
+                    {
+                        SkipUntilHeader(text, ref i, ref line);
+                        expectingCommand = true;
+                        continue;
+                    }
 
                     currentCommandLine = identifierLine;
                     expectingCommand = false;
@@ -313,8 +449,58 @@ public static class DslParser
         return i < text.Length && text[i] == '{';
     }
 
+    private static bool IsIfToken(string token, string text, int indexAfterToken)
+    {
+        if (!token.Equals("if", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        int i = indexAfterToken;
+        SkipWhitespace(text, ref i);
+        if (i >= text.Length || !IsIdentifierStart(text[i]))
+            return false;
+
+        _ = ReadIdentifier(text, ref i);
+        SkipWhitespace(text, ref i);
+        return i < text.Length && text[i] == '{';
+    }
+
+    private static bool IsUntilToken(string token, string text, int indexAfterToken)
+    {
+        if (!token.Equals("until", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        int i = indexAfterToken;
+        SkipWhitespace(text, ref i);
+        if (i >= text.Length || !IsIdentifierStart(text[i]))
+            return false;
+
+        _ = ReadIdentifier(text, ref i);
+        SkipWhitespace(text, ref i);
+        return i < text.Length && text[i] == '{';
+    }
+
     private static void SkipRepeatHeader(string text, ref int index, ref int line)
     {
+        SkipWhitespaceAndCountLines(text, ref index, ref line);
+        if (index < text.Length && text[index] == '{')
+            index++;
+    }
+
+    private static void SkipIfHeader(string text, ref int index, ref int line)
+    {
+        SkipWhitespaceAndCountLines(text, ref index, ref line);
+        if (index < text.Length && IsIdentifierStart(text[index]))
+            _ = ReadIdentifier(text, ref index);
+        SkipWhitespaceAndCountLines(text, ref index, ref line);
+        if (index < text.Length && text[index] == '{')
+            index++;
+    }
+
+    private static void SkipUntilHeader(string text, ref int index, ref int line)
+    {
+        SkipWhitespaceAndCountLines(text, ref index, ref line);
+        if (index < text.Length && IsIdentifierStart(text[index]))
+            _ = ReadIdentifier(text, ref index);
         SkipWhitespaceAndCountLines(text, ref index, ref line);
         if (index < text.Length && text[index] == '{')
             index++;
@@ -413,9 +599,28 @@ public static class DslParser
         }
 
         sb.AppendLine();
+        sb.AppendLine("Keywords:");
+        sb.AppendLine("- repeat: infinite runtime loop block");
+        sb.AppendLine("- until: runtime loop block that exits when a boolean flag is true");
+        sb.AppendLine("- if: conditional block executed only when a boolean flag is true");
+        sb.AppendLine("- halt: stop script execution");
+        sb.AppendLine();
         sb.AppendLine("Rules:");
         sb.AppendLine("- Blocks are supported via: repeat { ... }");
+        sb.AppendLine("- Conditional blocks are supported via: if <BOOLEAN_FLAG> { ... }");
+        sb.AppendLine("- Until blocks are supported via: until <BOOLEAN_FLAG> { ... }");
+        sb.AppendLine($"- Boolean flags: {string.Join(", ", BooleanTokens)}");
         sb.AppendLine("- All commands still end with ';' inside repeat blocks.");
+        sb.AppendLine();
+        sb.AppendLine("Examples:");
+        sb.AppendLine("- if MISSION_COMPLETE {");
+        sb.AppendLine("    halt;");
+        sb.AppendLine("  }");
+        sb.AppendLine("- until MISSION_COMPLETE {");
+        sb.AppendLine("    mine carbon_ore;");
+        sb.AppendLine("    go sol;");
+        sb.AppendLine("    sell cargo;");
+        sb.AppendLine("  }");
         sb.AppendLine();
 
         return sb.ToString();
@@ -535,8 +740,10 @@ public static class DslParser
         }
 
         sb.AppendLine("repeat_stmt ::= \"repeat\" ws \"{\" ws statement* ws \"}\"");
+        sb.AppendLine("if_stmt ::= \"if\" ws identifier ws \"{\" ws statement* ws \"}\"");
+        sb.AppendLine("until_stmt ::= \"until\" ws identifier ws \"{\" ws statement* ws \"}\"");
         sb.AppendLine("halt_stmt ::= \"halt\" ws \";\"");
-        sb.AppendLine($"statement ::= {string.Join(" | ", statementRules)} | repeat_stmt | halt_stmt");
+        sb.AppendLine($"statement ::= {string.Join(" | ", statementRules)} | repeat_stmt | if_stmt | until_stmt | halt_stmt");
         sb.AppendLine("script ::= (ws statement)*");
         sb.AppendLine();
     }
@@ -743,6 +950,32 @@ public static class DslParser
                 case DslRepeatAstNode repeatNode:
                 {
                     ValidateNodes(repeatNode.Body ?? Array.Empty<DslAstNode>());
+                    break;
+                }
+                case DslIfAstNode ifNode:
+                {
+                    if (string.IsNullOrWhiteSpace(ifNode.Condition) ||
+                        !BooleanTokenSet.Contains(ifNode.Condition.Trim()))
+                    {
+                        throw new FormatException(
+                            $"Unknown boolean flag '{ifNode.Condition}'. " +
+                            $"Allowed: {string.Join(", ", BooleanTokens)}.");
+                    }
+
+                    ValidateNodes(ifNode.Body ?? Array.Empty<DslAstNode>());
+                    break;
+                }
+                case DslUntilAstNode untilNode:
+                {
+                    if (string.IsNullOrWhiteSpace(untilNode.Condition) ||
+                        !BooleanTokenSet.Contains(untilNode.Condition.Trim()))
+                    {
+                        throw new FormatException(
+                            $"Unknown boolean flag '{untilNode.Condition}'. " +
+                            $"Allowed: {string.Join(", ", BooleanTokens)}.");
+                    }
+
+                    ValidateNodes(untilNode.Body ?? Array.Empty<DslAstNode>());
                     break;
                 }
                 default:

@@ -8,7 +8,6 @@ public sealed class BotRuntime
     private readonly string _label;
     private readonly SpaceMoltAgent _agent;
     private readonly SpaceMoltHttpClient _client;
-    private readonly ChannelReader<string> _commandReader;
     private readonly ChannelReader<string> _controlInputReader;
     private readonly ChannelReader<string> _generateScriptReader;
     private readonly ChannelReader<bool> _saveExampleReader;
@@ -21,14 +20,12 @@ public sealed class BotRuntime
     private readonly Action<string> _publishStatus;
     private readonly Action<string> _log;
     private readonly Action<string> _triggerGlobalStop;
-    private readonly Func<string, CommandResult> _parseCommand;
     private readonly int _scriptGenerationMaxAttempts;
 
     public BotRuntime(
         string label,
         SpaceMoltAgent agent,
         SpaceMoltHttpClient client,
-        ChannelReader<string> commandReader,
         ChannelReader<string> controlInputReader,
         ChannelReader<string> generateScriptReader,
         ChannelReader<bool> saveExampleReader,
@@ -41,13 +38,11 @@ public sealed class BotRuntime
         Action<string> publishStatus,
         Action<string> log,
         Action<string> triggerGlobalStop,
-        Func<string, CommandResult> parseCommand,
         int scriptGenerationMaxAttempts)
     {
         _label = label;
         _agent = agent;
         _client = client;
-        _commandReader = commandReader;
         _controlInputReader = controlInputReader;
         _generateScriptReader = generateScriptReader;
         _saveExampleReader = saveExampleReader;
@@ -60,7 +55,6 @@ public sealed class BotRuntime
         _publishStatus = publishStatus;
         _log = log;
         _triggerGlobalStop = triggerGlobalStop;
-        _parseCommand = parseCommand;
         _scriptGenerationMaxAttempts = scriptGenerationMaxAttempts;
     }
 
@@ -137,11 +131,6 @@ public sealed class BotRuntime
                         var latestState = _getLatestState();
                         if (latestState != null)
                             _publishSnapshot(latestState);
-                    }
-
-                    while (_commandReader.TryRead(out var commandInput))
-                    {
-                        await HandleDirectCommandAsync(commandInput);
                     }
 
                     if (_agent.IsHalted)
@@ -263,34 +252,6 @@ public sealed class BotRuntime
         catch (Exception ex)
         {
             _log($"bot_worker | {_label} | failed | {ex.GetType().Name}: {ex.Message}");
-        }
-    }
-
-    private async Task HandleDirectCommandAsync(string input)
-    {
-        if (string.IsNullOrWhiteSpace(input))
-            return;
-
-        _agent.InterruptActiveCommand("Interrupted by user command");
-
-        var state = _getLatestState() ?? _client.GetGameState();
-        _setLatestState(state);
-
-        var cmd = _parseCommand(input);
-        await _agent.ExecuteAsync(_client, cmd, state);
-
-        try
-        {
-            var postActionState = _client.GetGameState();
-            postActionState = await TryAutoDockedMaintenanceAsync(
-                postActionState,
-                includeScriptRefuel: false);
-            _setLatestState(postActionState);
-            _publishSnapshot(postActionState);
-        }
-        catch
-        {
-            _publishSnapshot(state);
         }
     }
 

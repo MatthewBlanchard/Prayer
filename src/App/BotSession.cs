@@ -25,7 +25,6 @@ public sealed class BotSession
     public GameState? LatestState { get; set; }
     public DateTime LastHaltedSnapshotAt { get; set; } = DateTime.MinValue;
     public List<string> ExecutionStatusLines { get; } = new();
-    public Channel<string> CommandQueue { get; } = Channel.CreateUnbounded<string>();
     public Channel<string> ControlInputQueue { get; } = Channel.CreateUnbounded<string>();
     public Channel<string> GenerateScriptQueue { get; } = Channel.CreateUnbounded<string>();
     public Channel<bool> SaveExampleQueue { get; } = Channel.CreateUnbounded<bool>();

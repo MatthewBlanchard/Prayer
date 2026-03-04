@@ -28,7 +28,6 @@ public class BotWindow
     private CheckBox _loopCheckBox;
     private volatile bool _loopEnabled;
 
-    private ChannelWriter<string>? _commandWriter;
     private ChannelWriter<string>? _controlInputWriter;
     private ChannelWriter<string>? _generateScriptWriter;
     private ChannelWriter<bool>? _saveExampleWriter;
@@ -69,11 +68,6 @@ public class BotWindow
     // -----------------------------
     // Wiring
     // -----------------------------
-    public void SetCommandWriter(ChannelWriter<string> writer)
-    {
-        _commandWriter = writer;
-    }
-
     public void SetControlInputWriter(ChannelWriter<string> writer)
     {
         _controlInputWriter = writer;
@@ -422,7 +416,7 @@ public class BotWindow
         _win.Add(_playerFrame, _topInfoBar, stateFrame, _executionStatusFrame, _memoryFrame, _objectiveFrame, _inputFrame);
         Application.Top.Add(_win);
 
-        ApplyControlMode(ControlModeKind.ScriptMode);
+        ApplyScriptLayout();
         _uiReady = true;
 
         // -----------------------------
@@ -476,7 +470,6 @@ public class BotWindow
         IReadOnlyList<string> executionStatusLines,
         string? controlInput,
         int? currentScriptLine,
-        ControlModeKind mode,
         IReadOnlyList<string> actions,
         string? lastGenerationPrompt,
         IReadOnlyList<BotTab> bots,
@@ -487,7 +480,7 @@ public class BotWindow
 
         Application.MainLoop.Invoke(() =>
         {
-            ApplyControlMode(mode);
+            ApplyScriptLayout();
             _currentControlInput = controlInput;
             RefreshPlayerStack(bots, activeBotId);
             bool showTradeTab = !string.IsNullOrWhiteSpace(tradeStateMarkdown);
@@ -857,7 +850,7 @@ public class BotWindow
         _input.SetFocus();
     }
 
-    private void ApplyControlMode(ControlModeKind mode)
+    private void ApplyScriptLayout()
     {
         _objectiveFrame.ColorScheme = _scriptSideScheme;
         _memoryFrame.ColorScheme = _scriptSideScheme;

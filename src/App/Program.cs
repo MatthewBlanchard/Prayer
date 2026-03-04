@@ -290,7 +290,6 @@ class Program
                 bot.Label,
                 bot.Agent,
                 bot.Client,
-                bot.CommandQueue.Reader,
                 bot.ControlInputQueue.Reader,
                 bot.GenerateScriptQueue.Reader,
                 bot.SaveExampleQueue.Reader,
@@ -303,7 +302,6 @@ class Program
                 message => AppendExecutionStatus(bot, message),
                 LogAuth,
                 TriggerGlobalStop,
-                ParseCommand,
                 ScriptGenerationMaxAttempts);
 
             return runtime.RunAsync(token);
@@ -490,18 +488,6 @@ class Program
                         channels.Status.Writer.TryWrite($"Restarting script for {active.Label}");
                     }
 
-                    while (channels.Input.Reader.TryRead(out var commandInput))
-                    {
-                        var active = GetActiveBot();
-                        if (active == null)
-                        {
-                            channels.Status.Writer.TryWrite("No active bot selected.");
-                            continue;
-                        }
-
-                        active.CommandQueue.Writer.TryWrite(commandInput);
-                    }
-
                     await Task.Delay(50, cts.Token);
                 }
             }
@@ -545,7 +531,6 @@ class Program
                         snapshot.ExecutionStatusLines,
                         snapshot.ControlInput,
                         snapshot.CurrentScriptLine,
-                        snapshot.Mode,
                         snapshot.Actions,
                         snapshot.LastGenerationPrompt,
                         snapshot.Bots,
@@ -586,21 +571,6 @@ class Program
             Task.WhenAll(workerTasks).ContinueWith(_ => { }),
             uiRenderTask.ContinueWith(_ => { })
         );
-    }
-
-    private static CommandResult ParseCommand(string input)
-    {
-        var parts = input
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-        return new CommandResult
-        {
-            Action = parts.Length > 0 ? parts[0] : "",
-            Arg1 = parts.Length > 1 ? parts[1] : null,
-            Quantity = parts.Length > 2 && int.TryParse(parts[2], out var qty)
-                ? qty
-                : null
-        };
     }
 
 }

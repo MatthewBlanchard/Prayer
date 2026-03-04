@@ -4,7 +4,6 @@ public sealed class ProgramChannels
 {
     private ProgramChannels(
         Channel<string> status,
-        Channel<string> input,
         Channel<string> controlInput,
         Channel<string> generateScript,
         Channel<bool> saveExample,
@@ -14,7 +13,6 @@ public sealed class ProgramChannels
         Channel<UiSnapshot> uiSnapshots)
     {
         Status = status;
-        Input = input;
         ControlInput = controlInput;
         GenerateScript = generateScript;
         SaveExample = saveExample;
@@ -25,7 +23,6 @@ public sealed class ProgramChannels
     }
 
     public Channel<string> Status { get; }
-    public Channel<string> Input { get; }
     public Channel<string> ControlInput { get; }
     public Channel<string> GenerateScript { get; }
     public Channel<bool> SaveExample { get; }
@@ -40,7 +37,6 @@ public sealed class ProgramChannels
             Channel.CreateUnbounded<string>(),
             Channel.CreateUnbounded<string>(),
             Channel.CreateUnbounded<string>(),
-            Channel.CreateUnbounded<string>(),
             Channel.CreateUnbounded<bool>(),
             Channel.CreateUnbounded<bool>(),
             Channel.CreateUnbounded<string>(),
@@ -48,7 +44,6 @@ public sealed class ProgramChannels
             Channel.CreateUnbounded<UiSnapshot>());
 
         ui.SetStatusReader(channels.Status.Reader);
-        ui.SetCommandWriter(channels.Input.Writer);
         ui.SetControlInputWriter(channels.ControlInput.Writer);
         ui.SetGenerateScriptWriter(channels.GenerateScript.Writer);
         ui.SetSaveExampleWriter(channels.SaveExample.Writer);

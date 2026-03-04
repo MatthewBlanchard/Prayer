@@ -10,7 +10,6 @@ public sealed class HtmxBotWindow : IAppUi
 {
     private readonly object _lock = new();
     private readonly string _prefix;
-    private bool _loopEnabled;
     private bool _running;
     private HttpListener? _listener;
 
@@ -19,6 +18,7 @@ public sealed class HtmxBotWindow : IAppUi
     private ChannelWriter<bool>? _saveExampleWriter;
     private ChannelWriter<bool>? _executeScriptWriter;
     private ChannelWriter<bool>? _haltNowWriter;
+    private ChannelWriter<LoopUpdate>? _loopUpdateWriter;
     private ChannelWriter<string>? _switchBotWriter;
     private ChannelWriter<AddBotRequest>? _addBotWriter;
     private ChannelWriter<LlmProviderSelection>? _llmSelectionWriter;
@@ -40,7 +40,8 @@ public sealed class HtmxBotWindow : IAppUi
         null,
         null,
         Array.Empty<BotTab>(),
-        null);
+        null,
+        false);
 
     public HtmxBotWindow(string prefix = "http://localhost:5057/")
     {
@@ -49,19 +50,12 @@ public sealed class HtmxBotWindow : IAppUi
         _modelsByProvider["llamacpp"] = new[] { "model" };
     }
 
-    public bool LoopEnabled
-    {
-        get
-        {
-            lock (_lock) return _loopEnabled;
-        }
-    }
-
     public void SetControlInputWriter(ChannelWriter<string> writer) => _controlInputWriter = writer;
     public void SetGenerateScriptWriter(ChannelWriter<string> writer) => _generateScriptWriter = writer;
     public void SetSaveExampleWriter(ChannelWriter<bool> writer) => _saveExampleWriter = writer;
     public void SetExecuteScriptWriter(ChannelWriter<bool> writer) => _executeScriptWriter = writer;
     public void SetHaltNowWriter(ChannelWriter<bool> writer) => _haltNowWriter = writer;
+    public void SetLoopUpdateWriter(ChannelWriter<LoopUpdate> writer) => _loopUpdateWriter = writer;
     public void SetSwitchBotWriter(ChannelWriter<string> writer) => _switchBotWriter = writer;
     public void SetAddBotWriter(ChannelWriter<AddBotRequest> writer) => _addBotWriter = writer;
     public void SetLlmSelectionWriter(ChannelWriter<LlmProviderSelection> writer) => _llmSelectionWriter = writer;
@@ -136,7 +130,8 @@ public sealed class HtmxBotWindow : IAppUi
         int? currentScriptLine,
         string? lastGenerationPrompt,
         IReadOnlyList<BotTab> bots,
-        string? activeBotId)
+        string? activeBotId,
+        bool activeBotLoopEnabled)
     {
         lock (_lock)
         {
@@ -152,7 +147,8 @@ public sealed class HtmxBotWindow : IAppUi
                 currentScriptLine,
                 lastGenerationPrompt,
                 bots,
-                activeBotId);
+                activeBotId,
+                activeBotLoopEnabled);
         }
     }
 
@@ -231,6 +227,12 @@ public sealed class HtmxBotWindow : IAppUi
             return;
         }
 
+        if (req.HttpMethod == "GET" && path == "/partial/loop-btn")
+        {
+            WriteText(ctx.Response, BuildLoopButtonHtml(), "text/html; charset=utf-8");
+            return;
+        }
+
         if (req.HttpMethod == "GET" && path == "/partial/models")
         {
             var provider = (req.QueryString["provider"] ?? "").Trim().ToLowerInvariant();
@@ -292,26 +294,18 @@ public sealed class HtmxBotWindow : IAppUi
         if (req.HttpMethod == "POST" && path == "/api/loop")
         {
             var form = ReadForm(req);
-            lock (_lock)
-            {
-                _loopEnabled = string.Equals(GetValue(form, "loop"), "on", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(GetValue(form, "loop"), "true", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(GetValue(form, "loop"), "1", StringComparison.OrdinalIgnoreCase);
-            }
+            var enabled = string.Equals(GetValue(form, "loop"), "on", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(GetValue(form, "loop"), "true", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(GetValue(form, "loop"), "1", StringComparison.OrdinalIgnoreCase);
+            _loopUpdateWriter?.TryWrite(new LoopUpdate(enabled));
             WriteNoContent(ctx.Response);
             return;
         }
 
         if (req.HttpMethod == "POST" && path == "/api/loop-toggle")
         {
-            bool loopEnabled;
-            lock (_lock)
-            {
-                _loopEnabled = !_loopEnabled;
-                loopEnabled = _loopEnabled;
-            }
-
-            WriteText(ctx.Response, BuildLoopButtonFormHtml(loopEnabled), "text/html; charset=utf-8");
+            _loopUpdateWriter?.TryWrite(new LoopUpdate(null));
+            WriteNoContent(ctx.Response);
             return;
         }
 
@@ -375,6 +369,7 @@ public sealed class HtmxBotWindow : IAppUi
         string selectedProvider;
         string selectedModel;
         string currentScript;
+        bool activeBotLoopEnabled;
 
         lock (_lock)
         {
@@ -382,6 +377,7 @@ public sealed class HtmxBotWindow : IAppUi
             selectedProvider = _selectedProvider;
             selectedModel = _selectedModel;
             currentScript = _snapshot.ControlInput ?? "";
+            activeBotLoopEnabled = _snapshot.ActiveBotLoopEnabled;
         }
 
         if (!providers.Contains(selectedProvider, StringComparer.OrdinalIgnoreCase))
@@ -438,10 +434,10 @@ public sealed class HtmxBotWindow : IAppUi
         sb.AppendLine("<form hx-post='/api/control-input' hx-swap='none' class='list'>");
         sb.Append("<textarea name='script' rows='7' placeholder='script'>").Append(E(currentScript)).AppendLine("</textarea>");
         sb.AppendLine("<button type='submit'>Set Script</button></form>");
-        lock (_lock)
-        {
-            sb.AppendLine("<div class='row' style='margin-top:8px;'><form hx-post='/api/execute' hx-swap='none'><button type='submit' title='Execute'>▶️</button></form><form hx-post='/api/halt' hx-swap='none'><button type='submit' title='Halt'>⏹️</button></form><form hx-post='/api/save-example' hx-swap='none'><button type='submit' title='Thumbs Up'>👍</button></form>" + BuildLoopButtonFormHtml(_loopEnabled) + "</div>");
-        }
+        sb.AppendLine(
+            "<div class='row' style='margin-top:8px;'><form hx-post='/api/execute' hx-swap='none'><button type='submit' title='Execute'>▶️</button></form><form hx-post='/api/halt' hx-swap='none'><button type='submit' title='Halt'>⏹️</button></form><form hx-post='/api/save-example' hx-swap='none'><button type='submit' title='Thumbs Up'>👍</button></form><div id='loop-btn-slot' hx-get='/partial/loop-btn' hx-trigger='load, every 1000ms' hx-swap='innerHTML'>"
+            + BuildLoopButtonFormHtml(activeBotLoopEnabled)
+            + "</div></div>");
         sb.AppendLine("<h4>Prompt</h4><form hx-post='/api/prompt' hx-swap='none' class='list'><textarea name='prompt' rows='4' placeholder='prompt for script generation'></textarea><button type='submit'>Generate Script</button></form>");
         sb.AppendLine("<div id='right-panel' hx-get='/partial/right' hx-trigger='load, every 1000ms' hx-swap='innerHTML'></div></div>");
 
@@ -487,14 +483,9 @@ public sealed class HtmxBotWindow : IAppUi
     private string BuildRightPanelHtml()
     {
         UiSnapshot snapshot;
-        bool loopEnabled;
-        lock (_lock)
-        {
-            snapshot = _snapshot;
-            loopEnabled = _loopEnabled;
-        }
+        lock (_lock) snapshot = _snapshot;
         var sb = new StringBuilder();
-        sb.AppendLine($"<div class='small'>Loop: {(loopEnabled ? "ON" : "OFF")}</div>");
+        sb.AppendLine($"<div class='small'>Loop: {(snapshot.ActiveBotLoopEnabled ? "ON" : "OFF")}</div>");
         sb.AppendLine("<h4>Current Script (live)</h4><pre>").Append(E(snapshot.ControlInput ?? "(none)")).AppendLine("</pre>");
         if (snapshot.ActiveMissionPrompts.Count > 0)
         {
@@ -516,11 +507,18 @@ public sealed class HtmxBotWindow : IAppUi
         return sb.ToString();
     }
 
+    private string BuildLoopButtonHtml()
+    {
+        bool loopEnabled;
+        lock (_lock) loopEnabled = _snapshot.ActiveBotLoopEnabled;
+        return BuildLoopButtonFormHtml(loopEnabled);
+    }
+
     private static string BuildLoopButtonFormHtml(bool loopEnabled)
     {
         var activeClass = loopEnabled ? " active" : "";
         var title = loopEnabled ? "Loop On" : "Loop Off";
-        return $"<form id='loop-btn-form' hx-post='/api/loop-toggle' hx-target='this' hx-swap='outerHTML'><button class='{activeClass}' type='submit' title='{title}'>🔁</button></form>";
+        return $"<form id='loop-btn-form' hx-post='/api/loop-toggle' hx-swap='none'><button class='{activeClass}' type='submit' title='{title}'>🔁</button></form>";
     }
 
     private string BuildModelSelectHtml(string provider, string? preferredModel = null)

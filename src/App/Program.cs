@@ -212,11 +212,23 @@ class Program
             }
         }
 
+        bool GetActiveBotLoopEnabled()
+        {
+            lock (botLock)
+            {
+                if (activeBotId == null || !botSessions.TryGetValue(activeBotId, out var session))
+                    return false;
+
+                return session.LoopEnabled;
+            }
+        }
+
         var snapshotPublisher = new UiSnapshotPublisher(
             channels.UiSnapshots.Writer,
             GetBotTabs,
             GetActiveBotId,
             GetActiveBot,
+            GetActiveBotLoopEnabled,
             IsActiveBot,
             GetExecutionStatusLinesForBot,
             LogAuth);
@@ -401,7 +413,7 @@ class Program
                 bot.GenerateScriptQueue.Reader,
                 bot.SaveExampleQueue.Reader,
                 bot.HaltNowQueue.Reader,
-                () => ui.LoopEnabled,
+                () => bot.LoopEnabled,
                 () => bot.LatestState,
                 state => bot.LatestState = state,
                 () => bot.LastHaltedSnapshotAt,
@@ -580,6 +592,38 @@ class Program
                         snapshotPublisher.PublishActiveSnapshot();
                     }
 
+                    while (channels.LoopUpdates.Reader.TryRead(out var update))
+                    {
+                        BotSession? active;
+                        bool enabled;
+
+                        lock (botLock)
+                        {
+                            active = activeBotId != null && botSessions.TryGetValue(activeBotId, out var session)
+                                ? session
+                                : null;
+
+                            if (active == null)
+                            {
+                                enabled = false;
+                            }
+                            else
+                            {
+                                enabled = update.Enabled ?? !active.LoopEnabled;
+                                active.LoopEnabled = enabled;
+                            }
+                        }
+
+                        if (active == null)
+                        {
+                            channels.Status.Writer.TryWrite("No active bot selected.");
+                            continue;
+                        }
+
+                        channels.Status.Writer.TryWrite($"[{active.Label}] Loop {(enabled ? "enabled" : "disabled")}");
+                        snapshotPublisher.PublishActiveSnapshot();
+                    }
+
                     while (channels.ControlInput.Reader.TryRead(out var newInput))
                     {
                         var active = GetActiveBot();
@@ -693,7 +737,8 @@ class Program
                         snapshot.CurrentScriptLine,
                         snapshot.LastGenerationPrompt,
                         snapshot.Bots,
-                        snapshot.ActiveBotId
+                        snapshot.ActiveBotId,
+                        snapshot.ActiveBotLoopEnabled
                     );
                 }
             }

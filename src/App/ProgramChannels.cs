@@ -9,6 +9,7 @@ public sealed class ProgramChannels
         Channel<bool> saveExample,
         Channel<bool> executeScript,
         Channel<bool> haltNow,
+        Channel<LoopUpdate> loopUpdates,
         Channel<string> switchBot,
         Channel<AddBotRequest> addBot,
         Channel<LlmProviderSelection> llmSelection,
@@ -20,6 +21,7 @@ public sealed class ProgramChannels
         SaveExample = saveExample;
         ExecuteScript = executeScript;
         HaltNow = haltNow;
+        LoopUpdates = loopUpdates;
         SwitchBot = switchBot;
         AddBot = addBot;
         LlmSelection = llmSelection;
@@ -32,6 +34,7 @@ public sealed class ProgramChannels
     public Channel<bool> SaveExample { get; }
     public Channel<bool> ExecuteScript { get; }
     public Channel<bool> HaltNow { get; }
+    public Channel<LoopUpdate> LoopUpdates { get; }
     public Channel<string> SwitchBot { get; }
     public Channel<AddBotRequest> AddBot { get; }
     public Channel<LlmProviderSelection> LlmSelection { get; }
@@ -46,6 +49,7 @@ public sealed class ProgramChannels
             Channel.CreateUnbounded<bool>(),
             Channel.CreateUnbounded<bool>(),
             Channel.CreateUnbounded<bool>(),
+            Channel.CreateUnbounded<LoopUpdate>(),
             Channel.CreateUnbounded<string>(),
             Channel.CreateUnbounded<AddBotRequest>(),
             Channel.CreateUnbounded<LlmProviderSelection>(),
@@ -56,6 +60,7 @@ public sealed class ProgramChannels
         ui.SetSaveExampleWriter(channels.SaveExample.Writer);
         ui.SetExecuteScriptWriter(channels.ExecuteScript.Writer);
         ui.SetHaltNowWriter(channels.HaltNow.Writer);
+        ui.SetLoopUpdateWriter(channels.LoopUpdates.Writer);
         ui.SetSwitchBotWriter(channels.SwitchBot.Writer);
         ui.SetAddBotWriter(channels.AddBot.Writer);
         ui.SetLlmSelectionWriter(channels.LlmSelection.Writer);

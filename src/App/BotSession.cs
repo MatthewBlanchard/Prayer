@@ -22,6 +22,7 @@ public sealed class BotSession
     public string Label { get; }
     public SpaceMoltAgent Agent { get; }
     public SpaceMoltHttpClient Client { get; }
+    public bool LoopEnabled { get; set; }
     public GameState? LatestState { get; set; }
     public DateTime LastHaltedSnapshotAt { get; set; } = DateTime.MinValue;
     public List<string> ExecutionStatusLines { get; } = new();

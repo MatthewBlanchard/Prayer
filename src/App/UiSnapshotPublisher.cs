@@ -9,6 +9,7 @@ public sealed class UiSnapshotPublisher
     private readonly Func<IReadOnlyList<BotTab>> _getBotTabs;
     private readonly Func<string?> _getActiveBotId;
     private readonly Func<BotSession?> _getActiveBot;
+    private readonly Func<bool> _getActiveBotLoopEnabled;
     private readonly Func<BotSession, bool> _isActiveBot;
     private readonly Func<string?, IReadOnlyList<string>> _getExecutionStatusLinesForBot;
     private readonly Action<string> _logAuth;
@@ -19,6 +20,7 @@ public sealed class UiSnapshotPublisher
         Func<IReadOnlyList<BotTab>> getBotTabs,
         Func<string?> getActiveBotId,
         Func<BotSession?> getActiveBot,
+        Func<bool> getActiveBotLoopEnabled,
         Func<BotSession, bool> isActiveBot,
         Func<string?, IReadOnlyList<string>> getExecutionStatusLinesForBot,
         Action<string> logAuth)
@@ -27,6 +29,7 @@ public sealed class UiSnapshotPublisher
         _getBotTabs = getBotTabs;
         _getActiveBotId = getActiveBotId;
         _getActiveBot = getActiveBot;
+        _getActiveBotLoopEnabled = getActiveBotLoopEnabled;
         _isActiveBot = isActiveBot;
         _getExecutionStatusLinesForBot = getExecutionStatusLinesForBot;
         _logAuth = logAuth;
@@ -63,7 +66,8 @@ public sealed class UiSnapshotPublisher
             null,
             null,
             tabs,
-            activeBotId));
+            activeBotId,
+            _getActiveBotLoopEnabled()));
     }
 
     public void PublishSnapshotForBot(BotSession bot, GameState state)
@@ -85,7 +89,8 @@ public sealed class UiSnapshotPublisher
             bot.Agent.CurrentScriptLine,
             bot.Agent.LastScriptGenerationPrompt,
             tabs,
-            activeBotId));
+            activeBotId,
+            _getActiveBotLoopEnabled()));
     }
 
     public void PublishActiveSnapshot(string? noStateMessage = null)

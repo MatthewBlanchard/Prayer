@@ -3,13 +3,12 @@ using System.Threading.Channels;
 
 public interface IAppUi
 {
-    bool LoopEnabled { get; }
-
     void SetControlInputWriter(ChannelWriter<string> writer);
     void SetGenerateScriptWriter(ChannelWriter<string> writer);
     void SetSaveExampleWriter(ChannelWriter<bool> writer);
     void SetExecuteScriptWriter(ChannelWriter<bool> writer);
     void SetHaltNowWriter(ChannelWriter<bool> writer);
+    void SetLoopUpdateWriter(ChannelWriter<LoopUpdate> writer);
     void SetSwitchBotWriter(ChannelWriter<string> writer);
     void SetAddBotWriter(ChannelWriter<AddBotRequest> writer);
     void SetLlmSelectionWriter(ChannelWriter<LlmProviderSelection> writer);
@@ -30,7 +29,8 @@ public interface IAppUi
         int? currentScriptLine,
         string? lastGenerationPrompt,
         IReadOnlyList<BotTab> bots,
-        string? activeBotId);
+        string? activeBotId,
+        bool activeBotLoopEnabled);
 
     void Run();
 }

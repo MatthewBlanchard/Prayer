@@ -12,105 +12,8 @@ class Program
     {
         AppPaths.EnsureDirectories();
         AppPaths.ResetDebugLogsOnStartup();
-        var llamaCppBaseUrl = Environment.GetEnvironmentVariable("LLAMACPP_BASE_URL")
-            ?? "http://localhost:8080";
-        var llamaCppModel = Environment.GetEnvironmentVariable("LLAMACPP_MODEL")
-            ?? "model";
-        ILLMClient commandLlm = new LlamaCppClient(llamaCppBaseUrl, llamaCppModel);
-
-        var openAiApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
-        var groqApiKey = Environment.GetEnvironmentVariable("GROQ_API_KEY");
-        var openAiDefaultModel = Environment.GetEnvironmentVariable("OPENAI_MODEL")
-            ?? "gpt-4o-mini";
-        var groqDefaultModel = Environment.GetEnvironmentVariable("GROQ_MODEL")
-            ?? "llama-3.3-70b-versatile";
-
-        var providersById = new Dictionary<string, ILLMProvider>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["llamacpp"] = new LlamaCppProvider(llamaCppBaseUrl, llamaCppModel)
-        };
-
-        if (!string.IsNullOrWhiteSpace(openAiApiKey))
-            providersById["openai"] = new OpenAIProvider(openAiApiKey, openAiDefaultModel);
-        if (!string.IsNullOrWhiteSpace(groqApiKey))
-            providersById["groq"] = new GroqProvider(groqApiKey, groqDefaultModel);
-
-        static string NormalizeProvider(string? provider)
-        {
-            var normalized = (provider ?? string.Empty).Trim().ToLowerInvariant();
-            return normalized switch
-            {
-                "openai" => "openai",
-                "groq" => "groq",
-                "llamacpp" => "llamacpp",
-                _ => "llamacpp"
-            };
-        }
-
-        string ResolveDefaultModel(string provider)
-        {
-            var normalizedProvider = NormalizeProvider(provider);
-            if (providersById.TryGetValue(normalizedProvider, out var providerInstance))
-                return providerInstance.DefaultModel;
-            return "model";
-        }
-
-        ILLMClient CreatePlanningClient(string provider, string model)
-        {
-            var normalizedProvider = NormalizeProvider(provider);
-            if (!providersById.TryGetValue(normalizedProvider, out var llmProvider))
-                throw new InvalidOperationException(
-                    $"Provider '{normalizedProvider}' is not configured.");
-
-            var normalizedModel = string.IsNullOrWhiteSpace(model)
-                ? llmProvider.DefaultModel
-                : model.Trim();
-
-            return llmProvider.CreateClient(normalizedModel);
-        }
-
         var savedLlmSelectionStore = new SavedLlmSelectionStore();
         var savedLlmSelection = savedLlmSelectionStore.Load();
-
-        var requestedProvider = NormalizeProvider(Environment.GetEnvironmentVariable("LLM_PROVIDER"));
-        var initialProvider = providersById.ContainsKey(requestedProvider)
-            ? requestedProvider
-            : providersById.ContainsKey("openai")
-                ? "openai"
-                : providersById.ContainsKey("groq")
-                    ? "groq"
-                    : "llamacpp";
-        var initialModel = Environment.GetEnvironmentVariable("LLM_MODEL")
-            ?? (initialProvider == "groq"
-                ? Environment.GetEnvironmentVariable("GROQ_MODEL")
-                : initialProvider == "openai"
-                    ? Environment.GetEnvironmentVariable("OPENAI_MODEL")
-                    : Environment.GetEnvironmentVariable("LLAMACPP_MODEL"))
-            ?? ResolveDefaultModel(initialProvider);
-        if (savedLlmSelection != null)
-        {
-            var savedProvider = NormalizeProvider(savedLlmSelection.Provider);
-            if (providersById.ContainsKey(savedProvider))
-            {
-                initialProvider = savedProvider;
-                initialModel = string.IsNullOrWhiteSpace(savedLlmSelection.Model)
-                    ? ResolveDefaultModel(savedProvider)
-                    : savedLlmSelection.Model.Trim();
-            }
-        }
-
-        ILLMClient initialPlanningClient = CreatePlanningClient(initialProvider, initialModel);
-        var planningLlm = new SwappableLlmClient(initialPlanningClient);
-        string currentPlannerProvider = initialProvider;
-        string currentPlannerModel = initialModel;
-
-        PromptScriptRag? scriptExampleRag = null;
-        if (!string.IsNullOrWhiteSpace(openAiApiKey))
-        {
-            var openAiEmbeddingModel = Environment.GetEnvironmentVariable("OPENAI_EMBEDDING_MODEL")
-                ?? "text-embedding-3-small";
-            scriptExampleRag = new PromptScriptRag(openAiApiKey, openAiEmbeddingModel);
-        }
 
         IAppUi ui = new HtmxBotWindow(
             Environment.GetEnvironmentVariable("UI_PREFIX") ?? "http://localhost:5057/");
@@ -118,39 +21,27 @@ class Program
         if (string.IsNullOrWhiteSpace(prayerBaseUrl))
             throw new InvalidOperationException("PRAYER_BASE_URL is required (legacy in-process runtime path is disabled).");
         var prayerApi = new PrayerApiClient(prayerBaseUrl);
-        var orderedProviderIds = new List<string> { "openai", "groq", "llamacpp" };
-        foreach (var providerId in providersById.Keys)
-        {
-            if (!orderedProviderIds.Contains(providerId, StringComparer.OrdinalIgnoreCase))
-                orderedProviderIds.Add(providerId);
-        }
+        var llmCatalog = await prayerApi.GetLlmCatalogAsync();
+        var availableProviders = llmCatalog.Providers.Select(p => p.ProviderId).ToList();
+        ui.SetAvailableProviders(availableProviders);
+        foreach (var provider in llmCatalog.Providers)
+            ui.SetProviderModels(provider.ProviderId, provider.Models);
 
-        ui.SetAvailableProviders(orderedProviderIds);
-        ui.SetProviderModels("openai", new[] { openAiDefaultModel });
-        ui.SetProviderModels("groq", new[] { groqDefaultModel });
-        ui.SetProviderModels("llamacpp", new[] { llamaCppModel });
-        foreach (var provider in providersById.Values)
-            ui.SetProviderModels(provider.ProviderId, new[] { provider.DefaultModel });
-        ui.ConfigureInitialLlmSelection(initialProvider, initialModel);
-
-        async Task LoadRemoteModelCatalogsAsync()
+        string currentPlannerProvider = llmCatalog.DefaultProvider;
+        string currentPlannerModel = llmCatalog.DefaultModel;
+        if (savedLlmSelection != null)
         {
-            foreach (var provider in providersById.Values)
+            var matchingProvider = llmCatalog.Providers
+                .FirstOrDefault(p => string.Equals(p.ProviderId, savedLlmSelection.Provider, StringComparison.OrdinalIgnoreCase));
+            if (matchingProvider != null)
             {
-                try
-                {
-                    var models = await provider.ListModelsAsync();
-                    if (models.Count > 0)
-                        ui.SetProviderModels(provider.ProviderId, models);
-                }
-                catch
-                {
-                    // Keep UI responsive with defaults if API discovery fails.
-                }
+                currentPlannerProvider = matchingProvider.ProviderId;
+                currentPlannerModel = string.IsNullOrWhiteSpace(savedLlmSelection.Model)
+                    ? matchingProvider.DefaultModel
+                    : savedLlmSelection.Model.Trim();
             }
         }
-
-        await LoadRemoteModelCatalogsAsync();
+        ui.ConfigureInitialLlmSelection(currentPlannerProvider, currentPlannerModel);
 
         var channels = ProgramChannels.CreateAndBind(ui);
         var cts = new CancellationTokenSource();
@@ -295,6 +186,20 @@ class Program
 
                 session.PrayerSessionId = prayerSessionId;
                 LogAuth($"{flowLabel} | {label} | prayer_session_created | id={session.PrayerSessionId}");
+                try
+                {
+                    await prayerApi.SetSessionLlmAsync(
+                        prayerSessionId,
+                        currentPlannerProvider,
+                        currentPlannerModel);
+                }
+                catch (Exception ex)
+                {
+                    channels.Status.Writer.TryWrite(
+                        $"[{label}] Session created but LLM apply failed: {ex.Message}");
+                    LogAuth(
+                        $"{flowLabel} | {label} | llm_apply_failed | provider={currentPlannerProvider} | model={currentPlannerModel} | {ex.GetType().Name}: {ex.Message}");
+                }
 
                 return (session, passwordToSave);
             }
@@ -434,8 +339,10 @@ class Program
 
                     while (channels.LlmSelection.Reader.TryRead(out var selection))
                     {
-                        var selectedProvider = NormalizeProvider(selection.Provider);
-                        if (!providersById.TryGetValue(selectedProvider, out var provider))
+                        var selectedProvider = (selection.Provider ?? string.Empty).Trim();
+                        var providerCatalog = llmCatalog.Providers.FirstOrDefault(p =>
+                            string.Equals(p.ProviderId, selectedProvider, StringComparison.OrdinalIgnoreCase));
+                        if (providerCatalog == null)
                         {
                             channels.Status.Writer.TryWrite(
                                 $"Provider '{selectedProvider}' is not configured in this run.");
@@ -443,8 +350,9 @@ class Program
                         }
 
                         var selectedModel = string.IsNullOrWhiteSpace(selection.Model)
-                            ? provider.DefaultModel
+                            ? providerCatalog.DefaultModel
                             : selection.Model.Trim();
+                        selectedProvider = providerCatalog.ProviderId;
 
                         if (string.Equals(currentPlannerProvider, selectedProvider, StringComparison.OrdinalIgnoreCase) &&
                             string.Equals(currentPlannerModel, selectedModel, StringComparison.Ordinal))
@@ -454,8 +362,14 @@ class Program
 
                         try
                         {
-                            var updatedClient = provider.CreateClient(selectedModel);
-                            planningLlm.SetInner(updatedClient);
+                            var active = GetActiveBot();
+                            if (active?.PrayerSessionId != null)
+                            {
+                                await prayerApi.SetSessionLlmAsync(
+                                    active.PrayerSessionId,
+                                    selectedProvider,
+                                    selectedModel);
+                            }
                             currentPlannerProvider = selectedProvider;
                             currentPlannerModel = selectedModel;
                             savedLlmSelectionStore.Save(currentPlannerProvider, currentPlannerModel);

@@ -36,6 +36,15 @@ public sealed class PrayerApiClient
         return session.Id;
     }
 
+    public async Task<Contracts.LlmCatalogResponse> GetLlmCatalogAsync()
+    {
+        var catalog = await _http.GetFromJsonAsync<Contracts.LlmCatalogResponse>("api/llm/catalog");
+        if (catalog == null)
+            throw new InvalidOperationException("Prayer did not return LLM catalog.");
+
+        return catalog;
+    }
+
     public async Task<(string SessionId, string Password)> RegisterSessionAsync(
         string username,
         string empire,
@@ -103,6 +112,14 @@ public sealed class PrayerApiClient
         var response = await _http.DeleteAsync($"api/runtime/sessions/{sessionId}");
         if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.NotFound)
             response.EnsureSuccessStatusCode();
+    }
+
+    public async Task SetSessionLlmAsync(string sessionId, string provider, string model)
+    {
+        var response = await _http.PutAsJsonAsync(
+            $"api/runtime/sessions/{sessionId}/llm",
+            new Contracts.UpdateSessionLlmRequest(provider, model));
+        response.EnsureSuccessStatusCode();
     }
 
     private static string EnsureTrailingSlash(string url)

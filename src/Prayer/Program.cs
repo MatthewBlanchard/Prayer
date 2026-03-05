@@ -4,6 +4,7 @@ using System.Threading.Channels;
 using Contracts = Prayer.Contracts;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddSingleton<PrayerLlmRegistry>();
 builder.Services.AddSingleton<RuntimeSessionStore>();
 
 var app = builder.Build();
@@ -14,6 +15,9 @@ app.MapGet("/health", () => Results.Ok(new
     status = "ok",
     utc = DateTime.UtcNow
 }));
+
+app.MapGet("/api/llm/catalog", async (PrayerLlmRegistry registry) =>
+    Results.Ok(await registry.BuildCatalogAsync()));
 
 app.MapGet("/api/runtime/sessions", (RuntimeSessionStore store) =>
     Results.Ok(store.GetAll().Select(ToSessionSummary)));
@@ -68,6 +72,27 @@ app.MapGet("/api/runtime/sessions/{id}", (string id, RuntimeSessionStore store) 
     return store.TryGet(id, out var session)
         ? Results.Ok(ToSessionSummary(session))
         : Results.NotFound();
+});
+
+app.MapGet("/api/runtime/sessions/{id}/llm", (string id, RuntimeSessionStore store) =>
+{
+    if (!store.TryGet(id, out var session))
+        return Results.NotFound();
+
+    return Results.Ok(new Contracts.SessionLlmConfigResponse(
+        session.CurrentLlmProvider,
+        session.CurrentLlmModel));
+});
+
+app.MapPut("/api/runtime/sessions/{id}/llm", (string id, Contracts.UpdateSessionLlmRequest request, RuntimeSessionStore store, PrayerLlmRegistry registry) =>
+{
+    if (!store.TryGet(id, out var session))
+        return Results.NotFound();
+
+    if (!session.TrySetLlm(request.Provider, request.Model, registry, out var message))
+        return Results.BadRequest(message);
+
+    return Results.Ok(new Contracts.CommandAckResponse(session.Id, "set_llm", message));
 });
 
 app.MapGet("/api/runtime/sessions/{id}/snapshot", (string id, RuntimeSessionStore store) =>
@@ -208,8 +233,14 @@ app.Run();
 
 internal sealed class RuntimeSessionStore : IDisposable
 {
+    private readonly PrayerLlmRegistry _llmRegistry;
     private readonly ConcurrentDictionary<string, PrayerRuntimeSession> _sessions =
         new(StringComparer.Ordinal);
+
+    public RuntimeSessionStore(PrayerLlmRegistry llmRegistry)
+    {
+        _llmRegistry = llmRegistry;
+    }
 
     public IReadOnlyList<PrayerRuntimeSession> GetAll()
     {
@@ -279,13 +310,8 @@ internal sealed class RuntimeSessionStore : IDisposable
     {
         var transport = new SpaceMoltRuntimeTransportAdapter(client);
         var stateProvider = new SpaceMoltRuntimeStateProvider(client);
-
-        var llamaCppBaseUrl = Environment.GetEnvironmentVariable("LLAMACPP_BASE_URL")
-            ?? "http://localhost:8080";
-        var llamaCppModel = Environment.GetEnvironmentVariable("LLAMACPP_MODEL")
-            ?? "model";
-        ILLMClient planner = new LlamaCppClient(llamaCppBaseUrl, llamaCppModel);
-
+        var (provider, model) = _llmRegistry.ResolveInitialSelection();
+        var planner = new SwappableLlmClient(_llmRegistry.CreateClient(provider, model));
         var agent = new SpaceMoltAgent(planner, planner, scriptExampleRag: null, saveCheckpoint: null);
         agent.Halt("Awaiting script input");
 
@@ -296,6 +322,9 @@ internal sealed class RuntimeSessionStore : IDisposable
             createdUtc: now,
             agent: agent,
             client: client,
+            plannerLlm: planner,
+            llmProvider: provider,
+            llmModel: model,
             runtimeTransport: transport,
             runtimeStateProvider: stateProvider);
 
@@ -330,6 +359,9 @@ internal sealed class PrayerRuntimeSession : IDisposable
         DateTime createdUtc,
         SpaceMoltAgent agent,
         SpaceMoltHttpClient client,
+        SwappableLlmClient plannerLlm,
+        string llmProvider,
+        string llmModel,
         IRuntimeTransport runtimeTransport,
         IRuntimeStateProvider runtimeStateProvider)
     {
@@ -339,6 +371,9 @@ internal sealed class PrayerRuntimeSession : IDisposable
 
         Agent = agent;
         Client = client;
+        PlannerLlm = plannerLlm;
+        CurrentLlmProvider = llmProvider;
+        CurrentLlmModel = llmModel;
         RuntimeTransport = runtimeTransport;
         RuntimeStateProvider = runtimeStateProvider;
 
@@ -384,6 +419,9 @@ internal sealed class PrayerRuntimeSession : IDisposable
 
     public SpaceMoltAgent Agent { get; }
     public SpaceMoltHttpClient Client { get; }
+    public SwappableLlmClient PlannerLlm { get; }
+    public string CurrentLlmProvider { get; private set; }
+    public string CurrentLlmModel { get; private set; }
     public IRuntimeTransport RuntimeTransport { get; }
     public IRuntimeStateProvider RuntimeStateProvider { get; }
     public IRuntimeHost RuntimeHost { get; }
@@ -451,6 +489,27 @@ internal sealed class PrayerRuntimeSession : IDisposable
     public bool TrySaveExample(out string message)
     {
         return TryApplyCommand(PrayerRuntimeCommandNames.SaveExample, string.Empty, out message);
+    }
+
+    public bool TrySetLlm(string provider, string model, PrayerLlmRegistry registry, out string message)
+    {
+        try
+        {
+            var normalizedProvider = registry.NormalizeProvider(provider);
+            var normalizedModel = registry.ResolveModel(normalizedProvider, model);
+            var updatedClient = registry.CreateClient(normalizedProvider, normalizedModel);
+            PlannerLlm.SetInner(updatedClient);
+            CurrentLlmProvider = normalizedProvider;
+            CurrentLlmModel = normalizedModel;
+            AppendStatus($"[{Label}] LLM set to {CurrentLlmProvider}/{CurrentLlmModel}");
+            message = $"llm set to {CurrentLlmProvider}/{CurrentLlmModel}";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+            return false;
+        }
     }
 
     public void SetLoopEnabled(bool enabled)
@@ -562,4 +621,110 @@ internal static class PrayerRuntimeCommandNames
     public const string ExecuteScript = "execute_script";
     public const string Halt = "halt";
     public const string SaveExample = "save_example";
+}
+
+internal sealed class PrayerLlmRegistry
+{
+    private readonly Dictionary<string, ILLMProvider> _providersById =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly string _defaultProvider;
+    private readonly string _defaultModel;
+
+    public PrayerLlmRegistry()
+    {
+        var llamaCppBaseUrl = Environment.GetEnvironmentVariable("LLAMACPP_BASE_URL")
+            ?? "http://localhost:8080";
+        var llamaCppModel = Environment.GetEnvironmentVariable("LLAMACPP_MODEL")
+            ?? "model";
+        _providersById["llamacpp"] = new LlamaCppProvider(llamaCppBaseUrl, llamaCppModel);
+
+        var openAiApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        var groqApiKey = Environment.GetEnvironmentVariable("GROQ_API_KEY");
+        var openAiDefaultModel = Environment.GetEnvironmentVariable("OPENAI_MODEL")
+            ?? "gpt-4o-mini";
+        var groqDefaultModel = Environment.GetEnvironmentVariable("GROQ_MODEL")
+            ?? "llama-3.3-70b-versatile";
+
+        if (!string.IsNullOrWhiteSpace(openAiApiKey))
+            _providersById["openai"] = new OpenAIProvider(openAiApiKey, openAiDefaultModel);
+        if (!string.IsNullOrWhiteSpace(groqApiKey))
+            _providersById["groq"] = new GroqProvider(groqApiKey, groqDefaultModel);
+
+        var requestedProvider = NormalizeProvider(Environment.GetEnvironmentVariable("LLM_PROVIDER"));
+        _defaultProvider = _providersById.ContainsKey(requestedProvider)
+            ? requestedProvider
+            : _providersById.ContainsKey("openai")
+                ? "openai"
+                : _providersById.ContainsKey("groq")
+                    ? "groq"
+                    : "llamacpp";
+
+        var envModel = Environment.GetEnvironmentVariable("LLM_MODEL");
+        _defaultModel = ResolveModel(_defaultProvider, envModel);
+    }
+
+    public string NormalizeProvider(string? provider)
+    {
+        var normalized = (provider ?? string.Empty).Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "openai" => "openai",
+            "groq" => "groq",
+            "llamacpp" => "llamacpp",
+            _ => "llamacpp"
+        };
+    }
+
+    public string ResolveModel(string provider, string? model)
+    {
+        if (!_providersById.TryGetValue(provider, out var llmProvider))
+            throw new InvalidOperationException($"Provider '{provider}' is not configured.");
+
+        return string.IsNullOrWhiteSpace(model)
+            ? llmProvider.DefaultModel
+            : model.Trim();
+    }
+
+    public (string Provider, string Model) ResolveInitialSelection()
+    {
+        return (_defaultProvider, _defaultModel);
+    }
+
+    public ILLMClient CreateClient(string provider, string model)
+    {
+        if (!_providersById.TryGetValue(provider, out var llmProvider))
+            throw new InvalidOperationException($"Provider '{provider}' is not configured.");
+
+        return llmProvider.CreateClient(model);
+    }
+
+    public async Task<Contracts.LlmCatalogResponse> BuildCatalogAsync()
+    {
+        var entries = new List<Contracts.LlmProviderCatalogEntry>();
+        foreach (var provider in _providersById.Values)
+        {
+            var models = new List<string> { provider.DefaultModel };
+            try
+            {
+                var discovered = await provider.ListModelsAsync();
+                if (discovered.Count > 0)
+                    models = discovered.ToList();
+            }
+            catch
+            {
+                // Keep defaults if discovery fails.
+            }
+
+            entries.Add(new Contracts.LlmProviderCatalogEntry(
+                provider.ProviderId,
+                provider.DefaultModel,
+                models));
+        }
+
+        return new Contracts.LlmCatalogResponse(
+            _defaultProvider,
+            _defaultModel,
+            entries);
+    }
 }

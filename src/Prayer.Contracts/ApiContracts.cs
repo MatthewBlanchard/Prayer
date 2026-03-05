@@ -60,3 +60,21 @@ public sealed record SessionSummary(
     bool IsHalted,
     bool HasActiveCommand,
     int? CurrentScriptLine);
+
+public sealed record LlmProviderCatalogEntry(
+    string ProviderId,
+    string DefaultModel,
+    IReadOnlyList<string> Models);
+
+public sealed record LlmCatalogResponse(
+    string DefaultProvider,
+    string DefaultModel,
+    IReadOnlyList<LlmProviderCatalogEntry> Providers);
+
+public sealed record SessionLlmConfigResponse(
+    string Provider,
+    string Model);
+
+public sealed record UpdateSessionLlmRequest(
+    string Provider,
+    string Model);

@@ -6,6 +6,7 @@ using Contracts = Prayer.Contracts;
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<PrayerLlmRegistry>();
 builder.Services.AddSingleton<RuntimeSessionStore>();
+builder.Services.AddSingleton<PrayerPreferenceStore>();
 
 var app = builder.Build();
 
@@ -18,6 +19,32 @@ app.MapGet("/health", () => Results.Ok(new
 
 app.MapGet("/api/llm/catalog", async (PrayerLlmRegistry registry) =>
     Results.Ok(await registry.BuildCatalogAsync()));
+
+app.MapGet("/api/preferences/bots", (PrayerPreferenceStore store) =>
+    Results.Ok(new Contracts.BotProfilesResponse(store.LoadBots())));
+
+app.MapPut("/api/preferences/bots", (Contracts.UpsertBotProfileRequest request, PrayerPreferenceStore store) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.Password))
+        return Results.BadRequest("username and password are required");
+
+    store.UpsertBot(request.Username, request.Password);
+    return Results.NoContent();
+});
+
+app.MapGet("/api/preferences/llm", (PrayerPreferenceStore store) =>
+{
+    var preference = store.LoadDefaultLlmPreference();
+    return Results.Ok(new Contracts.DefaultLlmPreferenceResponse(preference?.Provider, preference?.Model));
+});
+
+app.MapPut("/api/preferences/llm", (Contracts.UpdateDefaultLlmPreferenceRequest request, PrayerPreferenceStore store, PrayerLlmRegistry registry) =>
+{
+    var provider = registry.NormalizeProvider(request.Provider);
+    var model = registry.ResolveModel(provider, request.Model);
+    store.SaveDefaultLlmPreference(provider, model);
+    return Results.NoContent();
+});
 
 app.MapGet("/api/runtime/sessions", (RuntimeSessionStore store) =>
     Results.Ok(store.GetAll().Select(ToSessionSummary)));
@@ -726,5 +753,95 @@ internal sealed class PrayerLlmRegistry
             _defaultProvider,
             _defaultModel,
             entries);
+    }
+}
+
+internal sealed class PrayerPreferenceStore
+{
+    public IReadOnlyList<Contracts.BotProfile> LoadBots()
+    {
+        try
+        {
+            if (!File.Exists(AppPaths.SavedBotsFile))
+                return Array.Empty<Contracts.BotProfile>();
+
+            var raw = File.ReadAllText(AppPaths.SavedBotsFile);
+            var loaded = JsonSerializer.Deserialize<List<Contracts.BotProfile>>(raw);
+            if (loaded == null)
+                return Array.Empty<Contracts.BotProfile>();
+
+            return loaded
+                .Where(b =>
+                    !string.IsNullOrWhiteSpace(b.Username) &&
+                    !string.IsNullOrWhiteSpace(b.Password))
+                .Select(b => new Contracts.BotProfile(b.Username.Trim(), b.Password))
+                .ToList();
+        }
+        catch
+        {
+            return Array.Empty<Contracts.BotProfile>();
+        }
+    }
+
+    public void UpsertBot(string username, string password)
+    {
+        var bots = LoadBots().ToList();
+        var normalizedUsername = username.Trim();
+        var existing = bots.FindIndex(b =>
+            string.Equals(b.Username, normalizedUsername, StringComparison.OrdinalIgnoreCase));
+
+        var updated = new Contracts.BotProfile(normalizedUsername, password);
+        if (existing >= 0)
+            bots[existing] = updated;
+        else
+            bots.Add(updated);
+
+        SaveBots(bots);
+    }
+
+    public Contracts.DefaultLlmPreferenceResponse? LoadDefaultLlmPreference()
+    {
+        try
+        {
+            if (!File.Exists(AppPaths.SavedLlmSelectionFile))
+                return null;
+
+            var raw = File.ReadAllText(AppPaths.SavedLlmSelectionFile);
+            var loaded = JsonSerializer.Deserialize<Contracts.DefaultLlmPreferenceResponse>(raw);
+            if (loaded == null)
+                return null;
+
+            var provider = (loaded.Provider ?? string.Empty).Trim().ToLowerInvariant();
+            var model = (loaded.Model ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(provider) || string.IsNullOrWhiteSpace(model))
+                return null;
+
+            return new Contracts.DefaultLlmPreferenceResponse(provider, model);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public void SaveDefaultLlmPreference(string provider, string model)
+    {
+        var normalizedProvider = (provider ?? string.Empty).Trim().ToLowerInvariant();
+        var normalizedModel = (model ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalizedProvider) || string.IsNullOrWhiteSpace(normalizedModel))
+            return;
+
+        var json = JsonSerializer.Serialize(
+            new Contracts.DefaultLlmPreferenceResponse(normalizedProvider, normalizedModel),
+            new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(AppPaths.SavedLlmSelectionFile, json);
+    }
+
+    private static void SaveBots(IReadOnlyList<Contracts.BotProfile> bots)
+    {
+        var json = JsonSerializer.Serialize(
+            bots,
+            new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(AppPaths.SavedBotsFile, json);
     }
 }

@@ -78,3 +78,22 @@ public sealed record SessionLlmConfigResponse(
 public sealed record UpdateSessionLlmRequest(
     string Provider,
     string Model);
+
+public sealed record BotProfile(
+    string Username,
+    string Password);
+
+public sealed record BotProfilesResponse(
+    IReadOnlyList<BotProfile> Bots);
+
+public sealed record UpsertBotProfileRequest(
+    string Username,
+    string Password);
+
+public sealed record DefaultLlmPreferenceResponse(
+    string? Provider,
+    string? Model);
+
+public sealed record UpdateDefaultLlmPreferenceRequest(
+    string Provider,
+    string Model);

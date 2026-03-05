@@ -12,8 +12,6 @@ class Program
     {
         AppPaths.EnsureDirectories();
         AppPaths.ResetDebugLogsOnStartup();
-        var savedLlmSelectionStore = new SavedLlmSelectionStore();
-        var savedLlmSelection = savedLlmSelectionStore.Load();
 
         IAppUi ui = new HtmxBotWindow(
             Environment.GetEnvironmentVariable("UI_PREFIX") ?? "http://localhost:5057/");
@@ -21,6 +19,7 @@ class Program
         if (string.IsNullOrWhiteSpace(prayerBaseUrl))
             throw new InvalidOperationException("PRAYER_BASE_URL is required (legacy in-process runtime path is disabled).");
         var prayerApi = new PrayerApiClient(prayerBaseUrl);
+        var savedLlmSelection = await prayerApi.GetDefaultLlmPreferenceAsync();
         var llmCatalog = await prayerApi.GetLlmCatalogAsync();
         var availableProviders = llmCatalog.Providers.Select(p => p.ProviderId).ToList();
         ui.SetAvailableProviders(availableProviders);
@@ -49,8 +48,7 @@ class Program
         var botSessions = new Dictionary<string, BotSession>(StringComparer.Ordinal);
         string? activeBotId = null;
         object botLock = new();
-        var savedBotStore = new SavedBotStore();
-        var savedBots = savedBotStore.Load();
+        var savedBots = (await prayerApi.GetSavedBotsAsync()).ToList();
 
         channels.Status.Writer.TryWrite(
             $"Planner LLM: {currentPlannerProvider}/{currentPlannerModel}");
@@ -210,11 +208,6 @@ class Program
             }
         }
 
-        void UpsertSavedBot(string username, string password)
-        {
-            savedBotStore.Upsert(savedBots, username, password);
-        }
-
         snapshotPublisher.PublishNoBotSnapshot();
 
         if (savedBots.Count > 0)
@@ -325,7 +318,14 @@ class Program
                                     activeBotId = session.Id;
                             }
                             snapshotPublisher.LogBotTabsIfChanged("manual_add_added");
-                            UpsertSavedBot(username, passwordToSave);
+                            try
+                            {
+                                await prayerApi.UpsertSavedBotAsync(username, passwordToSave);
+                            }
+                            catch (Exception ex)
+                            {
+                                channels.Status.Writer.TryWrite($"Failed to save bot profile: {ex.Message}");
+                            }
 
                             channels.Status.Writer.TryWrite($"Bot loaded: {session.Label}");
                             snapshotPublisher.PublishActiveSnapshot();
@@ -372,7 +372,9 @@ class Program
                             }
                             currentPlannerProvider = selectedProvider;
                             currentPlannerModel = selectedModel;
-                            savedLlmSelectionStore.Save(currentPlannerProvider, currentPlannerModel);
+                            await prayerApi.SetDefaultLlmPreferenceAsync(
+                                currentPlannerProvider,
+                                currentPlannerModel);
                             channels.Status.Writer.TryWrite(
                                 $"Planner LLM set to {currentPlannerProvider}/{currentPlannerModel}");
                             LogAuth(

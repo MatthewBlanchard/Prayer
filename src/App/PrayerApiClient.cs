@@ -122,6 +122,33 @@ public sealed class PrayerApiClient
         response.EnsureSuccessStatusCode();
     }
 
+    public async Task<IReadOnlyList<Contracts.BotProfile>> GetSavedBotsAsync()
+    {
+        var response = await _http.GetFromJsonAsync<Contracts.BotProfilesResponse>("api/preferences/bots");
+        return response?.Bots ?? Array.Empty<Contracts.BotProfile>();
+    }
+
+    public async Task UpsertSavedBotAsync(string username, string password)
+    {
+        var response = await _http.PutAsJsonAsync(
+            "api/preferences/bots",
+            new Contracts.UpsertBotProfileRequest(username, password));
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<Contracts.DefaultLlmPreferenceResponse?> GetDefaultLlmPreferenceAsync()
+    {
+        return await _http.GetFromJsonAsync<Contracts.DefaultLlmPreferenceResponse>("api/preferences/llm");
+    }
+
+    public async Task SetDefaultLlmPreferenceAsync(string provider, string model)
+    {
+        var response = await _http.PutAsJsonAsync(
+            "api/preferences/llm",
+            new Contracts.UpdateDefaultLlmPreferenceRequest(provider, model));
+        response.EnsureSuccessStatusCode();
+    }
+
     private static string EnsureTrailingSlash(string url)
     {
         return url.EndsWith("/", StringComparison.Ordinal) ? url : url + "/";

@@ -19,10 +19,17 @@ dotnet run --project src/Prayer/Prayer.csproj
 ## Current scaffold endpoints
 
 - `GET /health`
+- `GET /api/llm/catalog`
+- `GET /api/preferences/bots`
+- `PUT /api/preferences/bots`
+- `GET /api/preferences/llm`
+- `PUT /api/preferences/llm`
 - `GET /api/runtime/sessions`
 - `POST /api/runtime/sessions`
 - `POST /api/runtime/sessions/register`
 - `GET /api/runtime/sessions/{id}`
+- `GET /api/runtime/sessions/{id}/llm`
+- `PUT /api/runtime/sessions/{id}/llm`
 - `GET /api/runtime/sessions/{id}/snapshot`
 - `GET /api/runtime/sessions/{id}/status`
 - `GET /api/runtime/sessions/{id}/state`

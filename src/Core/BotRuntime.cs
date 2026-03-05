@@ -87,6 +87,8 @@ public sealed class BotRuntime
                         try
                         {
                             _agent.SetScript(newInput, scriptState, preserveAssociatedPrompt: true);
+                            _agent.ActivateScriptControl();
+                            _publishStatus($"[{_label}] Script loaded and activated");
                         }
                         catch (FormatException ex)
                         {
@@ -102,6 +104,12 @@ public sealed class BotRuntime
                         if (string.IsNullOrWhiteSpace(generationInput))
                             continue;
 
+                        if (generationInput.Contains("(no active mission objectives)", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _publishStatus($"[{_label}] No active mission objectives available to generate a script.");
+                            continue;
+                        }
+
                         _agent.InterruptActiveCommand("Interrupted by script generation request");
                         _publishStatus($"[{_label}] Generating script");
 
@@ -116,6 +124,7 @@ public sealed class BotRuntime
                                 maxAttempts: _scriptGenerationMaxAttempts);
                             _agent.ActivateScriptControl();
                             _agent.SetScript(generatedScript, scriptState);
+                            _publishStatus($"[{_label}] Generated script loaded and activated");
                         }
                         catch (FormatException ex)
                         {
@@ -202,6 +211,7 @@ public sealed class BotRuntime
                     if (result != null)
                     {
                         string stepKey = BuildScriptStepKey(result);
+                        _publishStatus($"[{_label}] Executing {FormatCommand(result)}");
                         try
                         {
                             await _agent.ExecuteAsync(_client, result, currentState);

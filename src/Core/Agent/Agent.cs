@@ -161,7 +161,7 @@ public class SpaceMoltAgent
     }
 
     public Task ExecuteAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult result,
         GameState state)
     {

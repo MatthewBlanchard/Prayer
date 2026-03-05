@@ -153,7 +153,7 @@ public sealed class CommandExecutionEngine
     }
 
     public async Task ExecuteAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult result,
         GameState state)
     {

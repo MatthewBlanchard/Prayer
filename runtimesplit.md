@@ -9,11 +9,13 @@ Detailed implementation plan remains in `MIDDLE_RUNTIME_SPLIT_PLAN.md`.
 - [x] Step 1: Introduce middle-runtime contracts (no behavior changes)
 - [x] Step 2: Add SpaceMolt adapter implementing new contracts
 - [x] Step 3: Decouple command contracts from concrete client
-- [ ] Step 4: Decouple execution engine from concrete client
+- [x] Step 4: Decouple execution engine from concrete client
 - [ ] Step 5: Move DSL package boundary into middle runtime
 - [ ] Step 6: Extract runtime-state builder from SpaceMolt assembler
 - [ ] Step 7: Introduce `IRuntimeStateProvider` and wire runtime to it
 - [ ] Step 8: Create middle-runtime host facade
+- [ ] Step 9: Move bot session ownership into runtime host
+- [ ] Step 10: Enforce UI/runtime bot boundary (`{bot_id, command}` only)
 
 ## Step 0 completion evidence
 
@@ -41,7 +43,14 @@ Detailed implementation plan remains in `MIDDLE_RUNTIME_SPLIT_PLAN.md`.
 - `src/Core/Commands/*` (command implementations migrated from `SpaceMoltHttpClient` to `IRuntimeTransport`)
 - `src/Infra/SpaceMolt/SpaceMoltHTTPClient.cs` (implements `IRuntimeTransport` compatibility surface to preserve current wiring)
 
+## Step 4 completion evidence
+
+- `src/Core/Agent/CommandExecutionEngine.cs` (`ExecuteAsync` now accepts `IRuntimeTransport`)
+- `src/Core/Agent/Agent.cs` (agent execution path now forwards `IRuntimeTransport` to execution engine)
+
 ## Notes
 
 - Current migration stance keeps session/retry/rate-limit handling in `SpaceMoltHttpClient` during early extraction steps to minimize behavioral risk.
 - Runtime-layer session ownership can be introduced later as an explicit contract once transport decoupling is complete.
+- Step 9 target state: all bot session lifecycle/lookup/mutation lives in runtime; app/UI no longer owns bot session internals.
+- Step 10 target state: UI sends runtime commands as `{ bot_id, command }`; bot switching and active-selection state stay entirely in UI.

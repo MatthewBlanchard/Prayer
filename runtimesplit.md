@@ -12,7 +12,7 @@ Detailed implementation plan remains in `MIDDLE_RUNTIME_SPLIT_PLAN.md`.
 - [x] Step 4: Decouple execution engine from concrete client
 - [x] Step 5: Move DSL package boundary into middle runtime
 - [x] Step 6: Extract runtime-state builder from SpaceMolt assembler
-- [ ] Step 7: Introduce `IRuntimeStateProvider` and wire runtime to it
+- [x] Step 7: Introduce `IRuntimeStateProvider` and wire runtime to it
 - [ ] Step 8: Create middle-runtime host facade
 - [ ] Step 9: Move bot session ownership into runtime host
 - [ ] Step 10: Enforce UI/runtime bot boundary (`{bot_id, command}` only)
@@ -57,6 +57,12 @@ Detailed implementation plan remains in `MIDDLE_RUNTIME_SPLIT_PLAN.md`.
 
 - `src/MiddleRuntime/State/RuntimeStateBuilder.cs` added for pure runtime-side state projection/defaulting.
 - `src/Infra/SpaceMolt/SpaceMoltGameStateAssembler.cs` now gathers payload/cache data and delegates final `GameState` projection/default application to `RuntimeStateBuilder`.
+
+## Step 7 completion evidence
+
+- `src/Infra/SpaceMolt/SpaceMoltRuntimeStateProvider.cs` added implementing `IRuntimeStateProvider`.
+- `src/Core/BotRuntime.cs` now reads state via `IRuntimeStateProvider.GetLatestStateAsync()` for loop snapshots and post-command refreshes.
+- `src/App/Program.cs` wires `SpaceMoltRuntimeStateProvider` into bot session/runtime construction.
 
 ## Notes
 

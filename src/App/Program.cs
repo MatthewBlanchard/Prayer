@@ -304,6 +304,7 @@ class Program
             var client = new SpaceMoltHttpClient();
             client.DebugContext = label;
             var runtimeTransport = new SpaceMoltRuntimeTransportAdapter(client);
+            var runtimeStateProvider = new SpaceMoltRuntimeStateProvider(client);
 
             try
             {
@@ -387,7 +388,8 @@ class Program
                         label,
                         agent,
                         client,
-                        runtimeTransport),
+                        runtimeTransport,
+                        runtimeStateProvider),
                     password);
             }
             catch (Exception ex)
@@ -448,6 +450,7 @@ class Program
                 bot.Label,
                 bot.Agent,
                 bot.Client,
+                bot.RuntimeStateProvider ?? new SpaceMoltRuntimeStateProvider(bot.Client),
                 bot.ControlInputQueue.Reader,
                 bot.GenerateScriptQueue.Reader,
                 bot.SaveExampleQueue.Reader,

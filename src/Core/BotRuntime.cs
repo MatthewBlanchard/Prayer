@@ -9,6 +9,7 @@ public sealed class BotRuntime
     private readonly string _label;
     private readonly SpaceMoltAgent _agent;
     private readonly SpaceMoltHttpClient _client;
+    private readonly IRuntimeStateProvider _stateProvider;
     private readonly ChannelReader<string> _controlInputReader;
     private readonly ChannelReader<string> _generateScriptReader;
     private readonly ChannelReader<bool> _saveExampleReader;
@@ -28,6 +29,7 @@ public sealed class BotRuntime
         string label,
         SpaceMoltAgent agent,
         SpaceMoltHttpClient client,
+        IRuntimeStateProvider stateProvider,
         ChannelReader<string> controlInputReader,
         ChannelReader<string> generateScriptReader,
         ChannelReader<bool> saveExampleReader,
@@ -46,6 +48,7 @@ public sealed class BotRuntime
         _label = label;
         _agent = agent;
         _client = client;
+        _stateProvider = stateProvider;
         _controlInputReader = controlInputReader;
         _generateScriptReader = generateScriptReader;
         _saveExampleReader = saveExampleReader;
@@ -78,7 +81,7 @@ public sealed class BotRuntime
                             continue;
 
                         _agent.InterruptActiveCommand("Interrupted by control input update");
-                        var scriptState = _getLatestState() ?? _client.GetGameState();
+                        var scriptState = _getLatestState() ?? await _stateProvider.GetLatestStateAsync();
                         _setLatestState(scriptState);
 
                         try
@@ -102,7 +105,7 @@ public sealed class BotRuntime
                         _agent.InterruptActiveCommand("Interrupted by script generation request");
                         _publishStatus($"[{_label}] Generating script");
 
-                        var scriptState = _getLatestState() ?? _client.GetGameState();
+                        var scriptState = _getLatestState() ?? await _stateProvider.GetLatestStateAsync();
                         _setLatestState(scriptState);
 
                         try
@@ -141,7 +144,7 @@ public sealed class BotRuntime
                     {
                         _agent.InterruptActiveCommand("Interrupted by user halt");
 
-                        var haltState = _getLatestState() ?? _client.GetGameState();
+                        var haltState = _getLatestState() ?? await _stateProvider.GetLatestStateAsync();
                         _setLatestState(haltState);
 
                         try
@@ -162,7 +165,7 @@ public sealed class BotRuntime
                     {
                         if (_isLoopEnabled() && !string.IsNullOrWhiteSpace(_agent.CurrentControlInput))
                         {
-                            var scriptState = _getLatestState() ?? _client.GetGameState();
+                            var scriptState = _getLatestState() ?? await _stateProvider.GetLatestStateAsync();
                             _setLatestState(scriptState);
 
                             try
@@ -179,7 +182,7 @@ public sealed class BotRuntime
                         if (_getLatestState() == null ||
                             DateTime.UtcNow - _getLastHaltedSnapshotAt() > TimeSpan.FromSeconds(1))
                         {
-                            var haltedState = _client.GetGameState();
+                            var haltedState = await _stateProvider.GetLatestStateAsync();
                             _setLatestState(haltedState);
                             _publishSnapshot(haltedState);
                             _setLastHaltedSnapshotAt(DateTime.UtcNow);
@@ -189,7 +192,7 @@ public sealed class BotRuntime
                         continue;
                     }
 
-                    var currentState = _client.GetGameState();
+                    var currentState = await _stateProvider.GetLatestStateAsync();
                     _setLatestState(currentState);
                     _publishSnapshot(currentState);
 
@@ -229,7 +232,7 @@ public sealed class BotRuntime
 
                         try
                         {
-                            var postActionState = _client.GetGameState();
+                            var postActionState = await _stateProvider.GetLatestStateAsync();
                             postActionState = await TryAutoDockedMaintenanceAsync(
                                 postActionState,
                                 includeScriptRefuel: true);
@@ -307,7 +310,7 @@ public sealed class BotRuntime
         try
         {
             await _client.ExecuteAsync("withdraw_credits", new { amount = storageCreditsBefore });
-            var refreshed = _client.GetGameState();
+            var refreshed = await _stateProvider.GetLatestStateAsync();
             int withdrawn = Math.Max(0, storageCreditsBefore - refreshed.StorageCredits);
 
             if (withdrawn > 0)
@@ -353,7 +356,7 @@ public sealed class BotRuntime
             foreach (var missionId in completableMissionIds)
                 await _client.ExecuteAsync("complete_mission", new { mission_id = missionId });
 
-            var refreshed = _client.GetGameState();
+            var refreshed = await _stateProvider.GetLatestStateAsync();
             int completedCount = Math.Max(0, state.ActiveMissions.Length - refreshed.ActiveMissions.Length);
 
             if (completedCount > 0)
@@ -377,7 +380,7 @@ public sealed class BotRuntime
         try
         {
             await _client.ExecuteAsync("refuel", new { });
-            var refreshed = _client.GetGameState();
+            var refreshed = await _stateProvider.GetLatestStateAsync();
 
             if (refreshed.Fuel > fuelBefore)
                 _publishStatus($"[{_label}] Auto-refueled between script steps");

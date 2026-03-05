@@ -11,13 +11,15 @@ public sealed class BotSession
         string label,
         SpaceMoltAgent agent,
         SpaceMoltHttpClient client,
-        IRuntimeTransport? runtimeTransport = null)
+        IRuntimeTransport? runtimeTransport = null,
+        IRuntimeStateProvider? runtimeStateProvider = null)
     {
         Id = id;
         Label = label;
         Agent = agent;
         Client = client;
         RuntimeTransport = runtimeTransport;
+        RuntimeStateProvider = runtimeStateProvider;
     }
 
     public string Id { get; }
@@ -25,6 +27,7 @@ public sealed class BotSession
     public SpaceMoltAgent Agent { get; }
     public SpaceMoltHttpClient Client { get; }
     public IRuntimeTransport? RuntimeTransport { get; }
+    public IRuntimeStateProvider? RuntimeStateProvider { get; }
     public bool LoopEnabled { get; set; }
     public GameState? LatestState { get; set; }
     public DateTime LastHaltedSnapshotAt { get; set; } = DateTime.MinValue;

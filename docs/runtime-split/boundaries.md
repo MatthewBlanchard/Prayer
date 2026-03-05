@@ -7,6 +7,12 @@
 - `Prayer.Infra.SpaceMolt` owns concrete SpaceMolt HTTP transport/session/retry/rate-limit behavior.
 - Concrete `SpaceMoltHttpClient` stays in infra and must not leak into runtime orchestration code.
 
+## Deployment assumption (current)
+
+- Prayer is deployed for a single trusted operator environment.
+- Multi-user auth, tenant isolation, and public-internet hardening are out of scope for this phase.
+- Multiple runtime sessions are still supported, but they are not treated as separate security tenants.
+
 ## Naming and component direction
 
 - Service host name: `Prayer`.

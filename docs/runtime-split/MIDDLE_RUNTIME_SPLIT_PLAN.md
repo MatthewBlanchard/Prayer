@@ -11,6 +11,7 @@ Date: 2026-03-05
   - `src/MiddleRuntime/Execution/CommandExecutionEngine.cs`
   - `src/MiddleRuntime/Agent/*`
 - In progress: `Prayer` HTTP host scaffold added at `src/Prayer`.
+- Completed: Prayer now runs real runtime worker sessions and exposes explicit runtime control endpoints (script, generate, execute, halt, loop, status, snapshot).
 
 ## Goal
 
@@ -19,6 +20,12 @@ Extract the current in-process middle runtime into an HTTP service named `Prayer
 - Runtime semantics in `Prayer` / `Prayer.Runtime`
 - SpaceMolt transport details in `Prayer.Infra.SpaceMolt`
 - UI/app as HTTP client of Prayer
+
+## Scope guardrails (current phase)
+
+- Target deployment is a single trusted operator/service network.
+- Do not add authn/authz or tenant isolation work in this phase.
+- Focus on runtime extraction, HTTP control surface, and client migration.
 
 ## Stage 1: Boundary hardening in current solution
 
@@ -56,14 +63,14 @@ Exit criteria:
 Exit criteria:
 - Existing UI works with Prayer as external runtime service.
 
-## Stage 4: Packaging and isolation
+## Stage 4: Packaging and operations
 
 1. Split projects cleanly (`Prayer`, `Prayer.Runtime`, `Prayer.Infra.SpaceMolt` as needed).
 2. Add dependency checks to enforce boundary direction.
 3. Add health/readiness endpoints and basic observability (structured logs + metrics hooks).
 
 Exit criteria:
-- Prayer can run independently and serve multiple runtime sessions.
+- Prayer can run independently and serve multiple runtime sessions in a trusted single-operator environment.
 
 ## Regression discipline
 

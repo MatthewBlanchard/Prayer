@@ -27,7 +27,7 @@ public sealed class PrayerApiClient
         var response = await _http.PostAsJsonAsync(
             "api/runtime/sessions",
             new Contracts.CreateSessionRequest(username, password, label));
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessWithDetailsAsync(response);
 
         var session = await response.Content.ReadFromJsonAsync<Contracts.SessionSummary>();
         if (session == null || string.IsNullOrWhiteSpace(session.Id))
@@ -54,7 +54,7 @@ public sealed class PrayerApiClient
         var response = await _http.PostAsJsonAsync(
             "api/runtime/sessions/register",
             new Contracts.RegisterSessionRequest(username, empire, registrationCode, label));
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessWithDetailsAsync(response);
 
         var result = await response.Content.ReadFromJsonAsync<Contracts.RegisterSessionResponse>();
         if (result == null || string.IsNullOrWhiteSpace(result.SessionId) || string.IsNullOrWhiteSpace(result.Password))
@@ -68,7 +68,7 @@ public sealed class PrayerApiClient
         var response = await _http.PostAsJsonAsync(
             $"api/runtime/sessions/{sessionId}/commands",
             new Contracts.RuntimeCommandRequest(command, argument));
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessWithDetailsAsync(response);
     }
 
     public async Task SetLoopEnabledAsync(string sessionId, bool enabled)
@@ -76,7 +76,7 @@ public sealed class PrayerApiClient
         var response = await _http.PutAsJsonAsync(
             $"api/runtime/sessions/{sessionId}/loop",
             new Contracts.LoopUpdateRequest(enabled));
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessWithDetailsAsync(response);
     }
 
     public async Task<AppPrayerRuntimeState> GetRuntimeStateAsync(string sessionId)
@@ -111,7 +111,7 @@ public sealed class PrayerApiClient
     {
         var response = await _http.DeleteAsync($"api/runtime/sessions/{sessionId}");
         if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.NotFound)
-            response.EnsureSuccessStatusCode();
+            await EnsureSuccessWithDetailsAsync(response);
     }
 
     public async Task SetSessionLlmAsync(string sessionId, string provider, string model)
@@ -119,7 +119,7 @@ public sealed class PrayerApiClient
         var response = await _http.PutAsJsonAsync(
             $"api/runtime/sessions/{sessionId}/llm",
             new Contracts.UpdateSessionLlmRequest(provider, model));
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessWithDetailsAsync(response);
     }
 
     public async Task<IReadOnlyList<Contracts.BotProfile>> GetSavedBotsAsync()
@@ -133,7 +133,7 @@ public sealed class PrayerApiClient
         var response = await _http.PutAsJsonAsync(
             "api/preferences/bots",
             new Contracts.UpsertBotProfileRequest(username, password));
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessWithDetailsAsync(response);
     }
 
     public async Task<Contracts.DefaultLlmPreferenceResponse?> GetDefaultLlmPreferenceAsync()
@@ -146,12 +146,36 @@ public sealed class PrayerApiClient
         var response = await _http.PutAsJsonAsync(
             "api/preferences/llm",
             new Contracts.UpdateDefaultLlmPreferenceRequest(provider, model));
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessWithDetailsAsync(response);
     }
 
     private static string EnsureTrailingSlash(string url)
     {
         return url.EndsWith("/", StringComparison.Ordinal) ? url : url + "/";
+    }
+
+    private static async Task EnsureSuccessWithDetailsAsync(HttpResponseMessage response)
+    {
+        if (response.IsSuccessStatusCode)
+            return;
+
+        string body = string.Empty;
+        try
+        {
+            body = await response.Content.ReadAsStringAsync();
+        }
+        catch
+        {
+            // Best effort.
+        }
+
+        var reason = string.IsNullOrWhiteSpace(body)
+            ? $"{(int)response.StatusCode} {response.ReasonPhrase}"
+            : $"{(int)response.StatusCode} {response.ReasonPhrase}: {body}";
+        throw new HttpRequestException(
+            $"Prayer request failed: {reason}",
+            null,
+            response.StatusCode);
     }
 }
 

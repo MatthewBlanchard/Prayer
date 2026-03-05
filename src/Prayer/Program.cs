@@ -5,6 +5,8 @@ using System.Text.Json;
 using System.Threading.Channels;
 using Contracts = Prayer.Contracts;
 
+AppPaths.EnsureDirectories();
+
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.AddSimpleConsole(options =>
 {
@@ -77,6 +79,7 @@ app.MapPut("/api/preferences/bots", (Contracts.UpsertBotProfileRequest request, 
         return Results.BadRequest("username and password are required");
 
     store.UpsertBot(request.Username, request.Password);
+    logger.LogInformation("Saved bot profile for username {Username}", request.Username.Trim());
     return Results.NoContent();
 });
 
@@ -91,6 +94,7 @@ app.MapPut("/api/preferences/llm", (Contracts.UpdateDefaultLlmPreferenceRequest 
     var provider = registry.NormalizeProvider(request.Provider);
     var model = registry.ResolveModel(provider, request.Model);
     store.SaveDefaultLlmPreference(provider, model);
+    logger.LogInformation("Saved default LLM preference {Provider}/{Model}", provider, model);
     return Results.NoContent();
 });
 

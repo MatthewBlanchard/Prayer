@@ -357,6 +357,10 @@ class Program
                         if (string.Equals(currentPlannerProvider, selectedProvider, StringComparison.OrdinalIgnoreCase) &&
                             string.Equals(currentPlannerModel, selectedModel, StringComparison.Ordinal))
                         {
+                            channels.Status.Writer.TryWrite(
+                                $"Planner LLM already set to {currentPlannerProvider}/{currentPlannerModel}");
+                            LogAuth(
+                                $"llm_switch_noop | provider={currentPlannerProvider} | model={currentPlannerModel}");
                             continue;
                         }
 

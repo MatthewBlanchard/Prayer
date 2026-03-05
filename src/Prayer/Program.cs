@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using System.Threading.Channels;
+using Contracts = Prayer.Contracts;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<RuntimeSessionStore>();
@@ -14,9 +16,9 @@ app.MapGet("/health", () => Results.Ok(new
 }));
 
 app.MapGet("/api/runtime/sessions", (RuntimeSessionStore store) =>
-    Results.Ok(store.GetAll().Select(SessionSummary.FromSession)));
+    Results.Ok(store.GetAll().Select(ToSessionSummary)));
 
-app.MapPost("/api/runtime/sessions", async (CreateSessionRequest request, RuntimeSessionStore store) =>
+app.MapPost("/api/runtime/sessions", async (Contracts.CreateSessionRequest request, RuntimeSessionStore store) =>
 {
     if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.Password))
         return Results.BadRequest("username and password are required");
@@ -24,11 +26,33 @@ app.MapPost("/api/runtime/sessions", async (CreateSessionRequest request, Runtim
     try
     {
         var session = await store.CreateAsync(request);
-        return Results.Created($"/api/runtime/sessions/{session.Id}", SessionSummary.FromSession(session));
+        return Results.Created($"/api/runtime/sessions/{session.Id}", ToSessionSummary(session));
     }
     catch (Exception ex)
     {
         return Results.BadRequest($"failed to create session: {ex.Message}");
+    }
+});
+
+app.MapPost("/api/runtime/sessions/register", async (Contracts.RegisterSessionRequest request, RuntimeSessionStore store) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Username) ||
+        string.IsNullOrWhiteSpace(request.Empire) ||
+        string.IsNullOrWhiteSpace(request.RegistrationCode))
+    {
+        return Results.BadRequest("username, empire, and registrationCode are required");
+    }
+
+    try
+    {
+        var (session, password) = await store.RegisterAsync(request);
+        return Results.Created(
+            $"/api/runtime/sessions/{session.Id}",
+            new Contracts.RegisterSessionResponse(session.Id, password));
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest($"failed to register session: {ex.Message}");
     }
 });
 
@@ -42,7 +66,7 @@ app.MapDelete("/api/runtime/sessions/{id}", (string id, RuntimeSessionStore stor
 app.MapGet("/api/runtime/sessions/{id}", (string id, RuntimeSessionStore store) =>
 {
     return store.TryGet(id, out var session)
-        ? Results.Ok(SessionSummary.FromSession(session))
+        ? Results.Ok(ToSessionSummary(session))
         : Results.NotFound();
 });
 
@@ -54,9 +78,13 @@ app.MapGet("/api/runtime/sessions/{id}/snapshot", (string id, RuntimeSessionStor
     var snapshot = session.RuntimeHost.GetSnapshot();
     var state = session.LatestState;
 
-    return Results.Ok(new RuntimeSnapshotResponse(
+    return Results.Ok(new Contracts.RuntimeSnapshotResponse(
         SessionId: session.Id,
-        Snapshot: snapshot,
+        Snapshot: new Contracts.RuntimeHostSnapshotDto(
+            snapshot.IsHalted,
+            snapshot.HasActiveCommand,
+            snapshot.CurrentScriptLine,
+            snapshot.CurrentScript),
         LatestSystem: state?.System,
         LatestPoi: state?.CurrentPOI.Id,
         Fuel: state?.Fuel,
@@ -73,7 +101,15 @@ app.MapGet("/api/runtime/sessions/{id}/status", (string id, RuntimeSessionStore 
     return Results.Ok(session.GetStatusLines());
 });
 
-app.MapPost("/api/runtime/sessions/{id}/script", (string id, SetScriptRequest request, RuntimeSessionStore store) =>
+app.MapGet("/api/runtime/sessions/{id}/state", (string id, RuntimeSessionStore store) =>
+{
+    if (!store.TryGet(id, out var session))
+        return Results.NotFound();
+
+    return Results.Ok(session.BuildRuntimeStateSnapshot());
+});
+
+app.MapPost("/api/runtime/sessions/{id}/script", (string id, Contracts.SetScriptRequest request, RuntimeSessionStore store) =>
 {
     if (!store.TryGet(id, out var session))
         return Results.NotFound();
@@ -81,10 +117,10 @@ app.MapPost("/api/runtime/sessions/{id}/script", (string id, SetScriptRequest re
     if (!session.TrySetScript(request.Script, out var message))
         return Results.BadRequest(message);
 
-    return Results.Ok(new CommandAckResponse(session.Id, PrayerRuntimeCommandNames.SetScript, message));
+    return Results.Ok(new Contracts.CommandAckResponse(session.Id, PrayerRuntimeCommandNames.SetScript, message));
 });
 
-app.MapPost("/api/runtime/sessions/{id}/script/generate", (string id, GenerateScriptRequest request, RuntimeSessionStore store) =>
+app.MapPost("/api/runtime/sessions/{id}/script/generate", (string id, Contracts.GenerateScriptRequest request, RuntimeSessionStore store) =>
 {
     if (!store.TryGet(id, out var session))
         return Results.NotFound();
@@ -92,7 +128,7 @@ app.MapPost("/api/runtime/sessions/{id}/script/generate", (string id, GenerateSc
     if (!session.TryGenerateScript(request.Prompt, out var message))
         return Results.BadRequest(message);
 
-    return Results.Ok(new CommandAckResponse(session.Id, PrayerRuntimeCommandNames.GenerateScript, message));
+    return Results.Ok(new Contracts.CommandAckResponse(session.Id, PrayerRuntimeCommandNames.GenerateScript, message));
 });
 
 app.MapPost("/api/runtime/sessions/{id}/script/execute", (string id, RuntimeSessionStore store) =>
@@ -103,7 +139,7 @@ app.MapPost("/api/runtime/sessions/{id}/script/execute", (string id, RuntimeSess
     if (!session.TryExecuteScript(out var message))
         return Results.BadRequest(message);
 
-    return Results.Ok(new CommandAckResponse(session.Id, PrayerRuntimeCommandNames.ExecuteScript, message));
+    return Results.Ok(new Contracts.CommandAckResponse(session.Id, PrayerRuntimeCommandNames.ExecuteScript, message));
 });
 
 app.MapPost("/api/runtime/sessions/{id}/halt", (string id, RuntimeSessionStore store) =>
@@ -114,7 +150,7 @@ app.MapPost("/api/runtime/sessions/{id}/halt", (string id, RuntimeSessionStore s
     if (!session.TryHalt(out var message))
         return Results.BadRequest(message);
 
-    return Results.Ok(new CommandAckResponse(session.Id, PrayerRuntimeCommandNames.Halt, message));
+    return Results.Ok(new Contracts.CommandAckResponse(session.Id, PrayerRuntimeCommandNames.Halt, message));
 });
 
 app.MapPost("/api/runtime/sessions/{id}/save-example", (string id, RuntimeSessionStore store) =>
@@ -125,19 +161,19 @@ app.MapPost("/api/runtime/sessions/{id}/save-example", (string id, RuntimeSessio
     if (!session.TrySaveExample(out var message))
         return Results.BadRequest(message);
 
-    return Results.Ok(new CommandAckResponse(session.Id, PrayerRuntimeCommandNames.SaveExample, message));
+    return Results.Ok(new Contracts.CommandAckResponse(session.Id, PrayerRuntimeCommandNames.SaveExample, message));
 });
 
-app.MapPut("/api/runtime/sessions/{id}/loop", (string id, LoopUpdateRequest request, RuntimeSessionStore store) =>
+app.MapPut("/api/runtime/sessions/{id}/loop", (string id, Contracts.LoopUpdateRequest request, RuntimeSessionStore store) =>
 {
     if (!store.TryGet(id, out var session))
         return Results.NotFound();
 
     session.SetLoopEnabled(request.Enabled);
-    return Results.Ok(new LoopUpdateResponse(session.Id, session.LoopEnabled));
+    return Results.Ok(new Contracts.LoopUpdateResponse(session.Id, session.LoopEnabled));
 });
 
-app.MapPost("/api/runtime/sessions/{id}/commands", (string id, PrayerRuntimeCommandRequest request, RuntimeSessionStore store) =>
+app.MapPost("/api/runtime/sessions/{id}/commands", (string id, Contracts.RuntimeCommandRequest request, RuntimeSessionStore store) =>
 {
     if (!store.TryGet(id, out var session))
         return Results.NotFound();
@@ -145,7 +181,7 @@ app.MapPost("/api/runtime/sessions/{id}/commands", (string id, PrayerRuntimeComm
     if (!session.TryApplyCommand(request, out var message))
         return Results.BadRequest(message);
 
-    return Results.Ok(new CommandAckResponse(session.Id, request.Command, message));
+    return Results.Ok(new Contracts.CommandAckResponse(session.Id, request.Command, message));
 });
 
 app.Lifetime.ApplicationStopping.Register(() =>
@@ -153,6 +189,20 @@ app.Lifetime.ApplicationStopping.Register(() =>
     var store = app.Services.GetRequiredService<RuntimeSessionStore>();
     store.Dispose();
 });
+
+static Contracts.SessionSummary ToSessionSummary(PrayerRuntimeSession session)
+{
+    var snapshot = session.RuntimeHost.GetSnapshot();
+    return new Contracts.SessionSummary(
+        session.Id,
+        session.Label,
+        session.CreatedUtc,
+        session.LastUpdatedUtc,
+        session.LoopEnabled,
+        snapshot.IsHalted,
+        snapshot.HasActiveCommand,
+        snapshot.CurrentScriptLine);
+}
 
 app.Run();
 
@@ -168,45 +218,35 @@ internal sealed class RuntimeSessionStore : IDisposable
             .ToList();
     }
 
-    public async Task<PrayerRuntimeSession> CreateAsync(CreateSessionRequest request)
+    public async Task<PrayerRuntimeSession> CreateAsync(Contracts.CreateSessionRequest request)
     {
-        string label = string.IsNullOrWhiteSpace(request.Label)
-            ? request.Username.Trim()
-            : request.Label.Trim();
-
-        var client = new SpaceMoltHttpClient
-        {
-            DebugContext = label
-        };
-
+        string label = ResolveLabel(request.Username, request.Label);
+        var client = BuildClient(label);
         try
         {
             await client.LoginAsync(request.Username.Trim(), request.Password);
+            return CreateSessionFromAuthenticatedClient(label, client);
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
+    }
 
-            var transport = new SpaceMoltRuntimeTransportAdapter(client);
-            var stateProvider = new SpaceMoltRuntimeStateProvider(client);
+    public async Task<(PrayerRuntimeSession Session, string Password)> RegisterAsync(Contracts.RegisterSessionRequest request)
+    {
+        string label = ResolveLabel(request.Username, request.Label);
+        var client = BuildClient(label);
+        try
+        {
+            var password = await client.RegisterAsync(
+                request.Username.Trim(),
+                request.Empire.Trim().ToLowerInvariant(),
+                request.RegistrationCode.Trim());
 
-            var llamaCppBaseUrl = Environment.GetEnvironmentVariable("LLAMACPP_BASE_URL")
-                ?? "http://localhost:8080";
-            var llamaCppModel = Environment.GetEnvironmentVariable("LLAMACPP_MODEL")
-                ?? "model";
-            ILLMClient planner = new LlamaCppClient(llamaCppBaseUrl, llamaCppModel);
-
-            var agent = new SpaceMoltAgent(planner, planner, scriptExampleRag: null, saveCheckpoint: null);
-            agent.Halt("Awaiting script input");
-
-            var now = DateTime.UtcNow;
-            var session = new PrayerRuntimeSession(
-                id: Guid.NewGuid().ToString("N"),
-                label: label,
-                createdUtc: now,
-                agent: agent,
-                client: client,
-                runtimeTransport: transport,
-                runtimeStateProvider: stateProvider);
-
-            _sessions[session.Id] = session;
-            return session;
+            var session = CreateSessionFromAuthenticatedClient(label, client);
+            return (session, password);
         }
         catch
         {
@@ -233,6 +273,49 @@ internal sealed class RuntimeSessionStore : IDisposable
     {
         foreach (var key in _sessions.Keys.ToList())
             Remove(key);
+    }
+
+    private PrayerRuntimeSession CreateSessionFromAuthenticatedClient(string label, SpaceMoltHttpClient client)
+    {
+        var transport = new SpaceMoltRuntimeTransportAdapter(client);
+        var stateProvider = new SpaceMoltRuntimeStateProvider(client);
+
+        var llamaCppBaseUrl = Environment.GetEnvironmentVariable("LLAMACPP_BASE_URL")
+            ?? "http://localhost:8080";
+        var llamaCppModel = Environment.GetEnvironmentVariable("LLAMACPP_MODEL")
+            ?? "model";
+        ILLMClient planner = new LlamaCppClient(llamaCppBaseUrl, llamaCppModel);
+
+        var agent = new SpaceMoltAgent(planner, planner, scriptExampleRag: null, saveCheckpoint: null);
+        agent.Halt("Awaiting script input");
+
+        var now = DateTime.UtcNow;
+        var session = new PrayerRuntimeSession(
+            id: Guid.NewGuid().ToString("N"),
+            label: label,
+            createdUtc: now,
+            agent: agent,
+            client: client,
+            runtimeTransport: transport,
+            runtimeStateProvider: stateProvider);
+
+        _sessions[session.Id] = session;
+        return session;
+    }
+
+    private static string ResolveLabel(string username, string? label)
+    {
+        return string.IsNullOrWhiteSpace(label)
+            ? username.Trim()
+            : label.Trim();
+    }
+
+    private static SpaceMoltHttpClient BuildClient(string label)
+    {
+        return new SpaceMoltHttpClient
+        {
+            DebugContext = label
+        };
     }
 }
 
@@ -322,7 +405,23 @@ internal sealed class PrayerRuntimeSession : IDisposable
             return _executionStatus.ToList();
     }
 
-    public bool TryApplyCommand(PrayerRuntimeCommandRequest request, out string message)
+    public Contracts.RuntimeStateResponse BuildRuntimeStateSnapshot()
+    {
+        JsonElement? stateElement = LatestState == null
+            ? null
+            : JsonSerializer.SerializeToElement(LatestState);
+
+        return new Contracts.RuntimeStateResponse(
+            stateElement,
+            Agent.GetMemoryList(),
+            GetStatusLines(),
+            Agent.CurrentControlInput,
+            Agent.CurrentScriptLine,
+            Agent.LastScriptGenerationPrompt,
+            LoopEnabled);
+    }
+
+    public bool TryApplyCommand(Contracts.RuntimeCommandRequest request, out string message)
     {
         var command = Normalize(request.Command);
         var argument = request.Argument ?? string.Empty;
@@ -447,51 +546,6 @@ internal sealed class PrayerRuntimeSession : IDisposable
     private static string Normalize(string? command)
     {
         return (command ?? string.Empty).Trim().ToLowerInvariant();
-    }
-}
-
-public sealed record CreateSessionRequest(string Username, string Password, string? Label = null);
-
-public sealed record PrayerRuntimeCommandRequest(string Command, string? Argument = null);
-public sealed record SetScriptRequest(string Script);
-public sealed record GenerateScriptRequest(string Prompt);
-public sealed record LoopUpdateRequest(bool Enabled);
-
-public sealed record CommandAckResponse(string SessionId, string Command, string Message);
-public sealed record LoopUpdateResponse(string SessionId, bool Enabled);
-
-public sealed record RuntimeSnapshotResponse(
-    string SessionId,
-    RuntimeHostSnapshot Snapshot,
-    string? LatestSystem,
-    string? LatestPoi,
-    int? Fuel,
-    int? MaxFuel,
-    int? Credits,
-    DateTime LastUpdatedUtc);
-
-public sealed record SessionSummary(
-    string Id,
-    string Label,
-    DateTime CreatedUtc,
-    DateTime LastUpdatedUtc,
-    bool LoopEnabled,
-    bool IsHalted,
-    bool HasActiveCommand,
-    int? CurrentScriptLine)
-{
-    internal static SessionSummary FromSession(PrayerRuntimeSession session)
-    {
-        var snapshot = session.RuntimeHost.GetSnapshot();
-        return new SessionSummary(
-            session.Id,
-            session.Label,
-            session.CreatedUtc,
-            session.LastUpdatedUtc,
-            session.LoopEnabled,
-            snapshot.IsHalted,
-            snapshot.HasActiveCommand,
-            snapshot.CurrentScriptLine);
     }
 }
 

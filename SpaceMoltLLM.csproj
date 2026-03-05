@@ -9,8 +9,15 @@
 
   <ItemGroup>
     <Compile Remove="src/Prayer/**" />
+    <Compile Remove="src/Prayer.Contracts/**" />
     <EmbeddedResource Remove="src/Prayer/**" />
+    <EmbeddedResource Remove="src/Prayer.Contracts/**" />
     <None Remove="src/Prayer/**" />
+    <None Remove="src/Prayer.Contracts/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="src/Prayer.Contracts/Prayer.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

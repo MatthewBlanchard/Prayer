@@ -8,9 +8,6 @@ using System.Threading.Tasks;
 
 class Program
 {
-    private const int ScriptGenerationMaxAttempts = 3;
-    private const int ExecutionStatusHistoryLimit = 4;
-
     static async Task Main(string[] args)
     {
         AppPaths.EnsureDirectories();
@@ -117,6 +114,10 @@ class Program
 
         IAppUi ui = new HtmxBotWindow(
             Environment.GetEnvironmentVariable("UI_PREFIX") ?? "http://localhost:5057/");
+        var prayerBaseUrl = Environment.GetEnvironmentVariable("PRAYER_BASE_URL");
+        if (string.IsNullOrWhiteSpace(prayerBaseUrl))
+            throw new InvalidOperationException("PRAYER_BASE_URL is required (legacy in-process runtime path is disabled).");
+        var prayerApi = new PrayerApiClient(prayerBaseUrl);
         var orderedProviderIds = new List<string> { "openai", "groq", "llamacpp" };
         foreach (var providerId in providersById.Keys)
         {
@@ -153,17 +154,16 @@ class Program
 
         var channels = ProgramChannels.CreateAndBind(ui);
         var cts = new CancellationTokenSource();
-        int globalStopTriggered = 0;
 
         var botSessions = new Dictionary<string, BotSession>(StringComparer.Ordinal);
         string? activeBotId = null;
         object botLock = new();
         var savedBotStore = new SavedBotStore();
-        var checkpointStore = new AgentCheckpointStore();
         var savedBots = savedBotStore.Load();
 
         channels.Status.Writer.TryWrite(
             $"Planner LLM: {currentPlannerProvider}/{currentPlannerModel}");
+        channels.Status.Writer.TryWrite($"Prayer runtime: {prayerBaseUrl}");
 
         void LogAuth(string message)
         {
@@ -188,14 +188,6 @@ class Program
                 return botSessions.TryGetValue(activeBotId, out var session)
                     ? session
                     : null;
-            }
-        }
-
-        bool IsActiveBot(BotSession bot)
-        {
-            lock (botLock)
-            {
-                return activeBotId == bot.Id;
             }
         }
 
@@ -245,177 +237,70 @@ class Program
             GetActiveBotId,
             GetActiveBot,
             GetActiveBotLoopEnabled,
-            IsActiveBot,
             GetExecutionStatusLinesForBot,
             LogAuth);
-
-        void AppendExecutionStatus(BotSession bot, string message)
-        {
-            if (string.IsNullOrWhiteSpace(message))
-                return;
-
-            bool shouldRefresh = false;
-            lock (botLock)
-            {
-                bot.ExecutionStatusLines.Add(message.Trim());
-                if (bot.ExecutionStatusLines.Count > ExecutionStatusHistoryLimit)
-                    bot.ExecutionStatusLines.RemoveAt(0);
-                shouldRefresh = activeBotId == bot.Id;
-            }
-
-            if (shouldRefresh)
-                snapshotPublisher.PublishActiveSnapshot();
-        }
-
-        void TriggerGlobalStop(string reason)
-        {
-            if (Interlocked.Exchange(ref globalStopTriggered, 1) != 0)
-                return;
-
-            channels.Status.Writer.TryWrite($"Global stop: {reason}");
-            LogAuth($"global_stop | {reason}");
-            cts.Cancel();
-
-            lock (botLock)
-            {
-                foreach (var session in botSessions.Values)
-                    session.WorkerCts.Cancel();
-            }
-        }
 
         async Task<(BotSession Session, string Password)> CreateBotSessionAsync(
             string username,
             string flowLabel,
-            Func<SpaceMoltHttpClient, Task<string>> authenticateAsync)
+            AddBotMode mode,
+            string? password = null,
+            string? empire = null,
+            string? registrationCode = null)
         {
             var normalizedUsername = username.Trim();
             var label = normalizedUsername;
-            var checkpointFile = AppPaths.GetAgentCheckpointFile(label);
             var totalTimer = Stopwatch.StartNew();
             LogAuth($"{flowLabel} | {label} | start");
-
-            var agent = new SpaceMoltAgent(
-                commandLlm,
-                planningLlm,
-                scriptExampleRag,
-                checkpoint => checkpointStore.Save(checkpointFile, checkpoint));
-            agent.SetStatusWriter(channels.Status.Writer);
-
-            var client = new SpaceMoltHttpClient();
-            client.DebugContext = label;
-            var runtimeTransport = new SpaceMoltRuntimeTransportAdapter(client);
-            var runtimeStateProvider = new SpaceMoltRuntimeStateProvider(client);
 
             try
             {
                 var authTimer = Stopwatch.StartNew();
-                var password = await authenticateAsync(client);
+                string prayerSessionId;
+                string passwordToSave;
+
+                if (mode == AddBotMode.Register)
+                {
+                    if (string.IsNullOrWhiteSpace(registrationCode) || string.IsNullOrWhiteSpace(empire))
+                        throw new ArgumentException("Registration code and empire are required for register mode.");
+
+                    var registerResult = await prayerApi.RegisterSessionAsync(
+                        normalizedUsername,
+                        empire.Trim().ToLowerInvariant(),
+                        registrationCode.Trim(),
+                        label);
+
+                    prayerSessionId = registerResult.SessionId;
+                    passwordToSave = registerResult.Password;
+                }
+                else
+                {
+                    if (string.IsNullOrWhiteSpace(password))
+                        throw new ArgumentException("Password is required for login mode.");
+
+                    prayerSessionId = await prayerApi.CreateSessionAsync(
+                        normalizedUsername,
+                        password,
+                        label);
+                    passwordToSave = password;
+                }
+
                 LogAuth($"{flowLabel} | {label} | authenticated_and_session_ready | {authTimer.ElapsedMilliseconds}ms");
-
-                bool restoredFromCheckpoint = false;
-                try
-                {
-                    var checkpoint = checkpointStore.Load(checkpointFile);
-                    if (checkpoint != null)
-                    {
-                        var checkpointState = client.GetGameState();
-                        restoredFromCheckpoint = agent.TryRestoreCheckpoint(checkpoint, checkpointState);
-
-                        if (restoredFromCheckpoint)
-                        {
-                            channels.Status.Writer.TryWrite($"[{label}] Restored execution checkpoint.");
-                            LogAuth($"{flowLabel} | {label} | checkpoint_restore_ok");
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    LogAuth($"{flowLabel} | {label} | checkpoint_restore_failed | {ex.GetType().Name}: {ex.Message}");
-                }
-
-                if (!restoredFromCheckpoint)
-                    agent.Halt("Awaiting script input");
-
-                try
-                {
-                    var mapTimer = Stopwatch.StartNew();
-                    await client.GetMapSnapshotAsync(forceRefresh: false)
-                        .WaitAsync(TimeSpan.FromSeconds(15));
-                    LogAuth($"{flowLabel} | {label} | map_warmup_ok | {mapTimer.ElapsedMilliseconds}ms");
-                }
-                catch (Exception ex)
-                {
-                    channels.Status.Writer.TryWrite(
-                        $"Map warm-up skipped for '{label}': {ex.Message}");
-                    LogAuth($"{flowLabel} | {label} | map_warmup_skipped | {ex.GetType().Name}: {ex.Message}");
-                }
-
-                try
-                {
-                    var itemsTimer = Stopwatch.StartNew();
-                    var itemCatalogById = await client.GetFullItemCatalogByIdAsync(forceRefresh: false)
-                        .WaitAsync(TimeSpan.FromSeconds(20));
-                    LogAuth(
-                        $"{flowLabel} | {label} | item_catalog_warmup_ok | count={itemCatalogById.Count} | {itemsTimer.ElapsedMilliseconds}ms");
-                }
-                catch (Exception ex)
-                {
-                    channels.Status.Writer.TryWrite(
-                        $"Item catalog warm-up skipped for '{label}': {ex.Message}");
-                    LogAuth($"{flowLabel} | {label} | item_catalog_warmup_skipped | {ex.GetType().Name}: {ex.Message}");
-                }
-
-                try
-                {
-                    var shipsTimer = Stopwatch.StartNew();
-                    var shipCatalogById = await client.GetFullShipCatalogByIdAsync(forceRefresh: false)
-                        .WaitAsync(TimeSpan.FromSeconds(20));
-                    LogAuth(
-                        $"{flowLabel} | {label} | ship_catalog_warmup_ok | count={shipCatalogById.Count} | {shipsTimer.ElapsedMilliseconds}ms");
-                }
-                catch (Exception ex)
-                {
-                    channels.Status.Writer.TryWrite(
-                        $"Ship catalog warm-up skipped for '{label}': {ex.Message}");
-                    LogAuth($"{flowLabel} | {label} | ship_catalog_warmup_skipped | {ex.GetType().Name}: {ex.Message}");
-                }
 
                 LogAuth($"{flowLabel} | {label} | session_ready | {totalTimer.ElapsedMilliseconds}ms");
 
                 var session = new BotSession(
                     Guid.NewGuid().ToString("N"),
-                    label,
-                    agent,
-                    client,
-                    runtimeTransport,
-                    runtimeStateProvider);
+                    label);
 
-                session.RuntimeHost = new RuntimeHost(
-                    session.Label,
-                    session.Agent,
-                    session.RuntimeTransport ?? new SpaceMoltRuntimeTransportAdapter(session.Client),
-                    session.RuntimeStateProvider ?? new SpaceMoltRuntimeStateProvider(session.Client),
-                    session.ControlInputQueue.Reader,
-                    session.GenerateScriptQueue.Reader,
-                    session.SaveExampleQueue.Reader,
-                    session.HaltNowQueue.Reader,
-                    () => session.LoopEnabled,
-                    () => session.LatestState,
-                    state => session.LatestState = state,
-                    () => session.LastHaltedSnapshotAt,
-                    value => session.LastHaltedSnapshotAt = value,
-                    state => snapshotPublisher.PublishSnapshot(session, state),
-                    message => AppendExecutionStatus(session, message),
-                    LogAuth,
-                    TriggerGlobalStop,
-                    ScriptGenerationMaxAttempts);
+                session.PrayerSessionId = prayerSessionId;
+                LogAuth($"{flowLabel} | {label} | prayer_session_created | id={session.PrayerSessionId}");
 
-                return (session, password);
+                return (session, passwordToSave);
             }
             catch (Exception ex)
             {
                 LogAuth($"{flowLabel} | {label} | failed | {ex.GetType().Name}: {ex.Message}");
-                client.Dispose();
                 throw;
             }
         }
@@ -440,11 +325,8 @@ class Program
                     var (session, _) = await CreateBotSessionAsync(
                         savedBot.Username,
                         "startup/autologin",
-                        async client =>
-                        {
-                            await client.LoginAsync(savedBot.Username.Trim(), savedBot.Password);
-                            return savedBot.Password;
-                        });
+                        AddBotMode.Login,
+                        password: savedBot.Password);
 
                     lock (botLock)
                     {
@@ -462,29 +344,6 @@ class Program
                 }
             }
             LogAuth("startup | end_autoload");
-        }
-
-        Task RunBotLoopAsync(BotSession bot, CancellationToken token)
-        {
-            if (bot.RuntimeHost == null)
-                throw new InvalidOperationException($"Runtime host missing for bot '{bot.Label}'.");
-
-            return bot.RuntimeHost.RunAsync(token);
-        }
-
-        void StartBotWorker(BotSession session)
-        {
-            if (session.WorkerTask != null)
-                return;
-
-            session.WorkerTask = Task.Run(() => RunBotLoopAsync(session, session.WorkerCts.Token), session.WorkerCts.Token);
-            LogAuth($"bot_worker | {session.Label} | started");
-        }
-
-        lock (botLock)
-        {
-            foreach (var session in botSessions.Values)
-                StartBotWorker(session);
         }
 
         snapshotPublisher.PublishActiveSnapshot();
@@ -534,7 +393,9 @@ class Program
                                 (session, passwordToSave) = await CreateBotSessionAsync(
                                     username,
                                     "manual/register",
-                                    client => client.RegisterAsync(username, empire, registrationCode));
+                                    AddBotMode.Register,
+                                    empire: empire,
+                                    registrationCode: registrationCode);
                             }
                             else
                             {
@@ -548,11 +409,8 @@ class Program
                                 (session, passwordToSave) = await CreateBotSessionAsync(
                                     username,
                                     "manual/login",
-                                    async client =>
-                                    {
-                                        await client.LoginAsync(username, password);
-                                        return password;
-                                    });
+                                    AddBotMode.Login,
+                                    password: password);
                             }
 
                             lock (botLock)
@@ -563,7 +421,6 @@ class Program
                             }
                             snapshotPublisher.LogBotTabsIfChanged("manual_add_added");
                             UpsertSavedBot(username, passwordToSave);
-                            StartBotWorker(session);
 
                             channels.Status.Writer.TryWrite($"Bot loaded: {session.Label}");
                             snapshotPublisher.PublishActiveSnapshot();
@@ -642,6 +499,7 @@ class Program
                     {
                         BotSession? active;
                         bool enabled;
+                        string? prayerSessionId = null;
 
                         lock (botLock)
                         {
@@ -657,12 +515,30 @@ class Program
                             {
                                 enabled = update.Enabled ?? !active.LoopEnabled;
                                 active.LoopEnabled = enabled;
+                                prayerSessionId = active.PrayerSessionId;
                             }
                         }
 
                         if (active == null)
                         {
                             channels.Status.Writer.TryWrite("No active bot selected.");
+                            continue;
+                        }
+
+                        if (string.IsNullOrWhiteSpace(prayerSessionId))
+                        {
+                            channels.Status.Writer.TryWrite($"[{active.Label}] Prayer session is not available.");
+                            continue;
+                        }
+
+                        try
+                        {
+                            await prayerApi.SetLoopEnabledAsync(prayerSessionId, enabled);
+                        }
+                        catch (Exception ex)
+                        {
+                            channels.Status.Writer.TryWrite($"[{active.Label}] Loop update failed: {ex.Message}");
+                            LogAuth($"loop_update_failed | {active.Label} | {ex.GetType().Name}: {ex.Message}");
                             continue;
                         }
 
@@ -673,12 +549,15 @@ class Program
                     while (channels.RuntimeCommands.Reader.TryRead(out var request))
                     {
                         BotSession? target;
+                        string? prayerSessionId = null;
                         lock (botLock)
                         {
                             target = !string.IsNullOrWhiteSpace(request.BotId) &&
                                      botSessions.TryGetValue(request.BotId, out var byId)
                                 ? byId
                                 : null;
+                            if (target != null)
+                                prayerSessionId = target.PrayerSessionId;
                         }
 
                         if (target == null)
@@ -687,48 +566,40 @@ class Program
                             continue;
                         }
 
-                        switch (request.Command)
+                        if (string.IsNullOrWhiteSpace(prayerSessionId))
                         {
-                            case RuntimeCommandNames.SetScript:
-                            {
-                                var script = request.Argument ?? string.Empty;
-                                if (string.IsNullOrWhiteSpace(script))
-                                    continue;
+                            channels.Status.Writer.TryWrite($"[{target.Label}] Prayer session is not available.");
+                            continue;
+                        }
 
-                                target.ControlInputQueue.Writer.TryWrite(script);
-                                break;
-                            }
-                            case RuntimeCommandNames.GenerateScript:
-                            {
-                                var prompt = request.Argument ?? string.Empty;
-                                if (string.IsNullOrWhiteSpace(prompt))
-                                    continue;
+                        try
+                        {
+                            await prayerApi.SendRuntimeCommandAsync(
+                                prayerSessionId,
+                                request.Command,
+                                request.Argument);
 
-                                target.GenerateScriptQueue.Writer.TryWrite(prompt);
-                                break;
-                            }
-                            case RuntimeCommandNames.SaveExample:
-                                target.SaveExampleQueue.Writer.TryWrite(true);
-                                break;
-                            case RuntimeCommandNames.ExecuteScript:
-                            {
-                                var script = target.Agent.CurrentControlInput;
-                                if (string.IsNullOrWhiteSpace(script))
-                                {
-                                    channels.Status.Writer.TryWrite("No script loaded.");
-                                    break;
-                                }
-
-                                target.ControlInputQueue.Writer.TryWrite(script);
+                            if (string.Equals(request.Command, RuntimeCommandNames.ExecuteScript, StringComparison.Ordinal))
                                 channels.Status.Writer.TryWrite($"Restarting script for {target.Label}");
-                                break;
-                            }
-                            case RuntimeCommandNames.Halt:
-                                target.HaltNowQueue.Writer.TryWrite(true);
-                                break;
-                            default:
-                                channels.Status.Writer.TryWrite($"Unknown runtime command: {request.Command}");
-                                break;
+                        }
+                        catch (Exception ex)
+                        {
+                            channels.Status.Writer.TryWrite($"[{target.Label}] Runtime command failed: {ex.Message}");
+                            LogAuth($"runtime_command_failed | {target.Label} | {request.Command} | {ex.GetType().Name}: {ex.Message}");
+                        }
+                    }
+
+                    var activePrayerBot = GetActiveBot();
+                    if (activePrayerBot?.PrayerSessionId != null)
+                    {
+                        try
+                        {
+                            var prayerSnapshot = await prayerApi.GetRuntimeStateAsync(activePrayerBot.PrayerSessionId);
+                            snapshotPublisher.PublishPrayerSnapshot(activePrayerBot, prayerSnapshot);
+                        }
+                        catch (Exception ex)
+                        {
+                            LogAuth($"prayer_ui_poll_failed | {activePrayerBot.Label} | {ex.GetType().Name}: {ex.Message}");
                         }
                     }
 
@@ -795,25 +666,28 @@ class Program
         channels.UiSnapshots.Writer.TryComplete();
 
         List<BotSession> sessionsToDispose;
-        List<Task> workerTasks;
         lock (botLock)
         {
             sessionsToDispose = botSessions.Values.ToList();
-            workerTasks = sessionsToDispose
-                .Where(s => s.WorkerTask != null)
-                .Select(s => s.WorkerTask!)
-                .ToList();
         }
 
         foreach (var session in sessionsToDispose)
-            session.WorkerCts.Cancel();
-
-        foreach (var session in sessionsToDispose)
-            session.Client.Dispose();
+        {
+            if (!string.IsNullOrWhiteSpace(session.PrayerSessionId))
+            {
+                try
+                {
+                    await prayerApi.DeleteSessionAsync(session.PrayerSessionId);
+                }
+                catch
+                {
+                    // Best effort cleanup.
+                }
+            }
+        }
 
         await Task.WhenAll(
             botTask.ContinueWith(_ => { }),
-            Task.WhenAll(workerTasks).ContinueWith(_ => { }),
             uiRenderTask.ContinueWith(_ => { })
         );
     }

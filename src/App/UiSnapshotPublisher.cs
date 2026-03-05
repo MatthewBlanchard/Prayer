@@ -5,12 +5,12 @@ using System.Threading.Channels;
 
 public sealed class UiSnapshotPublisher
 {
+    private readonly IAgentUiStateBuilder _uiStateBuilder = new AgentUiStateBuilder();
     private readonly ChannelWriter<UiSnapshot> _uiWriter;
     private readonly Func<IReadOnlyList<BotTab>> _getBotTabs;
     private readonly Func<string?> _getActiveBotId;
     private readonly Func<BotSession?> _getActiveBot;
     private readonly Func<bool> _getActiveBotLoopEnabled;
-    private readonly Func<BotSession, bool> _isActiveBot;
     private readonly Func<string?, IReadOnlyList<string>> _getExecutionStatusLinesForBot;
     private readonly Action<string> _logAuth;
     private string _lastLoggedBotTabSignature = "";
@@ -21,7 +21,6 @@ public sealed class UiSnapshotPublisher
         Func<string?> getActiveBotId,
         Func<BotSession?> getActiveBot,
         Func<bool> getActiveBotLoopEnabled,
-        Func<BotSession, bool> isActiveBot,
         Func<string?, IReadOnlyList<string>> getExecutionStatusLinesForBot,
         Action<string> logAuth)
     {
@@ -30,7 +29,6 @@ public sealed class UiSnapshotPublisher
         _getActiveBotId = getActiveBotId;
         _getActiveBot = getActiveBot;
         _getActiveBotLoopEnabled = getActiveBotLoopEnabled;
-        _isActiveBot = isActiveBot;
         _getExecutionStatusLinesForBot = getExecutionStatusLinesForBot;
         _logAuth = logAuth;
     }
@@ -71,30 +69,6 @@ public sealed class UiSnapshotPublisher
             _getActiveBotLoopEnabled()));
     }
 
-    public void PublishSnapshotForBot(BotSession bot, GameState state)
-    {
-        var tabs = _getBotTabs();
-        var activeBotId = _getActiveBotId();
-        var uiState = bot.Agent.BuildUiState(state);
-        var missionPrompts = MissionPromptBuilder.BuildOptions(state);
-        LogBotTabsIfChanged("publish_snapshot", tabs, activeBotId);
-        _uiWriter.TryWrite(new UiSnapshot(
-            uiState.SpaceStateMarkdown,
-            uiState.TradeStateMarkdown,
-            uiState.ShipyardStateMarkdown,
-            uiState.CantinaStateMarkdown,
-            uiState.CatalogStateMarkdown,
-            missionPrompts,
-            bot.Agent.GetMemoryList(),
-            _getExecutionStatusLinesForBot(activeBotId),
-            bot.Agent.CurrentControlInput,
-            bot.Agent.CurrentScriptLine,
-            bot.Agent.LastScriptGenerationPrompt,
-            tabs,
-            activeBotId,
-            _getActiveBotLoopEnabled()));
-    }
-
     public void PublishActiveSnapshot(string? noStateMessage = null)
     {
         var active = _getActiveBot();
@@ -104,21 +78,36 @@ public sealed class UiSnapshotPublisher
             return;
         }
 
-        if (active.LatestState != null)
-        {
-            PublishSnapshotForBot(active, active.LatestState);
-            return;
-        }
-
         PublishNoBotSnapshot(noStateMessage ?? $"Bot '{active.Label}' loaded; initial state unavailable.");
     }
 
-    public void PublishSnapshot(BotSession bot, GameState state)
+    public void PublishPrayerSnapshot(BotSession bot, AppPrayerRuntimeState snapshot)
     {
-        bot.LatestState = state;
-        if (_isActiveBot(bot))
-            PublishSnapshotForBot(bot, state);
-        else
-            PublishActiveSnapshot();
+        if (snapshot.State == null)
+        {
+            PublishNoBotSnapshot($"Bot '{bot.Label}' loaded; initial state unavailable.");
+            return;
+        }
+
+        var tabs = _getBotTabs();
+        var activeBotId = _getActiveBotId();
+        var uiState = _uiStateBuilder.BuildUiState(snapshot.State);
+        var missionPrompts = MissionPromptBuilder.BuildOptions(snapshot.State);
+        LogBotTabsIfChanged("publish_prayer_snapshot", tabs, activeBotId);
+        _uiWriter.TryWrite(new UiSnapshot(
+            uiState.SpaceStateMarkdown,
+            uiState.TradeStateMarkdown,
+            uiState.ShipyardStateMarkdown,
+            uiState.CantinaStateMarkdown,
+            uiState.CatalogStateMarkdown,
+            missionPrompts,
+            snapshot.Memory,
+            snapshot.ExecutionStatusLines,
+            snapshot.ControlInput,
+            snapshot.CurrentScriptLine,
+            snapshot.LastGenerationPrompt,
+            tabs,
+            activeBotId,
+            snapshot.LoopEnabled));
     }
 }

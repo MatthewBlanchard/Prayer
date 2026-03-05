@@ -12,12 +12,14 @@
 - Prayer is deployed for a single trusted operator environment.
 - Multi-user auth, tenant isolation, and public-internet hardening are out of scope for this phase.
 - Multiple runtime sessions are still supported, but they are not treated as separate security tenants.
+- App runtime control path is Prayer-only (`PRAYER_BASE_URL` required); no local runtime fallback path.
 
 ## Naming and component direction
 
 - Service host name: `Prayer`.
 - Runtime library namespace/project direction: `Prayer.Runtime` (or equivalent split of current middle runtime + command execution code).
 - Infra adapter namespace/project direction: `Prayer.Infra.SpaceMolt`.
+- Shared API contract namespace/project direction: `Prayer.Contracts` (DTO-only, no runtime engine internals).
 
 ## Ownership rules
 
@@ -38,6 +40,7 @@
 
 - Be a client of Prayer HTTP endpoints, not an in-process owner of runtime internals.
 - Own user-facing UI concerns, tab/session selection UX, and rendering.
+- Render UI from Prayer structured runtime state payloads (`/state`), not server-rendered markdown payloads.
 
 ## Immediate hardening tasks
 

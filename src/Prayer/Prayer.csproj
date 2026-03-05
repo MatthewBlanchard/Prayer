@@ -6,6 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../Prayer.Contracts/Prayer.Contracts.csproj" />
     <ProjectReference Include="../../SpaceMoltLLM.csproj" />
   </ItemGroup>
 </Project>

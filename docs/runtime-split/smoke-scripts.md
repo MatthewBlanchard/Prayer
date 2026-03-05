@@ -2,6 +2,10 @@
 
 Use these scripts for quick baseline checks. Replace placeholders like `<SYSTEM_ID>` and `<POI_ID>` with valid values in your map.
 
+Execution path for migration validation:
+- Load and execute these scripts through `Prayer` runtime endpoints.
+- Observe runtime state/status via Prayer API (or via app UI if it is acting as a Prayer client).
+
 ## smoke-01-halt-only
 
 ```txt

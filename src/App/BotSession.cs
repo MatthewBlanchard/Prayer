@@ -28,7 +28,7 @@ public sealed class BotSession
     public SpaceMoltHttpClient Client { get; }
     public IRuntimeTransport? RuntimeTransport { get; }
     public IRuntimeStateProvider? RuntimeStateProvider { get; }
-    public RuntimeHost? RuntimeHost { get; set; }
+    public IRuntimeHost? RuntimeHost { get; set; }
     public bool LoopEnabled { get; set; }
     public GameState? LatestState { get; set; }
     public DateTime LastHaltedSnapshotAt { get; set; } = DateTime.MinValue;

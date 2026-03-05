@@ -1,12 +1,23 @@
 # Runtime Split Manual Regression Checklist
 
-Use this checklist after each migration step in `MIDDLE_RUNTIME_SPLIT_PLAN.md`.
+Use this checklist after each migration step in `docs/runtime-split/MIDDLE_RUNTIME_SPLIT_PLAN.md`.
 
 ## Preconditions
 
 - Use the same bot account and similar in-game location where possible.
-- Start with a clean app launch.
+- Start with a clean `Prayer` service launch.
 - Keep `docs/runtime-split/smoke-scripts.md` open and run the scripts in order.
+- Use the same external client path each run (existing app UI or direct HTTP calls) for consistent comparisons.
+
+## 0) API contract sanity checks
+
+1. Confirm Prayer health endpoint returns success.
+2. Create/select a runtime session via Prayer API.
+3. Send a basic runtime command (`set_script` or equivalent).
+4. Fetch runtime snapshot/status and verify the update is visible.
+
+Expected:
+- Prayer endpoints are reachable and state transitions are reflected through the API.
 
 ## 1) DSL parse/normalize checks
 
@@ -24,14 +35,14 @@ Expected:
 ## 2) Checkpoint save/restore checks
 
 1. Load `smoke-03-multiturn-go` and allow at least one step to execute.
-2. Stop app process while script state is non-empty.
-3. Restart app and login same bot.
-4. Confirm startup reports checkpoint restore success.
+2. Stop Prayer process while script state is non-empty.
+3. Restart Prayer and reconnect using same runtime identity/session backing.
+4. Confirm startup/session restore reports checkpoint restore success.
 5. Confirm runtime resumes from prior script context (not reset to empty script).
 
 Expected:
 - Checkpoint file is read and restore succeeds.
-- If checkpoint is intentionally corrupted, app should fail restore gracefully and start halted.
+- If checkpoint is intentionally corrupted, Prayer should fail restore gracefully and start halted.
 
 ## 3) Multi-turn continuation checks (`go`, `mine`)
 
@@ -69,3 +80,12 @@ Expected:
 Expected:
 - Retry message includes attempt counter.
 - Runtime loop continues after retries exhausted.
+
+## 6) Boundary enforcement spot-check
+
+1. Confirm runtime command execution path does not reference concrete `SpaceMoltHttpClient` directly.
+2. Confirm command implementations are owned by runtime layer (not app/UI layer).
+3. Confirm infra layer remains responsible for concrete SpaceMolt transport details.
+
+Expected:
+- Code ownership matches the boundary document and split plan.

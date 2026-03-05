@@ -12,6 +12,13 @@ public sealed class SpaceMoltRuntimeStateProvider : IRuntimeStateProvider
 
     public Task<GameState> GetLatestStateAsync()
     {
-        return Task.FromResult(_client.GetGameState());
+        try
+        {
+            return Task.FromResult(_client.GetGameState());
+        }
+        catch (RateLimitStopException ex)
+        {
+            throw new RuntimeRateLimitException(ex.Message, ex.RetryAfterSeconds);
+        }
     }
 }

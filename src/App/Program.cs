@@ -393,7 +393,7 @@ class Program
                 session.RuntimeHost = new RuntimeHost(
                     session.Label,
                     session.Agent,
-                    session.Client,
+                    session.RuntimeTransport ?? new SpaceMoltRuntimeTransportAdapter(session.Client),
                     session.RuntimeStateProvider ?? new SpaceMoltRuntimeStateProvider(session.Client),
                     session.ControlInputQueue.Reader,
                     session.GenerateScriptQueue.Reader,

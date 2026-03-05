@@ -3,12 +3,12 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 
-public sealed class RuntimeHost
+public sealed class RuntimeHost : IRuntimeHost
 {
     private const int ScriptStepRetryLimit = 10;
     private readonly string _label;
     private readonly SpaceMoltAgent _agent;
-    private readonly SpaceMoltHttpClient _client;
+    private readonly IRuntimeTransport _transport;
     private readonly IRuntimeStateProvider _stateProvider;
     private readonly ChannelReader<string> _controlInputReader;
     private readonly ChannelReader<string> _generateScriptReader;
@@ -28,7 +28,7 @@ public sealed class RuntimeHost
     public RuntimeHost(
         string label,
         SpaceMoltAgent agent,
-        SpaceMoltHttpClient client,
+        IRuntimeTransport transport,
         IRuntimeStateProvider stateProvider,
         ChannelReader<string> controlInputReader,
         ChannelReader<string> generateScriptReader,
@@ -47,7 +47,7 @@ public sealed class RuntimeHost
     {
         _label = label;
         _agent = agent;
-        _client = client;
+        _transport = transport;
         _stateProvider = stateProvider;
         _controlInputReader = controlInputReader;
         _generateScriptReader = generateScriptReader;
@@ -287,7 +287,7 @@ public sealed class RuntimeHost
                         _publishStatus($"[{_label}] Executing {FormatCommand(result)}");
                         try
                         {
-                            await _agent.ExecuteAsync(_client, result, currentState);
+                            await _agent.ExecuteAsync(_transport, result, currentState);
                             scriptStepFailureCounts.Remove(stepKey);
                         }
                         catch (Exception ex)
@@ -336,7 +336,7 @@ public sealed class RuntimeHost
                 {
                     throw;
                 }
-                catch (RateLimitStopException ex)
+                catch (RuntimeRateLimitException ex)
                 {
                     _publishStatus($"[{_label}] {ex.Message}");
                     _log($"bot_worker | {_label} | rate_limited_stop | {ex.Message}");
@@ -392,7 +392,7 @@ public sealed class RuntimeHost
 
         try
         {
-            await _client.ExecuteAsync("withdraw_credits", new { amount = storageCreditsBefore });
+            await _transport.ExecuteCommandAsync("withdraw_credits", new { amount = storageCreditsBefore });
             var refreshed = await _stateProvider.GetLatestStateAsync();
             int withdrawn = Math.Max(0, storageCreditsBefore - refreshed.StorageCredits);
 
@@ -437,7 +437,7 @@ public sealed class RuntimeHost
         try
         {
             foreach (var missionId in completableMissionIds)
-                await _client.ExecuteAsync("complete_mission", new { mission_id = missionId });
+                await _transport.ExecuteCommandAsync("complete_mission", new { mission_id = missionId });
 
             var refreshed = await _stateProvider.GetLatestStateAsync();
             int completedCount = Math.Max(0, state.ActiveMissions.Length - refreshed.ActiveMissions.Length);
@@ -462,7 +462,7 @@ public sealed class RuntimeHost
 
         try
         {
-            await _client.ExecuteAsync("refuel", new { });
+            await _transport.ExecuteCommandAsync("refuel", new { });
             var refreshed = await _stateProvider.GetLatestStateAsync();
 
             if (refreshed.Fuel > fuelBefore)

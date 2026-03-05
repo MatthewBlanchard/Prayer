@@ -15,17 +15,31 @@ public sealed class SpaceMoltRuntimeTransportAdapter : IRuntimeTransport
 
     public async Task<RuntimeCommandResult> ExecuteCommandAsync(string command, object? payload = null)
     {
-        var response = await _client.ExecuteAsync(command, payload);
-        return ToRuntimeCommandResult(response);
+        try
+        {
+            var response = await _client.ExecuteAsync(command, payload);
+            return ToRuntimeCommandResult(response);
+        }
+        catch (RateLimitStopException ex)
+        {
+            throw new RuntimeRateLimitException(ex.Message, ex.RetryAfterSeconds);
+        }
     }
 
     public async Task<RuntimeCommandResult> FindRouteAsync(string targetSystem)
     {
-        var response = await _client.FindRouteAsync(targetSystem);
-        return ToRuntimeCommandResult(response);
+        try
+        {
+            var response = await _client.FindRouteAsync(targetSystem);
+            return ToRuntimeCommandResult(response);
+        }
+        catch (RateLimitStopException ex)
+        {
+            throw new RuntimeRateLimitException(ex.Message, ex.RetryAfterSeconds);
+        }
     }
 
-    public Task<Catalogue> GetCatalogueAsync(
+    public async Task<Catalogue> GetCatalogueAsync(
         string type,
         string? category = null,
         string? id = null,
@@ -33,24 +47,31 @@ public sealed class SpaceMoltRuntimeTransportAdapter : IRuntimeTransport
         int? pageSize = null,
         string? search = null)
     {
-        return _client.GetCatalogueAsync(type, category, id, page, pageSize, search);
+        try
+        {
+            return await _client.GetCatalogueAsync(type, category, id, page, pageSize, search);
+        }
+        catch (RateLimitStopException ex)
+        {
+            throw new RuntimeRateLimitException(ex.Message, ex.RetryAfterSeconds);
+        }
     }
 
     public Task<GalaxyMapSnapshot> GetMapSnapshotAsync(bool forceRefresh = false)
     {
-        return _client.GetMapSnapshotAsync(forceRefresh);
+        return MapRateLimitAsync(() => _client.GetMapSnapshotAsync(forceRefresh));
     }
 
     public Task<IReadOnlyDictionary<string, CatalogueEntry>> GetFullItemCatalogByIdAsync(
         bool forceRefresh = false)
     {
-        return _client.GetFullItemCatalogByIdAsync(forceRefresh);
+        return MapRateLimitAsync(() => _client.GetFullItemCatalogByIdAsync(forceRefresh));
     }
 
     public Task<IReadOnlyDictionary<string, CatalogueEntry>> GetFullShipCatalogByIdAsync(
         bool forceRefresh = false)
     {
-        return _client.GetFullShipCatalogByIdAsync(forceRefresh);
+        return MapRateLimitAsync(() => _client.GetFullShipCatalogByIdAsync(forceRefresh));
     }
 
     public GameState GetLatestState()
@@ -80,5 +101,17 @@ public sealed class SpaceMoltRuntimeTransportAdapter : IRuntimeTransport
             Succeeded: !failed,
             Payload: payload,
             ErrorMessage: failed ? message : null);
+    }
+
+    private static async Task<T> MapRateLimitAsync<T>(Func<Task<T>> action)
+    {
+        try
+        {
+            return await action();
+        }
+        catch (RateLimitStopException ex)
+        {
+            throw new RuntimeRateLimitException(ex.Message, ex.RetryAfterSeconds);
+        }
     }
 }

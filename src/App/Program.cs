@@ -446,7 +446,7 @@ class Program
 
         Task RunBotLoopAsync(BotSession bot, CancellationToken token)
         {
-            var runtime = new BotRuntime(
+            var runtime = new RuntimeHost(
                 bot.Label,
                 bot.Agent,
                 bot.Client,

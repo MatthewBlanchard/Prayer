@@ -13,7 +13,7 @@ Detailed implementation plan remains in `MIDDLE_RUNTIME_SPLIT_PLAN.md`.
 - [x] Step 5: Move DSL package boundary into middle runtime
 - [x] Step 6: Extract runtime-state builder from SpaceMolt assembler
 - [x] Step 7: Introduce `IRuntimeStateProvider` and wire runtime to it
-- [ ] Step 8: Create middle-runtime host facade
+- [x] Step 8: Create middle-runtime host facade
 - [ ] Step 9: Move bot session ownership into runtime host
 - [ ] Step 10: Enforce UI/runtime bot boundary (`{bot_id, command}` only)
 
@@ -63,6 +63,12 @@ Detailed implementation plan remains in `MIDDLE_RUNTIME_SPLIT_PLAN.md`.
 - `src/Infra/SpaceMolt/SpaceMoltRuntimeStateProvider.cs` added implementing `IRuntimeStateProvider`.
 - `src/Core/BotRuntime.cs` now reads state via `IRuntimeStateProvider.GetLatestStateAsync()` for loop snapshots and post-command refreshes.
 - `src/App/Program.cs` wires `SpaceMoltRuntimeStateProvider` into bot session/runtime construction.
+
+## Step 8 completion evidence
+
+- `src/MiddleRuntime/Host/RuntimeHost.cs` added as middle-runtime facade for orchestration/loop execution.
+- `src/App/Program.cs` now wires bot execution through `RuntimeHost` instead of directly instantiating runtime internals.
+- `src/Core/BotRuntime.cs` reduced to a compatibility shim delegating to `RuntimeHost`.
 
 ## Notes
 

@@ -515,7 +515,8 @@ public class SpaceMoltHttpClient : IDisposable
 
         if (!string.IsNullOrWhiteSpace(code) &&
             (string.Equals(code, "session_invalid", StringComparison.OrdinalIgnoreCase) ||
-             string.Equals(code, "unauthorized", StringComparison.OrdinalIgnoreCase)))
+             string.Equals(code, "unauthorized", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(code, "not_authenticated", StringComparison.OrdinalIgnoreCase)))
         {
             return true;
         }
@@ -524,7 +525,10 @@ public class SpaceMoltHttpClient : IDisposable
             return false;
 
         return message.Contains("invalid session", StringComparison.OrdinalIgnoreCase) ||
-               message.Contains("session invalid", StringComparison.OrdinalIgnoreCase);
+               message.Contains("session invalid", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("not authenticated", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("must login first", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("must log in first", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsSessionInvalidException(Exception ex)

@@ -6,6 +6,11 @@ public class SwitchShipCommand : AutoDockSingleTurnCommand
 {
     public override string Name => "switch_ship";
     protected override bool RequiresStation => true;
+    public override DslCommandSyntax GetDslSyntax() => new(
+        ArgSpecs: new[]
+        {
+            new DslArgumentSpec(DslArgKind.Any, Required: true)
+        });
 
     protected override bool IsAvailableWhenDocked(GameState state)
         => state.Docked && state.CurrentPOI.IsStation;

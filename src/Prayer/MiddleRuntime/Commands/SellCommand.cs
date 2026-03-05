@@ -8,7 +8,7 @@ public class SellCommand : AutoDockMultiTurnCommand, IDslCommandGrammar
 {
     public override string Name => "sell";
     protected override bool RequiresStation => true;
-    public DslCommandSyntax GetDslSyntax() => new(
+    public override DslCommandSyntax GetDslSyntax() => new(
         ArgSpecs: new[]
         {
             new DslArgumentSpec(

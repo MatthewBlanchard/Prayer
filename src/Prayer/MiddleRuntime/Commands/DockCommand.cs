@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 public class DockCommand : ISingleTurnCommand
 {
     public string Name => "dock";
+    public DslCommandSyntax GetDslSyntax() => new();
 
     public bool IsAvailable(GameState state)
         => !state.Docked &&

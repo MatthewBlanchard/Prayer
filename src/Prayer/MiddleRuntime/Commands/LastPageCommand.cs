@@ -3,6 +3,11 @@ using System.Threading.Tasks;
 public class LastPageCommand : ISingleTurnCommand
 {
     public string Name => "last";
+    public DslCommandSyntax GetDslSyntax() => new(
+        ArgSpecs: new[]
+        {
+            new DslArgumentSpec(DslArgKind.Any, Required: true)
+        });
 
     public bool IsAvailable(GameState state)
         => state.Docked && state.CurrentPOI.IsStation;

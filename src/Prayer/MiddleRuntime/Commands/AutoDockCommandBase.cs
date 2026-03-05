@@ -7,6 +7,7 @@ public abstract class AutoDockSingleTurnCommand : ISingleTurnCommand
 {
     public abstract string Name { get; }
     protected virtual bool RequiresStation => false;
+    public virtual DslCommandSyntax GetDslSyntax() => new();
 
     public abstract string BuildHelp(GameState state);
     protected abstract bool IsAvailableWhenDocked(GameState state);
@@ -57,6 +58,7 @@ public abstract class AutoDockMultiTurnCommand : IMultiTurnCommand
 
     public abstract string Name { get; }
     protected virtual bool RequiresStation => false;
+    public virtual DslCommandSyntax GetDslSyntax() => new();
 
     public abstract string BuildHelp(GameState state);
     protected abstract bool IsAvailableWhenDocked(GameState state);

@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 public class DepositItemsCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
 {
     public override string Name => "stash";
-    public DslCommandSyntax GetDslSyntax() => new(
+    public override DslCommandSyntax GetDslSyntax() => new(
         ArgSpecs: new[]
         {
             new DslArgumentSpec(

@@ -7,7 +7,7 @@ public class AcceptMissionCommand : AutoDockSingleTurnCommand, IDslCommandGramma
 {
     public override string Name => "accept_mission";
     protected override bool RequiresStation => true;
-    public DslCommandSyntax GetDslSyntax() => new(
+    public override DslCommandSyntax GetDslSyntax() => new(
         DslArgKind.Any,
         ArgRequired: true);
 

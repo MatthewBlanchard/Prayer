@@ -70,11 +70,10 @@ public static class DslParser
             ["buy_listed_ship"] = new[] { "listing" },
             ["commission_quote"] = new[] { "ship_class" },
             ["commission_ship"] = new[] { "ship_class" },
-            ["commission_status"] = new[] { "commission" },
             ["accept_mission"] = new[] { "mission_id" },
             ["abandon_mission"] = new[] { "mission_id" },
             ["sell_ship"] = new[] { "ship" },
-            ["list_ship_for_sale"] = new[] { "price" },
+            ["list_ship_for_sale"] = new[] { "ship", "price" },
         };
 
     private static readonly IReadOnlyList<ICommand> Commands =
@@ -158,6 +157,11 @@ public static class DslParser
             from statement in StatementAst!
             select statement).Many()
         select new DslAstProgram(statements);
+
+    static DslParser()
+    {
+        ValidateCommandMetadata();
+    }
 
     public static DslAstProgram ParseTree(string text)
     {
@@ -705,13 +709,38 @@ public static class DslParser
             if (map.ContainsKey(command.Name))
                 continue;
 
-            var syntax = command is IDslCommandGrammar provider
-                ? provider.GetDslSyntax()
-                : new DslCommandSyntax();
-            map[command.Name] = syntax;
+            map[command.Name] = command.GetDslSyntax() ?? new DslCommandSyntax();
         }
 
         return map;
+    }
+
+    private static void ValidateCommandMetadata()
+    {
+        foreach (var overrideName in PromptArgNameOverrides.Keys)
+        {
+            if (!CommandSyntaxByName.ContainsKey(overrideName))
+            {
+                throw new InvalidOperationException(
+                    $"Prompt argument override references unknown command '{overrideName}'.");
+            }
+        }
+
+        foreach (var command in Commands)
+        {
+            if (!CommandSyntaxByName.TryGetValue(command.Name, out var syntax))
+                throw new InvalidOperationException($"Missing DSL syntax metadata for command '{command.Name}'.");
+
+            var specs = ResolveArgSpecs(syntax);
+            if (!PromptArgNameOverrides.TryGetValue(command.Name, out var overrideNames))
+                continue;
+
+            if (overrideNames.Length > specs.Count)
+            {
+                throw new InvalidOperationException(
+                    $"Prompt argument override for command '{command.Name}' has {overrideNames.Length} names, but command exposes {specs.Count} DSL args.");
+            }
+        }
     }
 
     private static IReadOnlyList<ICommand> UniqueByName(IReadOnlyList<ICommand> commands)

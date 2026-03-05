@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 public class ExitCommand : ISingleTurnCommand
 {
     public string Name => "exit";
+    public DslCommandSyntax GetDslSyntax() => new();
 
     public bool IsAvailable(GameState state)
         => state.Docked && state.CurrentPOI.IsStation;

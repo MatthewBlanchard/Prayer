@@ -7,7 +7,7 @@ public class AbandonMissionCommand : AutoDockSingleTurnCommand, IDslCommandGramm
 {
     public override string Name => "abandon_mission";
     protected override bool RequiresStation => true;
-    public DslCommandSyntax GetDslSyntax() => new(
+    public override DslCommandSyntax GetDslSyntax() => new(
         DslArgKind.Any,
         ArgRequired: true);
 

@@ -18,6 +18,7 @@ public sealed class CommandExecutionEngine
     private DslAstProgram? _scriptAst;
     private int? _currentScriptLine;
     private bool _isHalted;
+    private ActiveCommandState _activeCommandState;
     private IMultiTurnCommand? _activeCommand;
     private CommandResult? _activeCommandResult;
 
@@ -42,12 +43,13 @@ public sealed class CommandExecutionEngine
     }
 
     public bool IsHalted => _isHalted;
-    public bool HasActiveCommand => _activeCommand != null;
+    public bool HasActiveCommand => _activeCommandState == ActiveCommandState.MultiTurn;
     public int? CurrentScriptLine => _currentScriptLine;
     public string? CurrentScript => string.IsNullOrWhiteSpace(_script) ? null : _script;
 
     public string SetScript(string script, GameState? state = null)
     {
+        EnsureActiveCommandInvariant();
         var rawScript = script ?? string.Empty;
         _currentScriptLine = null;
 
@@ -62,6 +64,7 @@ public sealed class CommandExecutionEngine
         _logger.LogScriptNormalization("set_script", rawScript, _script);
 
         ResetFrames();
+        ClearActiveCommand();
         _requeuedSteps.Clear();
         _isHalted = false;
 
@@ -75,6 +78,7 @@ public sealed class CommandExecutionEngine
 
     public void ActivateScriptControl()
     {
+        EnsureActiveCommandInvariant();
         _isHalted = false;
         _setStatus($"Mode: {_controlModeName}");
         PersistCheckpoint();
@@ -82,11 +86,11 @@ public sealed class CommandExecutionEngine
 
     public bool InterruptActiveCommand(string reason = "Interrupted")
     {
-        if (_activeCommand == null)
+        EnsureActiveCommandInvariant();
+        if (!HasActiveCommand)
             return false;
 
-        _activeCommand = null;
-        _activeCommandResult = null;
+        ClearActiveCommand();
         _setStatus(reason);
         PersistCheckpoint();
         return true;
@@ -94,6 +98,8 @@ public sealed class CommandExecutionEngine
 
     public void Halt(string reason = "Halted")
     {
+        EnsureActiveCommandInvariant();
+        ClearActiveCommand();
         _isHalted = true;
         _currentScriptLine = null;
         _setStatus(reason);
@@ -102,6 +108,7 @@ public sealed class CommandExecutionEngine
 
     public void ResumeFromHalt(string reason = "Resumed")
     {
+        EnsureActiveCommandInvariant();
         _isHalted = false;
         _setStatus(reason);
         PersistCheckpoint();
@@ -157,14 +164,13 @@ public sealed class CommandExecutionEngine
         CommandResult result,
         GameState state)
     {
+        EnsureActiveCommandInvariant();
         string? message = null;
         bool shouldAddMemory = false;
 
-        if (_activeCommand != null)
+        if (HasActiveCommand)
         {
-            string activeCommandText = _activeCommandResult == null
-                ? "multi-step command"
-                : FormatCommand(_activeCommandResult);
+            string activeCommandText = FormatCommand(_activeCommandResult!);
 
             await _logger.LogCommandExecutionAsync(
                 _controlModeName,
@@ -174,7 +180,17 @@ public sealed class CommandExecutionEngine
 
             _setStatus($"Executing: continuing {activeCommandText}");
 
-            var continuation = await _activeCommand.ContinueAsync(client, state);
+            (bool finished, CommandExecutionResult? result) continuation;
+            try
+            {
+                continuation = await _activeCommand!.ContinueAsync(client, state);
+            }
+            catch
+            {
+                ClearActiveCommand();
+                PersistCheckpoint();
+                throw;
+            }
 
             bool finished = continuation.Item1;
             var response = continuation.Item2;
@@ -182,17 +198,14 @@ public sealed class CommandExecutionEngine
             if (finished)
             {
                 message = response?.ResultMessage;
-                shouldAddMemory = _activeCommandResult != null;
-
-                if (shouldAddMemory && _activeCommandResult != null)
-                    AddMemory(_activeCommandResult, message);
-
-                _activeCommand = null;
-                _activeCommandResult = null;
+                shouldAddMemory = true;
+                AddMemory(_activeCommandResult!, message);
+                ClearActiveCommand();
                 _setStatus("Waiting");
             }
 
             PersistCheckpoint();
+            EnsureActiveCommandInvariant();
 
             await _logger.LogCommandExecutionAsync(
                 _controlModeName,
@@ -221,11 +234,19 @@ public sealed class CommandExecutionEngine
             if (command is IMultiTurnCommand multiTurnCommand)
             {
                 _setStatus($"Executing: start {FormatCommand(result)}");
-                _activeCommand = multiTurnCommand;
-                _activeCommandResult = result;
+                SetActiveCommand(multiTurnCommand, result);
                 PersistCheckpoint();
 
-                await multiTurnCommand.StartAsync(client, result, state);
+                try
+                {
+                    await multiTurnCommand.StartAsync(client, result, state);
+                }
+                catch
+                {
+                    ClearActiveCommand();
+                    PersistCheckpoint();
+                    throw;
+                }
             }
             else if (command is ISingleTurnCommand singleTurnCommand)
             {
@@ -240,6 +261,7 @@ public sealed class CommandExecutionEngine
         if (shouldAddMemory)
             AddMemory(result, message);
         PersistCheckpoint();
+        EnsureActiveCommandInvariant();
 
         await _logger.LogCommandExecutionAsync(
             _controlModeName,
@@ -251,6 +273,7 @@ public sealed class CommandExecutionEngine
 
     public Task<CommandResult?> DecideAsync(GameState state)
     {
+        EnsureActiveCommandInvariant();
         if (_isHalted)
         {
             _setStatus("Halted: waiting for user input");
@@ -265,6 +288,7 @@ public sealed class CommandExecutionEngine
 
     public void RequeueScriptStep(CommandResult step)
     {
+        EnsureActiveCommandInvariant();
         if (step == null || string.IsNullOrWhiteSpace(step.Action))
             return;
 
@@ -678,8 +702,7 @@ public sealed class CommandExecutionEngine
 
         _isHalted = checkpoint.IsHalted;
         _currentScriptLine = checkpoint.CurrentScriptLine;
-        _activeCommand = null;
-        _activeCommandResult = null;
+        ClearActiveCommand();
 
         if (checkpoint.HadActiveCommand &&
             checkpoint.ActiveCommandResult != null &&
@@ -690,6 +713,37 @@ public sealed class CommandExecutionEngine
 
         if (!TryRestoreFrames(checkpoint.Frames))
             ResetFrames();
+
+        EnsureActiveCommandInvariant();
+    }
+
+    private void SetActiveCommand(IMultiTurnCommand command, CommandResult result)
+    {
+        _activeCommand = command ?? throw new ArgumentNullException(nameof(command));
+        _activeCommandResult = result ?? throw new ArgumentNullException(nameof(result));
+        _activeCommandState = ActiveCommandState.MultiTurn;
+        EnsureActiveCommandInvariant();
+    }
+
+    private void ClearActiveCommand()
+    {
+        _activeCommand = null;
+        _activeCommandResult = null;
+        _activeCommandState = ActiveCommandState.Idle;
+    }
+
+    private void EnsureActiveCommandInvariant()
+    {
+        bool hasCommand = _activeCommand != null;
+        bool hasCommandResult = _activeCommandResult != null;
+        bool stateSaysActive = _activeCommandState == ActiveCommandState.MultiTurn;
+        bool refsMatch = hasCommand == hasCommandResult;
+
+        if (!refsMatch || stateSaysActive != hasCommand)
+        {
+            throw new InvalidOperationException(
+                $"Invalid command execution state: activeState={_activeCommandState}, hasCommand={hasCommand}, hasCommandResult={hasCommandResult}.");
+        }
     }
 
     private bool TryRestoreFrames(IReadOnlyList<ExecutionFrameCheckpoint> savedFrames)
@@ -889,6 +943,12 @@ public sealed class CommandExecutionEngine
         Repeat,
         If,
         Until
+    }
+
+    private enum ActiveCommandState
+    {
+        Idle,
+        MultiTurn
     }
 
     private record ActionMemory(

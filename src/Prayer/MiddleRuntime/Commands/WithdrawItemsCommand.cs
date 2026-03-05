@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 public class WithdrawItemsCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
 {
     public override string Name => "retrieve";
-    public DslCommandSyntax GetDslSyntax() => new(
+    public override DslCommandSyntax GetDslSyntax() => new(
         ArgSpecs: new[]
         {
             new DslArgumentSpec(DslArgKind.Item, Required: true),

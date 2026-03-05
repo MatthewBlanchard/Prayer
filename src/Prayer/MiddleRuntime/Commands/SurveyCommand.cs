@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 public class SurveyCommand : ISingleTurnCommand
 {
     public string Name => "survey";
+    public DslCommandSyntax GetDslSyntax() => new();
 
     public bool IsAvailable(GameState state)
         => true;

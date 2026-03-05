@@ -8,7 +8,7 @@ public class CancelSellCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
 {
     public override string Name => "cancel_sell";
     protected override bool RequiresStation => true;
-    public DslCommandSyntax GetDslSyntax() => new(
+    public override DslCommandSyntax GetDslSyntax() => new(
         DslArgKind.Item,
         ArgRequired: true);
 

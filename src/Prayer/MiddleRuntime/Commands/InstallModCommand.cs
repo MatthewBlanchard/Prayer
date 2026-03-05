@@ -6,6 +6,11 @@ public class InstallModCommand : AutoDockSingleTurnCommand
 {
     public override string Name => "install_mod";
     protected override bool RequiresStation => true;
+    public override DslCommandSyntax GetDslSyntax() => new(
+        ArgSpecs: new[]
+        {
+            new DslArgumentSpec(DslArgKind.Any, Required: true)
+        });
 
     protected override bool IsAvailableWhenDocked(GameState state)
         => state.Docked && state.CurrentPOI.IsStation;

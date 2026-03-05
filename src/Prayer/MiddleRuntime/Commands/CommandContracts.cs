@@ -16,6 +16,8 @@ public interface ICommand
     bool IsAvailable(GameState state);
 
     string BuildHelp(GameState state);
+
+    DslCommandSyntax GetDslSyntax();
 }
 
 [Flags]

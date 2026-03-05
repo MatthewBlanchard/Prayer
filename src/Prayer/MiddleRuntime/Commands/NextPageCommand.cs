@@ -3,6 +3,11 @@ using System.Threading.Tasks;
 public class NextPageCommand : ISingleTurnCommand
 {
     public string Name => "next";
+    public DslCommandSyntax GetDslSyntax() => new(
+        ArgSpecs: new[]
+        {
+            new DslArgumentSpec(DslArgKind.Any, Required: true)
+        });
 
     public bool IsAvailable(GameState state)
         => state.Docked && state.CurrentPOI.IsStation;

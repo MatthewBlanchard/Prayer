@@ -11,7 +11,7 @@
 - Prayer is deployed for a single trusted operator environment.
 - Multi-user auth, tenant isolation, and public-internet hardening are out of scope for this phase.
 - Multiple runtime sessions are still supported, but they are not treated as separate security tenants.
-- App runtime control path is Prayer-only (`PRAYER_BASE_URL` required); no local runtime fallback path.
+- App runtime control path is Prayer-only (`PRAYER_BASE_URL` optional; defaults to `http://localhost:5000/`); no local runtime fallback path.
 
 ## Naming and component direction
 

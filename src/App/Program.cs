@@ -17,7 +17,7 @@ class Program
             Environment.GetEnvironmentVariable("UI_PREFIX") ?? "http://localhost:5057/");
         var prayerBaseUrl = Environment.GetEnvironmentVariable("PRAYER_BASE_URL");
         if (string.IsNullOrWhiteSpace(prayerBaseUrl))
-            throw new InvalidOperationException("PRAYER_BASE_URL is required (legacy in-process runtime path is disabled).");
+            prayerBaseUrl = "http://localhost:5000/";
         var prayerApi = new PrayerApiClient(prayerBaseUrl);
         var savedLlmSelection = await prayerApi.GetDefaultLlmPreferenceAsync();
         var llmCatalog = await prayerApi.GetLlmCatalogAsync();

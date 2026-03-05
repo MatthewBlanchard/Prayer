@@ -16,6 +16,14 @@ Prayer now builds independently from `SpaceMoltLLM.csproj` and compiles required
 dotnet run --project src/Prayer/Prayer.csproj
 ```
 
+## One-command local test run
+
+```bash
+./scripts/dev-up.sh
+```
+
+This starts Prayer, waits for `/health`, then starts the app with `PRAYER_BASE_URL` set.
+
 ## Current scaffold endpoints
 
 - `GET /health`
@@ -47,7 +55,7 @@ Current implementation executes real runtime sessions backed by:
 - `SpaceMoltAgent` + `RuntimeHost` worker loop
 - Runtime command queues (`set_script`, `generate_script`, `execute_script`, `halt`, `save_example`, `loop_on`, `loop_off`)
 
-The app now consumes Prayer as its runtime control plane (`PRAYER_BASE_URL` required).
+The app now consumes Prayer as its runtime control plane (`PRAYER_BASE_URL` optional; defaults to `http://localhost:5000/`).
 
 ## Create session request
 

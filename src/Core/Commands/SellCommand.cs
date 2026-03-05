@@ -32,7 +32,7 @@ public class SellCommand : AutoDockMultiTurnCommand, IDslCommandGrammar
         => "- sell <item|cargo> → sell one item or all cargo";
 
     protected override async Task<CommandExecutionResult?> StartDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -66,7 +66,7 @@ public class SellCommand : AutoDockMultiTurnCommand, IDslCommandGrammar
     }
 
     protected override async Task<(bool finished, CommandExecutionResult? result)> ContinueDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state)
     {
         if (_sellQueue == null)
@@ -104,7 +104,7 @@ public class SellCommand : AutoDockMultiTurnCommand, IDslCommandGrammar
     }
 
     private async Task<CommandExecutionResult?> SellOneAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state,
         string item)
     {
@@ -134,14 +134,14 @@ public class SellCommand : AutoDockMultiTurnCommand, IDslCommandGrammar
         decimal price = targetPrice.Value;
         price = Math.Max(1, Math.Floor(price));
 
-        JsonElement response = await client.ExecuteAsync(
+        JsonElement response = (await client.ExecuteCommandAsync(
             "create_sell_order",
             new
             {
                 item_id = item,
                 quantity = stack.Quantity,
                 price_each = price
-            });
+            })).Payload;
 
         return new CommandExecutionResult
         {

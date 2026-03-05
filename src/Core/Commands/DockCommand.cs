@@ -11,7 +11,7 @@ public class DockCommand : ISingleTurnCommand
         => "- dock → dock at current POI, or auto-travel to a nearby dockable POI and dock";
 
     public async Task<CommandExecutionResult?> ExecuteAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {

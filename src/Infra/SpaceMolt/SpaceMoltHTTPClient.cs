@@ -7,7 +7,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-public class SpaceMoltHttpClient : IDisposable
+public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
 {
     private readonly HttpClient _http;
     private readonly SpaceMoltApiTransport _transport;
@@ -216,6 +216,12 @@ public class SpaceMoltHttpClient : IDisposable
         return result;
     }
 
+    async Task<RuntimeCommandResult> IRuntimeTransport.ExecuteCommandAsync(string command, object? payload)
+    {
+        JsonElement response = await ExecuteAsync(command, payload);
+        return ToRuntimeCommandResult(response);
+    }
+
     private async Task RefreshLatestStateAfterCommandAsync(string command)
     {
         if (_isRefreshingLatestState)
@@ -277,6 +283,12 @@ public class SpaceMoltHttpClient : IDisposable
         return routeResult;
     }
 
+    async Task<RuntimeCommandResult> IRuntimeTransport.FindRouteAsync(string targetSystem)
+    {
+        JsonElement response = await FindRouteAsync(targetSystem);
+        return ToRuntimeCommandResult(response);
+    }
+
     public async Task<Catalogue> GetCatalogueAsync(
         string type,
         string? category = null,
@@ -304,6 +316,11 @@ public class SpaceMoltHttpClient : IDisposable
             throw new InvalidOperationException("Game state cache is empty.");
 
         return _latestGameState;
+    }
+
+    GameState IRuntimeTransport.GetLatestState()
+    {
+        return GetGameState();
     }
 
     private async Task<GameState> BuildGameStateFromStatusAsync(JsonElement status)
@@ -529,6 +546,15 @@ public class SpaceMoltHttpClient : IDisposable
                message.Contains("not authenticated", StringComparison.OrdinalIgnoreCase) ||
                message.Contains("must login first", StringComparison.OrdinalIgnoreCase) ||
                message.Contains("must log in first", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static RuntimeCommandResult ToRuntimeCommandResult(JsonElement payload)
+    {
+        bool failed = SpaceMoltApiTransport.TryExtractApiError(payload, out _, out var message, out _);
+        return new RuntimeCommandResult(
+            Succeeded: !failed,
+            Payload: payload,
+            ErrorMessage: failed ? message : null);
     }
 
     private static bool IsSessionInvalidException(Exception ex)

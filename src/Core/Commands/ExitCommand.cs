@@ -10,7 +10,7 @@ public class ExitCommand : ISingleTurnCommand
         => "- exit → back to your ship";
 
     public Task<CommandExecutionResult?> ExecuteAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {

@@ -13,7 +13,7 @@ public class ShipCatalogCommand : AutoDockSingleTurnCommand
         => "- ship_catalog → reset catalog to page 1";
 
     protected override Task<CommandExecutionResult?> ExecuteDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {

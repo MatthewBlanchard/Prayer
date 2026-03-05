@@ -23,7 +23,7 @@ public class DepositItemsCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
         => "- stash <itemId|cargo> → move one stack or dump all cargo to storage";
 
     protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -49,13 +49,13 @@ public class DepositItemsCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
 
             foreach (var (itemId, cargoStack) in cargoItems)
             {
-                JsonElement depositResponse = await client.ExecuteAsync(
+                JsonElement depositResponse = (await client.ExecuteCommandAsync(
                     "deposit_items",
                     new
                     {
                         item_id = itemId,
                         quantity = cargoStack.Quantity
-                    });
+                    })).Payload;
 
                 lastMessage = CommandJson.TryGetResultMessage(depositResponse);
                 if (CommandJson.TryGetError(depositResponse, out _, out _))
@@ -80,13 +80,13 @@ public class DepositItemsCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
         if (!state.Cargo.TryGetValue(cmd.Arg1, out var stack) || stack.Quantity <= 0)
             return null;
 
-        JsonElement response = await client.ExecuteAsync(
+        JsonElement response = (await client.ExecuteCommandAsync(
             "deposit_items",
             new
             {
                 item_id = cmd.Arg1,
                 quantity = stack.Quantity
-            });
+            })).Payload;
 
         return new CommandExecutionResult
         {

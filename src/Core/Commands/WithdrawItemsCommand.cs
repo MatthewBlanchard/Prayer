@@ -23,7 +23,7 @@ public class WithdrawItemsCommand : AutoDockSingleTurnCommand, IDslCommandGramma
         => "- retrieve <itemId> [quantity:int] → move item from storage to cargo";
 
     protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -51,13 +51,13 @@ public class WithdrawItemsCommand : AutoDockSingleTurnCommand, IDslCommandGramma
 
         while (quantity > 0)
         {
-            response = await client.ExecuteAsync(
+            response = (await client.ExecuteCommandAsync(
                 "withdraw_items",
                 new
                 {
                     item_id = cmd.Arg1,
                     quantity = quantity
-                });
+                })).Payload;
 
             if (!CommandJson.TryGetError(response, out var code, out _))
                 break;

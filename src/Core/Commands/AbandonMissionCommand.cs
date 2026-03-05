@@ -22,7 +22,7 @@ public class AbandonMissionCommand : AutoDockSingleTurnCommand, IDslCommandGramm
         => "- abandon_mission <missionId> → abandon an active mission";
 
     protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -30,9 +30,9 @@ public class AbandonMissionCommand : AutoDockSingleTurnCommand, IDslCommandGramm
         if (string.IsNullOrWhiteSpace(missionId))
             return new CommandExecutionResult { ResultMessage = "Usage: abandon_mission <missionId>." };
 
-        JsonElement response = await client.ExecuteAsync(
+        JsonElement response = (await client.ExecuteCommandAsync(
             "abandon_mission",
-            new { mission_id = missionId });
+            new { mission_id = missionId })).Payload;
 
         return new CommandExecutionResult
         {

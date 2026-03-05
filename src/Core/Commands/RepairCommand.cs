@@ -15,11 +15,11 @@ public class RepairCommand : AutoDockSingleTurnCommand
         => "- repair → restore hull";
 
     protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
-        JsonElement response = await client.ExecuteAsync("repair");
+        JsonElement response = (await client.ExecuteCommandAsync("repair")).Payload;
 
         return new CommandExecutionResult
         {

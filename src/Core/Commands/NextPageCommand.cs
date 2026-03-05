@@ -10,7 +10,7 @@ public class NextPageCommand : ISingleTurnCommand
         => "- next page → move to next catalog page";
 
     public Task<CommandExecutionResult?> ExecuteAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {

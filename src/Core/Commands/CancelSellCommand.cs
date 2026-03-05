@@ -23,7 +23,7 @@ public class CancelSellCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
         => "- cancel_sell <itemId> → cancel your open sell orders for an item";
 
     protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -49,9 +49,9 @@ public class CancelSellCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
         var errors = new List<string>();
         foreach (var order in orders)
         {
-            JsonElement response = await client.ExecuteAsync(
+            JsonElement response = (await client.ExecuteCommandAsync(
                 "cancel_order",
-                new { order_id = order.OrderId });
+                new { order_id = order.OrderId })).Payload;
 
             if (CommandJson.TryGetError(response, out _, out var errorMessage))
             {

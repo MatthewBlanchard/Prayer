@@ -10,7 +10,7 @@ public class LastPageCommand : ISingleTurnCommand
         => "- last page → move to previous catalog page";
 
     public Task<CommandExecutionResult?> ExecuteAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {

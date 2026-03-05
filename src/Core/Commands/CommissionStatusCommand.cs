@@ -12,11 +12,11 @@ public class CommissionStatusCommand : AutoDockSingleTurnCommand
         => "- commission_status → view ship commission progress";
 
     protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
-        JsonElement response = await client.ExecuteAsync("commission_status");
+        JsonElement response = (await client.ExecuteCommandAsync("commission_status")).Payload;
 
         int count = 0;
         if (response.ValueKind == JsonValueKind.Object &&

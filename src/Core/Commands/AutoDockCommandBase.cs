@@ -11,7 +11,7 @@ public abstract class AutoDockSingleTurnCommand : ISingleTurnCommand
     public abstract string BuildHelp(GameState state);
     protected abstract bool IsAvailableWhenDocked(GameState state);
     protected abstract Task<CommandExecutionResult?> ExecuteDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state);
 
@@ -24,7 +24,7 @@ public abstract class AutoDockSingleTurnCommand : ISingleTurnCommand
     }
 
     public async Task<CommandExecutionResult?> ExecuteAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -44,7 +44,7 @@ public abstract class AutoDockSingleTurnCommand : ISingleTurnCommand
         return await ExecuteDockedAsync(client, cmd, ensured.State);
     }
 
-    protected static GameState GetLatestStateOrFallback(SpaceMoltHttpClient client, GameState fallback)
+    protected static GameState GetLatestStateOrFallback(IRuntimeTransport client, GameState fallback)
         => AutoDockCommandState.GetLatestStateOrFallback(client, fallback);
 
     private bool IsDockLocationValid(GameState state)
@@ -61,11 +61,11 @@ public abstract class AutoDockMultiTurnCommand : IMultiTurnCommand
     public abstract string BuildHelp(GameState state);
     protected abstract bool IsAvailableWhenDocked(GameState state);
     protected abstract Task<CommandExecutionResult?> StartDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state);
     protected abstract Task<(bool finished, CommandExecutionResult? result)> ContinueDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state);
 
     public bool IsAvailable(GameState state)
@@ -77,7 +77,7 @@ public abstract class AutoDockMultiTurnCommand : IMultiTurnCommand
     }
 
     public async Task<CommandExecutionResult?> StartAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -97,7 +97,7 @@ public abstract class AutoDockMultiTurnCommand : IMultiTurnCommand
     }
 
     public async Task<(bool finished, CommandExecutionResult? result)> ContinueAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state)
     {
         if (!string.IsNullOrWhiteSpace(_startFailureMessage))
@@ -124,11 +124,11 @@ internal static class AutoDockCommandState
         GameState State,
         string ErrorMessage);
 
-    public static GameState GetLatestStateOrFallback(SpaceMoltHttpClient client, GameState fallback)
+    public static GameState GetLatestStateOrFallback(IRuntimeTransport client, GameState fallback)
     {
         try
         {
-            return client.GetGameState();
+            return client.GetLatestState();
         }
         catch
         {
@@ -140,7 +140,7 @@ internal static class AutoDockCommandState
         => FindDockTarget(state, requiresStation) != null;
 
     public static async Task<EnsureDockedResult> EnsureDockedReadyAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state,
         string commandName,
         bool requiresStation)
@@ -159,11 +159,11 @@ internal static class AutoDockCommandState
         if (!string.Equals(effectiveState.CurrentPOI.Id, target.Id, StringComparison.Ordinal))
         {
             if (effectiveState.Docked)
-                await client.ExecuteAsync("undock");
+                await client.ExecuteCommandAsync("undock");
 
-            JsonElement travelResponse = await client.ExecuteAsync(
+            JsonElement travelResponse = (await client.ExecuteCommandAsync(
                 "travel",
-                new { target_poi = target.Id });
+                new { target_poi = target.Id })).Payload;
             if (CommandJson.TryGetError(travelResponse, out var travelCode, out var travelError))
             {
                 var detail = !string.IsNullOrWhiteSpace(travelError)
@@ -178,7 +178,7 @@ internal static class AutoDockCommandState
 
         if (!effectiveState.Docked)
         {
-            JsonElement dockResponse = await client.ExecuteAsync("dock");
+            JsonElement dockResponse = (await client.ExecuteCommandAsync("dock")).Payload;
             string? dockMessage = CommandJson.TryGetResultMessage(dockResponse);
 
             effectiveState = GetLatestStateOrFallback(client, effectiveState);

@@ -34,7 +34,7 @@ public class BuyCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
         => "- buy <itemId> <quantity:int> → buy at station market price";
 
     protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -96,14 +96,14 @@ public class BuyCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
         decimal price = highestBuyPrice ?? lowestSellPrice!.Value;
         price = Math.Max(1, Math.Floor(price));
 
-        JsonElement response = await client.ExecuteAsync(
+        JsonElement response = (await client.ExecuteCommandAsync(
             "create_buy_order",
             new
             {
                 item_id = cmd.Arg1,
                 quantity = quantity,
                 price_each = price
-            });
+            })).Payload;
 
         if (IsCrossingOrder(response))
         {
@@ -112,9 +112,9 @@ public class BuyCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
 
             foreach (var orderId in conflictingOrderIds)
             {
-                JsonElement cancelResponse = await client.ExecuteAsync(
+                JsonElement cancelResponse = (await client.ExecuteCommandAsync(
                     "cancel_order",
-                    new { order_id = orderId });
+                    new { order_id = orderId })).Payload;
 
                 string? msg = CommandJson.TryGetResultMessage(cancelResponse);
                 if (!string.IsNullOrWhiteSpace(msg))
@@ -125,14 +125,14 @@ public class BuyCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
                 }
             }
 
-            JsonElement retryResponse = await client.ExecuteAsync(
+            JsonElement retryResponse = (await client.ExecuteCommandAsync(
                 "create_buy_order",
                 new
                 {
                     item_id = cmd.Arg1,
                     quantity = quantity,
                     price_each = price
-                });
+                })).Payload;
 
             string? retryMessage = CommandJson.TryGetResultMessage(retryResponse);
             if (string.IsNullOrWhiteSpace(cancelMessage) && conflictingOrderIds.Count > 0)

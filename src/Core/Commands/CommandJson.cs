@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 /// <summary>
 /// Shared helpers so commands don't duplicate JsonElement parsing.
-/// Assumes SpaceMoltHttpClient.ExecuteAsync returns JsonElement.
+/// Assumes IRuntimeTransport.ExecuteAsync returns JsonElement.
 /// </summary>
 public static class CommandJson
 {

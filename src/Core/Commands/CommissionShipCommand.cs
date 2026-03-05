@@ -13,7 +13,7 @@ public class CommissionShipCommand : AutoDockSingleTurnCommand
         => "- commission_ship <shipClassId> → start ship commission";
 
     protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -21,7 +21,7 @@ public class CommissionShipCommand : AutoDockSingleTurnCommand
         if (string.IsNullOrWhiteSpace(shipClass))
             return new CommandExecutionResult { ResultMessage = "Usage: commission_ship <shipClassId>." };
 
-        JsonElement response = await client.ExecuteAsync("commission_ship", new { ship_class = shipClass });
+        JsonElement response = (await client.ExecuteCommandAsync("commission_ship", new { ship_class = shipClass })).Payload;
         return new CommandExecutionResult
         {
             ResultMessage = CommandJson.TryGetResultMessage(response) ?? $"Commission started for {shipClass}."

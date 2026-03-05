@@ -13,7 +13,7 @@ public class SwitchShipCommand : AutoDockSingleTurnCommand
         => "- switch_ship <shipId> → switch active ship at this station";
 
     protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -26,7 +26,7 @@ public class SwitchShipCommand : AutoDockSingleTurnCommand
             };
         }
 
-        JsonElement response = await client.ExecuteAsync("switch_ship", new { ship_id = shipId });
+        JsonElement response = (await client.ExecuteCommandAsync("switch_ship", new { ship_id = shipId })).Payload;
         string? message = CommandJson.TryGetResultMessage(response);
 
         if (string.IsNullOrWhiteSpace(message))

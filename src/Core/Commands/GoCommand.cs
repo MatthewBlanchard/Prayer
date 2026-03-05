@@ -41,7 +41,7 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
         => "- go <identifier> → go to a POI or any system name; auto-pathfinds (not current POI)";
 
     public async Task<CommandExecutionResult?> StartAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -80,7 +80,7 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
     }
 
     public async Task<(bool finished, CommandExecutionResult? result)> ContinueAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state)
     {
         if (string.IsNullOrWhiteSpace(_target))
@@ -98,7 +98,7 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
     }
 
     private async Task<(bool finished, CommandExecutionResult? result)> ExecuteNextStepAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state)
     {
         string target = _target!;
@@ -140,13 +140,13 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
         {
             if (state.Docked)
             {
-                await client.ExecuteAsync("undock");
+                await client.ExecuteCommandAsync("undock");
                 return (false, null);
             }
 
-            JsonElement travel = await client.ExecuteAsync(
+            JsonElement travel = (await client.ExecuteCommandAsync(
                 "travel",
-                new { target_poi = poiTarget });
+                new { target_poi = poiTarget })).Payload;
 
             _target = null;
             _resolvedSystemTarget = null;
@@ -161,11 +161,11 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
         // Otherwise move across systems first.
         if (state.Docked)
         {
-            await client.ExecuteAsync("undock");
+            await client.ExecuteCommandAsync("undock");
             return (false, null);
         }
 
-        JsonElement routeResult = await client.FindRouteAsync(systemTarget);
+        JsonElement routeResult = (await client.FindRouteAsync(systemTarget)).Payload;
         string? nextHop = TryGetNextHop(routeResult, state.System, systemTarget);
 
         if (string.IsNullOrWhiteSpace(nextHop))
@@ -190,7 +190,7 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
             }
         }
 
-        await client.ExecuteAsync(
+        await client.ExecuteCommandAsync(
             "jump",
             new { target_system = nextHop });
         _didMoveToTarget = true;
@@ -199,7 +199,7 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
     }
 
     private static async Task<(bool found, string? systemId, string? poiId)> ResolveTargetAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state,
         string rawTarget)
     {

@@ -13,7 +13,7 @@ public class InstallModCommand : AutoDockSingleTurnCommand
         => "- install_mod <moduleId> → install a module on your active ship";
 
     protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -21,7 +21,7 @@ public class InstallModCommand : AutoDockSingleTurnCommand
         if (string.IsNullOrWhiteSpace(moduleId))
             return new CommandExecutionResult { ResultMessage = "Usage: install_mod <moduleId>." };
 
-        JsonElement response = await client.ExecuteAsync("install_mod", new { module_id = moduleId });
+        JsonElement response = (await client.ExecuteCommandAsync("install_mod", new { module_id = moduleId })).Payload;
         return new CommandExecutionResult
         {
             ResultMessage = CommandJson.TryGetResultMessage(response) ?? $"Installed module {moduleId}."

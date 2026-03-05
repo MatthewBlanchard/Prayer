@@ -13,7 +13,7 @@ public class ListShipForSaleCommand : AutoDockSingleTurnCommand
         => "- list_ship_for_sale <shipId> <price> → list your ship on the exchange";
 
     protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -26,13 +26,13 @@ public class ListShipForSaleCommand : AutoDockSingleTurnCommand
             };
         }
 
-        JsonElement response = await client.ExecuteAsync(
+        JsonElement response = (await client.ExecuteCommandAsync(
             "list_ship_for_sale",
             new
             {
                 ship_id = shipId,
                 price = cmd.Quantity.Value
-            });
+            })).Payload;
 
         return new CommandExecutionResult
         {

@@ -41,7 +41,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         => "- mine [asteroid_belt|asteroid|gas_cloud|ice_field|resourceId] → mine here, auto-go to local POI type, or find+mine a resource";
 
     public async Task<CommandExecutionResult?> StartAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -130,7 +130,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
     }
 
     public async Task<(bool finished, CommandExecutionResult? result)> ContinueAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state)
     {
         if (_stopRequested)
@@ -174,7 +174,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
     }
 
     private async Task<JsonElement> ExecuteStepAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state)
     {
         return _resourceMode
@@ -183,7 +183,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
     }
 
     private async Task<JsonElement> ExecuteClassicMineStepAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state)
     {
         if (!string.IsNullOrWhiteSpace(_targetPoiId) &&
@@ -191,27 +191,27 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         {
             if (state.Docked)
             {
-                await client.ExecuteAsync("undock");
+                await client.ExecuteCommandAsync("undock");
                 return default;
             }
 
-            await client.ExecuteAsync("travel", new { target_poi = _targetPoiId });
+            await client.ExecuteCommandAsync("travel", new { target_poi = _targetPoiId });
             return default;
         }
 
         if (state.Docked)
         {
-            await client.ExecuteAsync("undock");
+            await client.ExecuteCommandAsync("undock");
             return default;
         }
 
-        JsonElement response = await client.ExecuteAsync("mine");
+        JsonElement response = (await client.ExecuteCommandAsync("mine")).Payload;
         CaptureStopReasonFromResponse(response);
         return response;
     }
 
     private async Task<JsonElement> ExecuteResourceStepAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state)
     {
         if (string.IsNullOrWhiteSpace(_resourceId))
@@ -238,11 +238,11 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
 
             if (state.Docked)
             {
-                await client.ExecuteAsync("undock");
+                await client.ExecuteCommandAsync("undock");
                 return default;
             }
 
-            JsonElement mineResponse = await client.ExecuteAsync("mine");
+            JsonElement mineResponse = (await client.ExecuteCommandAsync("mine")).Payload;
             CaptureStopReasonFromResponse(mineResponse);
             return mineResponse;
         }
@@ -254,14 +254,14 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
     }
 
     private async Task<JsonElement> ContinueToKnownTargetAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state)
     {
         if (!string.Equals(state.System, _targetSystemId, StringComparison.Ordinal))
         {
             if (state.Docked)
             {
-                await client.ExecuteAsync("undock");
+                await client.ExecuteCommandAsync("undock");
                 return default;
             }
 
@@ -274,7 +274,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
                 return default;
             }
 
-            await client.ExecuteAsync("jump", new { target_system = nextHop });
+            await client.ExecuteCommandAsync("jump", new { target_system = nextHop });
             return default;
         }
 
@@ -292,16 +292,16 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
 
         if (state.Docked)
         {
-            await client.ExecuteAsync("undock");
+            await client.ExecuteCommandAsync("undock");
             return default;
         }
 
-        await client.ExecuteAsync("travel", new { target_poi = _targetPoiId });
+        await client.ExecuteCommandAsync("travel", new { target_poi = _targetPoiId });
         return default;
     }
 
     private async Task<JsonElement> ContinueBfsExplorationAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state)
     {
         var currentMineable = GetCurrentSystemMineablePois(state);
@@ -326,11 +326,11 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         {
             if (state.Docked)
             {
-                await client.ExecuteAsync("undock");
+                await client.ExecuteCommandAsync("undock");
                 return default;
             }
 
-            await client.ExecuteAsync("travel", new { target_poi = nextMineablePoi.Id });
+            await client.ExecuteCommandAsync("travel", new { target_poi = nextMineablePoi.Id });
             return default;
         }
 
@@ -352,7 +352,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
 
             if (state.Docked)
             {
-                await client.ExecuteAsync("undock");
+                await client.ExecuteCommandAsync("undock");
                 return default;
             }
 
@@ -364,7 +364,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
                 continue;
             }
 
-            await client.ExecuteAsync("jump", new { target_system = nextHop });
+            await client.ExecuteCommandAsync("jump", new { target_system = nextHop });
             return default;
         }
 
@@ -767,11 +767,11 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
     }
 
     private static async Task<string?> ResolveNextHopAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state,
         string targetSystem)
     {
-        JsonElement routeResult = await client.FindRouteAsync(targetSystem);
+        JsonElement routeResult = (await client.FindRouteAsync(targetSystem)).Payload;
         string? nextHop = TryGetNextHop(routeResult, state.System, targetSystem);
         if (!string.IsNullOrWhiteSpace(nextHop))
             return nextHop;

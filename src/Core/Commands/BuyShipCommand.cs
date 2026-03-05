@@ -13,7 +13,7 @@ public class BuyShipCommand : AutoDockSingleTurnCommand
         => "- buy_ship <shipClassId> → buy a showroom ship";
 
     protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -21,7 +21,7 @@ public class BuyShipCommand : AutoDockSingleTurnCommand
         if (string.IsNullOrWhiteSpace(shipClass))
             return new CommandExecutionResult { ResultMessage = "Usage: buy_ship <shipClassId>." };
 
-        JsonElement response = await client.ExecuteAsync("buy_ship", new { ship_class = shipClass });
+        JsonElement response = (await client.ExecuteCommandAsync("buy_ship", new { ship_class = shipClass })).Payload;
         return new CommandExecutionResult
         {
             ResultMessage = CommandJson.TryGetResultMessage(response) ?? $"Bought ship class {shipClass}."

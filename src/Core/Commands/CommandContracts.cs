@@ -55,7 +55,7 @@ public interface IDslCommandGrammar
 public interface ISingleTurnCommand : ICommand
 {
     Task<CommandExecutionResult?> ExecuteAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult result,
         GameState state);
 }
@@ -63,11 +63,11 @@ public interface ISingleTurnCommand : ICommand
 public interface IMultiTurnCommand : ICommand
 {
     Task<CommandExecutionResult?> StartAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult result,
         GameState state);
 
     Task<(bool finished, CommandExecutionResult? result)> ContinueAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         GameState state);
 }

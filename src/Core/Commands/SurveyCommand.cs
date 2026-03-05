@@ -12,11 +12,11 @@ public class SurveyCommand : ISingleTurnCommand
         => "- survey → survey the current system for hidden deep core deposits";
 
     public async Task<CommandExecutionResult?> ExecuteAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
-        JsonElement response = await client.ExecuteAsync("survey_system");
+        JsonElement response = (await client.ExecuteCommandAsync("survey_system")).Payload;
         return new CommandExecutionResult
         {
             ResultMessage = CommandJson.TryGetResultMessage(response)

@@ -22,7 +22,7 @@ public class AcceptMissionCommand : AutoDockSingleTurnCommand, IDslCommandGramma
         => "- accept_mission <missionId> → accept a mission from the board";
 
     protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
-        SpaceMoltHttpClient client,
+        IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
@@ -30,9 +30,9 @@ public class AcceptMissionCommand : AutoDockSingleTurnCommand, IDslCommandGramma
         if (string.IsNullOrWhiteSpace(missionId))
             return new CommandExecutionResult { ResultMessage = "Usage: accept_mission <missionId>." };
 
-        JsonElement response = await client.ExecuteAsync(
+        JsonElement response = (await client.ExecuteCommandAsync(
             "accept_mission",
-            new { mission_id = missionId });
+            new { mission_id = missionId })).Payload;
 
         return new CommandExecutionResult
         {

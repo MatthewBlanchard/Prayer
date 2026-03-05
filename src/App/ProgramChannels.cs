@@ -8,7 +8,7 @@ public sealed class ProgramChannels
         Channel<string> generateScript,
         Channel<bool> saveExample,
         Channel<bool> executeScript,
-        Channel<bool> haltNow,
+        Channel<string> haltNow,
         Channel<LoopUpdate> loopUpdates,
         Channel<string> switchBot,
         Channel<AddBotRequest> addBot,
@@ -33,7 +33,7 @@ public sealed class ProgramChannels
     public Channel<string> GenerateScript { get; }
     public Channel<bool> SaveExample { get; }
     public Channel<bool> ExecuteScript { get; }
-    public Channel<bool> HaltNow { get; }
+    public Channel<string> HaltNow { get; }
     public Channel<LoopUpdate> LoopUpdates { get; }
     public Channel<string> SwitchBot { get; }
     public Channel<AddBotRequest> AddBot { get; }
@@ -48,7 +48,7 @@ public sealed class ProgramChannels
             Channel.CreateUnbounded<string>(),
             Channel.CreateUnbounded<bool>(),
             Channel.CreateUnbounded<bool>(),
-            Channel.CreateUnbounded<bool>(),
+            Channel.CreateUnbounded<string>(),
             Channel.CreateUnbounded<LoopUpdate>(),
             Channel.CreateUnbounded<string>(),
             Channel.CreateUnbounded<AddBotRequest>(),

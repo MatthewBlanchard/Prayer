@@ -28,6 +28,11 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
     private Queue<string> _bfsSystems = new();
     private readonly HashSet<string> _exploredSystems = new(StringComparer.Ordinal);
     private readonly HashSet<string> _checkedPoiIds = new(StringComparer.Ordinal);
+    private static readonly object ExplorationSync = new();
+    private static readonly Dictionary<string, HashSet<string>> ExhaustedPoisByResource =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, HashSet<string>> ExploredSystemsByResource =
+        new(StringComparer.OrdinalIgnoreCase);
 
     public bool IsAvailable(GameState state)
         => !string.IsNullOrWhiteSpace(state.System);
@@ -93,6 +98,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         {
             _resourceMode = true;
             _resourceId = rawArg;
+            LoadPersistentResourceExploration();
 
             if (CurrentPoiHasResource(state))
             {
@@ -308,6 +314,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
             !_checkedPoiIds.Contains(state.CurrentPOI.Id))
         {
             _checkedPoiIds.Add(state.CurrentPOI.Id);
+            RememberCheckedPoi(state.CurrentPOI.Id);
             uncheckedMineable = currentMineable
                 .Where(p => !_checkedPoiIds.Contains(p.Id))
                 .ToList();
@@ -328,6 +335,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         }
 
         _exploredSystems.Add(state.System);
+        RememberExploredSystem(state.System);
 
         while (_bfsSystems.Count > 0)
         {
@@ -465,8 +473,6 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
 
     private void InitializeBfsQueue(GameState state)
     {
-        _checkedPoiIds.Clear();
-
         var adjacency = BuildAdjacency(state);
         var visited = new HashSet<string>(StringComparer.Ordinal);
         var bfsQueue = new Queue<string>();
@@ -613,6 +619,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
 
         var poiCandidates = resourceIndex[matchedResourceKey]
             .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Where(id => !_checkedPoiIds.Contains(id))
             .Distinct(StringComparer.Ordinal)
             .ToList();
         if (poiCandidates.Count == 0)
@@ -665,6 +672,63 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         systemId = bestSystem;
         poiId = bestPoi;
         return true;
+    }
+
+    private void LoadPersistentResourceExploration()
+    {
+        if (string.IsNullOrWhiteSpace(_resourceId))
+            return;
+
+        lock (ExplorationSync)
+        {
+            if (ExhaustedPoisByResource.TryGetValue(_resourceId, out var checkedPois))
+                _checkedPoiIds.UnionWith(checkedPois);
+
+            if (ExploredSystemsByResource.TryGetValue(_resourceId, out var exploredSystems))
+                _exploredSystems.UnionWith(exploredSystems);
+        }
+    }
+
+    private void RememberCheckedPoi(string poiId)
+    {
+        if (!_resourceMode ||
+            string.IsNullOrWhiteSpace(_resourceId) ||
+            string.IsNullOrWhiteSpace(poiId))
+        {
+            return;
+        }
+
+        lock (ExplorationSync)
+        {
+            if (!ExhaustedPoisByResource.TryGetValue(_resourceId, out var checkedPois))
+            {
+                checkedPois = new HashSet<string>(StringComparer.Ordinal);
+                ExhaustedPoisByResource[_resourceId] = checkedPois;
+            }
+
+            checkedPois.Add(poiId);
+        }
+    }
+
+    private void RememberExploredSystem(string systemId)
+    {
+        if (!_resourceMode ||
+            string.IsNullOrWhiteSpace(_resourceId) ||
+            string.IsNullOrWhiteSpace(systemId))
+        {
+            return;
+        }
+
+        lock (ExplorationSync)
+        {
+            if (!ExploredSystemsByResource.TryGetValue(_resourceId, out var exploredSystems))
+            {
+                exploredSystems = new HashSet<string>(StringComparer.Ordinal);
+                ExploredSystemsByResource[_resourceId] = exploredSystems;
+            }
+
+            exploredSystems.Add(systemId);
+        }
     }
 
     private Dictionary<string, int> BuildSystemDistanceIndex(GameState state)

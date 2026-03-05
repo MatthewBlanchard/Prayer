@@ -29,7 +29,8 @@ public class SpaceMoltAgent
     public SpaceMoltAgent(
         ILLMClient llm,
         ILLMClient? plannerLlm = null,
-        PromptScriptRag? scriptExampleRag = null)
+        PromptScriptRag? scriptExampleRag = null,
+        Action<CommandExecutionCheckpoint>? saveCheckpoint = null)
     {
         var logger = new FileAgentLogger();
         _uiStateBuilder = new AgentUiStateBuilder();
@@ -44,7 +45,8 @@ public class SpaceMoltAgent
             CommandCatalog.All,
             SetStatus,
             logger,
-            ControlModeName);
+            ControlModeName,
+            saveCheckpoint);
     }
 
     public void SetStatusWriter(ChannelWriter<string> writer)
@@ -169,6 +171,13 @@ public class SpaceMoltAgent
     public Task<CommandResult?> DecideAsync(GameState state)
     {
         return _execution.DecideAsync(state);
+    }
+
+    public bool TryRestoreCheckpoint(
+        CommandExecutionCheckpoint? checkpoint,
+        GameState? state = null)
+    {
+        return _execution.TryRestoreCheckpoint(checkpoint, state);
     }
 
     public void RequeueScriptStep(CommandResult step)

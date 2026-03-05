@@ -5,21 +5,18 @@ using System.Threading.Tasks;
 
 public sealed class CommandExecutionEngine
 {
+    private const string RootFramePath = "r";
     private readonly List<ICommand> _commands;
     private readonly Dictionary<string, ICommand> _commandMap;
     private readonly Queue<ActionMemory> _memory = new();
+    private readonly LinkedList<CommandResult> _requeuedSteps = new();
+    private readonly List<ExecutionFrame> _frames = new();
 
     private const int MaxMemory = 12;
 
     private string? _script;
+    private DslAstProgram? _scriptAst;
     private int? _currentScriptLine;
-    private Queue<CommandResult> _scriptQueue = new();
-    private readonly Dictionary<string, List<CommandResult>> _repeatBodies =
-        new(StringComparer.Ordinal);
-    private readonly Dictionary<string, List<CommandResult>> _untilBodies =
-        new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string> _untilConditions =
-        new(StringComparer.Ordinal);
     private bool _isHalted;
     private IMultiTurnCommand? _activeCommand;
     private CommandResult? _activeCommandResult;
@@ -27,18 +24,21 @@ public sealed class CommandExecutionEngine
     private readonly Action<string> _setStatus;
     private readonly IAgentLogger _logger;
     private readonly string _controlModeName;
+    private readonly Action<CommandExecutionCheckpoint>? _saveCheckpoint;
 
     public CommandExecutionEngine(
         IEnumerable<ICommand> commands,
         Action<string> setStatus,
         IAgentLogger logger,
-        string controlModeName)
+        string controlModeName,
+        Action<CommandExecutionCheckpoint>? saveCheckpoint = null)
     {
         _commands = commands.ToList();
         _commandMap = _commands.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
         _setStatus = setStatus;
         _logger = logger;
         _controlModeName = controlModeName;
+        _saveCheckpoint = saveCheckpoint;
     }
 
     public bool IsHalted => _isHalted;
@@ -50,24 +50,25 @@ public sealed class CommandExecutionEngine
     {
         var rawScript = script ?? string.Empty;
         _currentScriptLine = null;
-        var steps = (state == null
-            ? DslInterpreter.Translate(rawScript)
-            : DslInterpreter.Translate(rawScript, state)).ToList();
-        _script = DslInterpreter.RenderScript(steps).TrimEnd();
+
+        var tree = DslParser.ParseTree(rawScript);
+        if (state != null)
+            ValidateCommandNodes(tree.Statements, state);
+
+        var normalizedSteps = DslInterpreter.Translate(tree);
+        _script = DslInterpreter.RenderScript(normalizedSteps).TrimEnd();
+        _scriptAst = tree;
 
         _logger.LogScriptNormalization("set_script", rawScript, _script);
 
-        for (int i = 0; i < steps.Count; i++)
-            steps[i].SourceLine = i + 1;
-
-        BuildRepeatBodyIndex(steps);
-        BuildUntilBodyIndex(steps);
-        _scriptQueue = new Queue<CommandResult>(steps);
+        ResetFrames();
+        _requeuedSteps.Clear();
         _isHalted = false;
 
-        _setStatus(_scriptQueue.Count == 0
+        _setStatus(normalizedSteps.Count == 0
             ? "Script loaded (empty)"
-            : $"Script loaded ({_scriptQueue.Count} steps)");
+            : $"Script loaded ({normalizedSteps.Count} steps)");
+        PersistCheckpoint();
 
         return _script;
     }
@@ -76,6 +77,7 @@ public sealed class CommandExecutionEngine
     {
         _isHalted = false;
         _setStatus($"Mode: {_controlModeName}");
+        PersistCheckpoint();
     }
 
     public bool InterruptActiveCommand(string reason = "Interrupted")
@@ -86,6 +88,7 @@ public sealed class CommandExecutionEngine
         _activeCommand = null;
         _activeCommandResult = null;
         _setStatus(reason);
+        PersistCheckpoint();
         return true;
     }
 
@@ -94,12 +97,36 @@ public sealed class CommandExecutionEngine
         _isHalted = true;
         _currentScriptLine = null;
         _setStatus(reason);
+        PersistCheckpoint();
     }
 
     public void ResumeFromHalt(string reason = "Resumed")
     {
         _isHalted = false;
         _setStatus(reason);
+        PersistCheckpoint();
+    }
+
+    public bool TryRestoreCheckpoint(CommandExecutionCheckpoint? checkpoint, GameState? state = null)
+    {
+        if (checkpoint == null || string.IsNullOrWhiteSpace(checkpoint.Script))
+            return false;
+
+        try
+        {
+            _ = SetScript(checkpoint.Script, state);
+            RestoreFromCheckpoint(checkpoint);
+
+            _setStatus(_isHalted
+                ? "Resumed from checkpoint (halted)"
+                : "Resumed from checkpoint");
+            PersistCheckpoint();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public IReadOnlyList<string> GetMemoryList()
@@ -111,7 +138,7 @@ public sealed class CommandExecutionEngine
 
             return string.IsNullOrWhiteSpace(msg)
                 ? action
-                : $"{action} → {msg}";
+                : $"{action} -> {msg}";
         }).ToList();
     }
 
@@ -121,7 +148,7 @@ public sealed class CommandExecutionEngine
             .Select(c => c.BuildHelp(state))
             .ToList();
 
-        actions.Add("- halt → pause and wait for user input");
+        actions.Add("- halt -> pause and wait for user input");
         return actions;
     }
 
@@ -165,6 +192,8 @@ public sealed class CommandExecutionEngine
                 _setStatus("Waiting");
             }
 
+            PersistCheckpoint();
+
             await _logger.LogCommandExecutionAsync(
                 _controlModeName,
                 activeCommandText,
@@ -194,6 +223,7 @@ public sealed class CommandExecutionEngine
                 _setStatus($"Executing: start {FormatCommand(result)}");
                 _activeCommand = multiTurnCommand;
                 _activeCommandResult = result;
+                PersistCheckpoint();
 
                 await multiTurnCommand.StartAsync(client, result, state);
             }
@@ -209,6 +239,7 @@ public sealed class CommandExecutionEngine
 
         if (shouldAddMemory)
             AddMemory(result, message);
+        PersistCheckpoint();
 
         await _logger.LogCommandExecutionAsync(
             _controlModeName,
@@ -237,16 +268,8 @@ public sealed class CommandExecutionEngine
         if (step == null || string.IsNullOrWhiteSpace(step.Action))
             return;
 
-        var copy = new CommandResult
-        {
-            Action = step.Action,
-            Arg1 = step.Arg1,
-            Quantity = step.Quantity,
-            SourceLine = step.SourceLine
-        };
-
-        _scriptQueue = new Queue<CommandResult>(
-            new[] { copy }.Concat(_scriptQueue));
+        _requeuedSteps.AddFirst(CloneStep(step));
+        PersistCheckpoint();
     }
 
     public string BuildMemoryBlock(int? maxRecent = null)
@@ -265,7 +288,7 @@ public sealed class CommandExecutionEngine
 
             return string.IsNullOrWhiteSpace(msg)
                 ? $"- {action}"
-                : $"- {action} → {msg}";
+                : $"- {action} -> {msg}";
         });
 
         return "Previous actions:\n" +
@@ -275,230 +298,236 @@ public sealed class CommandExecutionEngine
 
     private Task<CommandResult?> DecideScriptStepAsync(GameState state)
     {
-        while (_scriptQueue.Count > 0)
+        while (true)
         {
-            var next = _scriptQueue.Dequeue();
+            CommandResult next;
 
-            if (TryHandleRuntimeControl(next, state))
-                continue;
+            if (_requeuedSteps.Count > 0)
+            {
+                next = _requeuedSteps.First!.Value;
+                _requeuedSteps.RemoveFirst();
+            }
+            else if (!TryGetNextScriptCommand(state, out next))
+            {
+                Halt("Script complete: waiting for input");
+                return Task.FromResult<CommandResult?>(null);
+            }
 
             if (!IsExecutableAction(next.Action))
             {
                 AddMemory(next, "invalid script command");
+                PersistCheckpoint();
                 continue;
             }
 
             _currentScriptLine = next.SourceLine;
             _setStatus($"Executing: script {FormatCommand(next)}");
+            PersistCheckpoint();
             return Task.FromResult<CommandResult?>(next);
         }
-
-        Halt("Script complete: waiting for input");
-        return Task.FromResult<CommandResult?>(null);
     }
 
-    private bool TryHandleRuntimeControl(CommandResult next, GameState state)
+    private bool TryGetNextScriptCommand(GameState state, out CommandResult result)
     {
-        if (string.IsNullOrWhiteSpace(next.Action))
-            return false;
+        result = new CommandResult();
 
-        if (string.Equals(next.Action, DslInterpreter.IfStartAction, StringComparison.Ordinal))
+        while (_frames.Count > 0)
         {
-            if (!DslInterpreter.ParseIfStartArg(next.Arg1, out var ifId, out var condition))
-                return true;
+            var frame = _frames[^1];
 
-            if (!DslBooleanEvaluator.TryEvaluate(condition, state, out var conditionValue))
-                return true;
-
-            if (conditionValue)
-                return true;
-
-            SkipUntilIfEnd(ifId);
-            return true;
-        }
-
-        if (string.Equals(next.Action, DslInterpreter.IfEndAction, StringComparison.Ordinal))
-            return true;
-
-        if (string.Equals(next.Action, DslInterpreter.UntilStartAction, StringComparison.Ordinal))
-        {
-            if (!DslInterpreter.ParseUntilStartArg(next.Arg1, out var untilId, out var condition))
-                return true;
-
-            if (!DslBooleanEvaluator.TryEvaluate(condition, state, out var conditionValue))
-                return true;
-
-            if (!conditionValue)
-                return true;
-
-            SkipUntilBlockEnd(untilId);
-            return true;
-        }
-
-        if (string.Equals(next.Action, DslInterpreter.UntilEndAction, StringComparison.Ordinal))
-        {
-            var untilId = (next.Arg1 ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(untilId))
-                return true;
-
-            if (!_untilBodies.TryGetValue(untilId, out var untilBody) || untilBody.Count == 0)
-                return true;
-
-            if (!_untilConditions.TryGetValue(untilId, out var condition) ||
-                !DslBooleanEvaluator.TryEvaluate(condition, state, out var conditionValue))
+            if (frame.Index >= frame.Nodes.Count)
             {
-                return true;
+                if (TryAdvanceCompletedLoop(frame, state))
+                    continue;
+
+                _frames.RemoveAt(_frames.Count - 1);
+                continue;
             }
 
-            if (conditionValue)
-                return true;
+            int nodeIndex = frame.Index;
+            var node = frame.Nodes[frame.Index++];
 
-            var untilReplay = untilBody
-                .Select(CloneStep)
-                .Append(CloneStep(next))
-                .Concat(_scriptQueue);
+            switch (node)
+            {
+                case DslCommandAstNode commandNode:
+                    result = BuildCommandResult(commandNode);
+                    return true;
 
-            _scriptQueue = new Queue<CommandResult>(untilReplay);
+                case DslRepeatAstNode repeatNode:
+                {
+                    IReadOnlyList<DslAstNode> body = repeatNode.Body ?? Array.Empty<DslAstNode>();
+                    if (body.Count > 0)
+                    {
+                        _frames.Add(new ExecutionFrame(
+                            body,
+                            ExecutionFrameKind.Repeat,
+                            repeatNode.SourceLine,
+                            untilCondition: null,
+                            untilConditionKnown: false,
+                            path: $"{frame.Path}/{nodeIndex}"));
+                    }
+                    continue;
+                }
+
+                case DslIfAstNode ifNode:
+                {
+                    IReadOnlyList<DslAstNode> body = ifNode.Body ?? Array.Empty<DslAstNode>();
+                    if (ShouldEnterIf(ifNode.Condition, state) && body.Count > 0)
+                    {
+                        _frames.Add(new ExecutionFrame(
+                            body,
+                            ExecutionFrameKind.If,
+                            ifNode.SourceLine,
+                            untilCondition: null,
+                            untilConditionKnown: false,
+                            path: $"{frame.Path}/{nodeIndex}"));
+                    }
+                    continue;
+                }
+
+                case DslUntilAstNode untilNode:
+                {
+                    bool conditionKnown;
+                    bool shouldEnter = ShouldEnterUntil(untilNode.Condition, state, out conditionKnown);
+                    IReadOnlyList<DslAstNode> body = untilNode.Body ?? Array.Empty<DslAstNode>();
+                    if (shouldEnter && body.Count > 0)
+                    {
+                        _frames.Add(new ExecutionFrame(
+                            body,
+                            ExecutionFrameKind.Until,
+                            untilNode.SourceLine,
+                            NormalizeCondition(untilNode.Condition),
+                            conditionKnown,
+                            path: $"{frame.Path}/{nodeIndex}"));
+                    }
+                    continue;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private bool TryAdvanceCompletedLoop(ExecutionFrame frame, GameState state)
+    {
+        if (frame.Nodes.Count == 0)
+            return false;
+
+        if (frame.Kind == ExecutionFrameKind.Repeat)
+        {
+            frame.Index = 0;
             return true;
         }
 
-        if (string.Equals(next.Action, DslInterpreter.RepeatStartAction, StringComparison.Ordinal))
-            return true;
-
-        if (!string.Equals(next.Action, DslInterpreter.RepeatEndAction, StringComparison.Ordinal))
+        if (frame.Kind != ExecutionFrameKind.Until)
             return false;
 
-        var repeatId = (next.Arg1 ?? string.Empty).Trim();
-        if (string.IsNullOrWhiteSpace(repeatId))
-            return true;
+        if (!frame.UntilConditionKnown || string.IsNullOrWhiteSpace(frame.UntilCondition))
+            return false;
 
-        if (!_repeatBodies.TryGetValue(repeatId, out var body) || body.Count == 0)
-            return true;
+        if (!DslBooleanEvaluator.TryEvaluate(frame.UntilCondition, state, out var conditionValue))
+            return false;
 
-        var replay = body
-            .Select(CloneStep)
-            .Append(CloneStep(next))
-            .Concat(_scriptQueue);
+        if (conditionValue)
+            return false;
 
-        _scriptQueue = new Queue<CommandResult>(replay);
+        frame.Index = 0;
         return true;
     }
 
-    private void SkipUntilIfEnd(string ifId)
+    private static bool ShouldEnterIf(string? condition, GameState state)
     {
-        while (_scriptQueue.Count > 0)
-        {
-            var step = _scriptQueue.Dequeue();
-            if (!string.Equals(step.Action, DslInterpreter.IfEndAction, StringComparison.Ordinal))
-                continue;
+        if (!DslBooleanEvaluator.TryEvaluate(NormalizeCondition(condition), state, out var conditionValue))
+            return true;
 
-            if (string.Equals((step.Arg1 ?? string.Empty).Trim(), ifId, StringComparison.Ordinal))
-                return;
-        }
+        return conditionValue;
     }
 
-    private void SkipUntilBlockEnd(string blockId)
+    private static bool ShouldEnterUntil(string? condition, GameState state, out bool conditionKnown)
     {
-        while (_scriptQueue.Count > 0)
+        var normalized = NormalizeCondition(condition);
+        if (!DslBooleanEvaluator.TryEvaluate(normalized, state, out var conditionValue))
         {
-            var step = _scriptQueue.Dequeue();
-            if (!string.Equals(step.Action, DslInterpreter.UntilEndAction, StringComparison.Ordinal))
-                continue;
-
-            if (string.Equals((step.Arg1 ?? string.Empty).Trim(), blockId, StringComparison.Ordinal))
-                return;
+            conditionKnown = false;
+            return true;
         }
+
+        conditionKnown = true;
+        return !conditionValue;
     }
 
-    private void BuildRepeatBodyIndex(IReadOnlyList<CommandResult> steps)
+    private static string NormalizeCondition(string? condition)
     {
-        _repeatBodies.Clear();
+        return (condition ?? string.Empty).Trim().ToUpperInvariant();
+    }
 
-        var stack = new Stack<(string RepeatId, int StartIndex)>();
-
-        for (int i = 0; i < steps.Count; i++)
+    private static CommandResult BuildCommandResult(DslCommandAstNode commandNode)
+    {
+        var command = new DslCommand(commandNode.Name, commandNode.Args);
+        CommandResult result;
+        try
         {
-            var step = steps[i];
-            var action = step.Action ?? string.Empty;
-            var repeatId = (step.Arg1 ?? string.Empty).Trim();
+            result = command.ToValidCommand(state: null, command);
+        }
+        catch (FormatException ex) when (commandNode.SourceLine > 0)
+        {
+            throw new FormatException($"Line {commandNode.SourceLine}: {ex.Message}", ex);
+        }
 
-            if (string.Equals(action, DslInterpreter.RepeatStartAction, StringComparison.Ordinal))
+        result.SourceLine = commandNode.SourceLine > 0
+            ? commandNode.SourceLine
+            : null;
+        return result;
+    }
+
+    private static void ValidateCommandNodes(IReadOnlyList<DslAstNode> nodes, GameState state)
+    {
+        foreach (var node in nodes ?? Array.Empty<DslAstNode>())
+        {
+            switch (node)
             {
-                if (!string.IsNullOrWhiteSpace(repeatId))
-                    stack.Push((repeatId, i));
-                continue;
+                case DslCommandAstNode commandNode:
+                {
+                    var command = new DslCommand(commandNode.Name, commandNode.Args);
+                    try
+                    {
+                        _ = command.ToValidCommand(state, command);
+                    }
+                    catch (FormatException ex) when (commandNode.SourceLine > 0)
+                    {
+                        throw new FormatException($"Line {commandNode.SourceLine}: {ex.Message}", ex);
+                    }
+                    break;
+                }
+
+                case DslRepeatAstNode repeatNode:
+                    ValidateCommandNodes(repeatNode.Body ?? Array.Empty<DslAstNode>(), state);
+                    break;
+
+                case DslIfAstNode ifNode:
+                    ValidateCommandNodes(ifNode.Body ?? Array.Empty<DslAstNode>(), state);
+                    break;
+
+                case DslUntilAstNode untilNode:
+                    ValidateCommandNodes(untilNode.Body ?? Array.Empty<DslAstNode>(), state);
+                    break;
             }
-
-            if (!string.Equals(action, DslInterpreter.RepeatEndAction, StringComparison.Ordinal))
-                continue;
-
-            if (string.IsNullOrWhiteSpace(repeatId) || stack.Count == 0)
-                continue;
-
-            var open = stack.Pop();
-            if (!string.Equals(open.RepeatId, repeatId, StringComparison.Ordinal))
-                continue;
-
-            var body = steps
-                .Skip(open.StartIndex + 1)
-                .Take(i - open.StartIndex - 1)
-                .Select(CloneStep)
-                .ToList();
-
-            _repeatBodies[repeatId] = body;
         }
     }
 
-    private void BuildUntilBodyIndex(IReadOnlyList<CommandResult> steps)
+    private void ResetFrames()
     {
-        _untilBodies.Clear();
-        _untilConditions.Clear();
+        _frames.Clear();
+        if (_scriptAst?.Statements == null || _scriptAst.Statements.Count == 0)
+            return;
 
-        var stack = new Stack<(string UntilId, string Condition, int StartIndex)>();
-
-        for (int i = 0; i < steps.Count; i++)
-        {
-            var step = steps[i];
-            var action = step.Action ?? string.Empty;
-
-            if (string.Equals(action, DslInterpreter.UntilStartAction, StringComparison.Ordinal))
-            {
-                if (DslInterpreter.ParseUntilStartArg(step.Arg1, out var untilId, out var condition))
-                    stack.Push((untilId, condition, i));
-                continue;
-            }
-
-            if (!string.Equals(action, DslInterpreter.UntilEndAction, StringComparison.Ordinal))
-                continue;
-
-            var endId = (step.Arg1 ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(endId) || stack.Count == 0)
-                continue;
-
-            var open = stack.Pop();
-            if (!string.Equals(open.UntilId, endId, StringComparison.Ordinal))
-                continue;
-
-            var body = steps
-                .Skip(open.StartIndex + 1)
-                .Take(i - open.StartIndex - 1)
-                .Select(CloneStep)
-                .ToList();
-
-            _untilBodies[endId] = body;
-            _untilConditions[endId] = open.Condition;
-        }
-    }
-
-    private static CommandResult CloneStep(CommandResult step)
-    {
-        return new CommandResult
-        {
-            Action = step.Action,
-            Arg1 = step.Arg1,
-            Quantity = step.Quantity,
-            SourceLine = step.SourceLine
-        };
+        _frames.Add(new ExecutionFrame(
+            _scriptAst.Statements,
+            ExecutionFrameKind.Root,
+            sourceLine: 1,
+            untilCondition: null,
+            untilConditionKnown: false,
+            path: RootFramePath));
     }
 
     private bool IsExecutableAction(string? action)
@@ -546,9 +575,273 @@ public sealed class CommandExecutionEngine
         return cmd.Action;
     }
 
+    private static CommandResult CloneStep(CommandResult step)
+    {
+        return new CommandResult
+        {
+            Action = step.Action,
+            Arg1 = step.Arg1,
+            Quantity = step.Quantity,
+            SourceLine = step.SourceLine
+        };
+    }
+
+    private void RestoreFromCheckpoint(CommandExecutionCheckpoint checkpoint)
+    {
+        _memory.Clear();
+        foreach (var memoryEntry in checkpoint.Memory.TakeLast(MaxMemory))
+        {
+            if (string.IsNullOrWhiteSpace(memoryEntry.Action))
+                continue;
+
+            _memory.Enqueue(new ActionMemory(
+                memoryEntry.Action,
+                memoryEntry.Arg1,
+                memoryEntry.Quantity,
+                memoryEntry.ResultMessage));
+        }
+
+        _requeuedSteps.Clear();
+        foreach (var step in checkpoint.RequeuedSteps)
+        {
+            if (step == null || string.IsNullOrWhiteSpace(step.Action))
+                continue;
+
+            _requeuedSteps.AddLast(CloneStep(step));
+        }
+
+        _isHalted = checkpoint.IsHalted;
+        _currentScriptLine = checkpoint.CurrentScriptLine;
+        _activeCommand = null;
+        _activeCommandResult = null;
+
+        if (checkpoint.HadActiveCommand &&
+            checkpoint.ActiveCommandResult != null &&
+            !string.IsNullOrWhiteSpace(checkpoint.ActiveCommandResult.Action))
+        {
+            _requeuedSteps.AddFirst(CloneStep(checkpoint.ActiveCommandResult));
+        }
+
+        if (!TryRestoreFrames(checkpoint.Frames))
+            ResetFrames();
+    }
+
+    private bool TryRestoreFrames(IReadOnlyList<ExecutionFrameCheckpoint> savedFrames)
+    {
+        if (_scriptAst?.Statements == null)
+            return false;
+
+        if (savedFrames == null || savedFrames.Count == 0)
+            return false;
+
+        var restored = new List<ExecutionFrame>(savedFrames.Count);
+        foreach (var frameSnapshot in savedFrames)
+        {
+            if (!TryParseFrameKind(frameSnapshot.Kind, out var kind))
+                return false;
+
+            if (!TryResolveFrameNodes(frameSnapshot.Path, kind, out var nodes))
+                return false;
+
+            var frame = new ExecutionFrame(
+                nodes,
+                kind,
+                frameSnapshot.SourceLine,
+                frameSnapshot.UntilCondition,
+                frameSnapshot.UntilConditionKnown,
+                frameSnapshot.Path);
+
+            frame.Index = Math.Clamp(frameSnapshot.Index, 0, frame.Nodes.Count);
+            restored.Add(frame);
+        }
+
+        if (restored.Count == 0 || restored[0].Kind != ExecutionFrameKind.Root)
+            return false;
+
+        _frames.Clear();
+        _frames.AddRange(restored);
+        return true;
+    }
+
+    private bool TryResolveFrameNodes(
+        string path,
+        ExecutionFrameKind kind,
+        out IReadOnlyList<DslAstNode> nodes)
+    {
+        nodes = Array.Empty<DslAstNode>();
+        if (_scriptAst?.Statements == null)
+            return false;
+
+        var normalizedPath = string.IsNullOrWhiteSpace(path)
+            ? RootFramePath
+            : path.Trim();
+
+        if (!normalizedPath.StartsWith(RootFramePath, StringComparison.Ordinal))
+            return false;
+
+        if (string.Equals(normalizedPath, RootFramePath, StringComparison.Ordinal))
+        {
+            if (kind != ExecutionFrameKind.Root)
+                return false;
+
+            nodes = _scriptAst.Statements;
+            return true;
+        }
+
+        var segments = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length <= 1)
+            return false;
+
+        IReadOnlyList<DslAstNode> currentNodes = _scriptAst.Statements;
+        for (int i = 1; i < segments.Length; i++)
+        {
+            if (!int.TryParse(segments[i], out var nodeIndex))
+                return false;
+
+            if (nodeIndex < 0 || nodeIndex >= currentNodes.Count)
+                return false;
+
+            var node = currentNodes[nodeIndex];
+            currentNodes = node switch
+            {
+                DslRepeatAstNode repeatNode => repeatNode.Body,
+                DslIfAstNode ifNode => ifNode.Body,
+                DslUntilAstNode untilNode => untilNode.Body,
+                _ => Array.Empty<DslAstNode>()
+            };
+
+            if (currentNodes.Count == 0 && i < segments.Length - 1)
+                return false;
+        }
+
+        nodes = currentNodes;
+        return true;
+    }
+
+    private static bool TryParseFrameKind(string? rawKind, out ExecutionFrameKind kind)
+    {
+        return Enum.TryParse(rawKind, ignoreCase: true, out kind);
+    }
+
+    private void PersistCheckpoint()
+    {
+        if (_saveCheckpoint == null)
+            return;
+
+        try
+        {
+            _saveCheckpoint(BuildCheckpoint());
+        }
+        catch
+        {
+            // Checkpoint writes are best-effort.
+        }
+    }
+
+    private CommandExecutionCheckpoint BuildCheckpoint()
+    {
+        return new CommandExecutionCheckpoint
+        {
+            Version = 1,
+            Script = _script ?? string.Empty,
+            IsHalted = _isHalted,
+            CurrentScriptLine = _currentScriptLine,
+            HadActiveCommand = _activeCommand != null,
+            ActiveCommandResult = _activeCommandResult != null
+                ? CloneStep(_activeCommandResult)
+                : null,
+            Memory = _memory.Select(m => new ActionMemoryCheckpoint
+            {
+                Action = m.Action,
+                Arg1 = m.Arg1,
+                Quantity = m.Quantity,
+                ResultMessage = m.ResultMessage
+            }).ToList(),
+            RequeuedSteps = _requeuedSteps
+                .Select(CloneStep)
+                .ToList(),
+            Frames = _frames.Select(f => new ExecutionFrameCheckpoint
+            {
+                Kind = f.Kind.ToString(),
+                SourceLine = f.SourceLine,
+                Index = f.Index,
+                UntilCondition = f.UntilCondition,
+                UntilConditionKnown = f.UntilConditionKnown,
+                Path = f.Path
+            }).ToList()
+        };
+    }
+
+    private sealed class ExecutionFrame
+    {
+        public ExecutionFrame(
+            IReadOnlyList<DslAstNode> nodes,
+            ExecutionFrameKind kind,
+            int sourceLine,
+            string? untilCondition,
+            bool untilConditionKnown,
+            string path)
+        {
+            Nodes = nodes ?? Array.Empty<DslAstNode>();
+            Kind = kind;
+            SourceLine = sourceLine;
+            UntilCondition = untilCondition;
+            UntilConditionKnown = untilConditionKnown;
+            Path = path;
+        }
+
+        public IReadOnlyList<DslAstNode> Nodes { get; }
+        public ExecutionFrameKind Kind { get; }
+        public int SourceLine { get; }
+        public string? UntilCondition { get; }
+        public bool UntilConditionKnown { get; }
+        public string Path { get; }
+        public int Index { get; set; }
+    }
+
+    private enum ExecutionFrameKind
+    {
+        Root,
+        Repeat,
+        If,
+        Until
+    }
+
     private record ActionMemory(
         string Action,
         string? Arg1,
         int? Quantity,
         string? ResultMessage);
+}
+
+public sealed record CommandExecutionCheckpoint
+{
+    public int Version { get; init; } = 1;
+    public DateTime SavedAtUtc { get; init; } = DateTime.UtcNow;
+    public string Script { get; init; } = string.Empty;
+    public bool IsHalted { get; init; }
+    public int? CurrentScriptLine { get; init; }
+    public bool HadActiveCommand { get; init; }
+    public CommandResult? ActiveCommandResult { get; init; }
+    public IReadOnlyList<ActionMemoryCheckpoint> Memory { get; init; } = Array.Empty<ActionMemoryCheckpoint>();
+    public IReadOnlyList<CommandResult> RequeuedSteps { get; init; } = Array.Empty<CommandResult>();
+    public IReadOnlyList<ExecutionFrameCheckpoint> Frames { get; init; } = Array.Empty<ExecutionFrameCheckpoint>();
+}
+
+public sealed class ActionMemoryCheckpoint
+{
+    public string Action { get; set; } = string.Empty;
+    public string? Arg1 { get; set; }
+    public int? Quantity { get; set; }
+    public string? ResultMessage { get; set; }
+}
+
+public sealed class ExecutionFrameCheckpoint
+{
+    public string Kind { get; set; } = string.Empty;
+    public int SourceLine { get; set; }
+    public int Index { get; set; }
+    public string? UntilCondition { get; set; }
+    public bool UntilConditionKnown { get; set; }
+    public string Path { get; set; } = string.Empty;
 }

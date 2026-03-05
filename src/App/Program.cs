@@ -158,6 +158,7 @@ class Program
         string? activeBotId = null;
         object botLock = new();
         var savedBotStore = new SavedBotStore();
+        var checkpointStore = new AgentCheckpointStore();
         var savedBots = savedBotStore.Load();
 
         channels.Status.Writer.TryWrite(
@@ -288,14 +289,15 @@ class Program
         {
             var normalizedUsername = username.Trim();
             var label = normalizedUsername;
+            var checkpointFile = AppPaths.GetAgentCheckpointFile(label);
             var totalTimer = Stopwatch.StartNew();
             LogAuth($"{flowLabel} | {label} | start");
 
             var agent = new SpaceMoltAgent(
                 commandLlm,
                 planningLlm,
-                scriptExampleRag);
-            agent.Halt("Awaiting script input");
+                scriptExampleRag,
+                checkpoint => checkpointStore.Save(checkpointFile, checkpoint));
             agent.SetStatusWriter(channels.Status.Writer);
 
             var client = new SpaceMoltHttpClient();
@@ -303,13 +305,33 @@ class Program
 
             try
             {
-                var sessionTimer = Stopwatch.StartNew();
-                await client.CreateSessionAsync();
-                LogAuth($"{flowLabel} | {label} | session_created | {sessionTimer.ElapsedMilliseconds}ms");
-
                 var authTimer = Stopwatch.StartNew();
                 var password = await authenticateAsync(client);
-                LogAuth($"{flowLabel} | {label} | authenticated | {authTimer.ElapsedMilliseconds}ms");
+                LogAuth($"{flowLabel} | {label} | authenticated_and_session_ready | {authTimer.ElapsedMilliseconds}ms");
+
+                bool restoredFromCheckpoint = false;
+                try
+                {
+                    var checkpoint = checkpointStore.Load(checkpointFile);
+                    if (checkpoint != null)
+                    {
+                        var checkpointState = client.GetGameState();
+                        restoredFromCheckpoint = agent.TryRestoreCheckpoint(checkpoint, checkpointState);
+
+                        if (restoredFromCheckpoint)
+                        {
+                            channels.Status.Writer.TryWrite($"[{label}] Restored execution checkpoint.");
+                            LogAuth($"{flowLabel} | {label} | checkpoint_restore_ok");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogAuth($"{flowLabel} | {label} | checkpoint_restore_failed | {ex.GetType().Name}: {ex.Message}");
+                }
+
+                if (!restoredFromCheckpoint)
+                    agent.Halt("Awaiting script input");
 
                 try
                 {
@@ -695,16 +717,30 @@ class Program
                         channels.Status.Writer.TryWrite($"Restarting script for {active.Label}");
                     }
 
-                    while (channels.HaltNow.Reader.TryRead(out _))
+                    while (channels.HaltNow.Reader.TryRead(out var targetBotId))
                     {
-                        var active = GetActiveBot();
-                        if (active == null)
+                        BotSession? target = null;
+                        lock (botLock)
+                        {
+                            if (!string.IsNullOrWhiteSpace(targetBotId) &&
+                                botSessions.TryGetValue(targetBotId, out var byId))
+                            {
+                                target = byId;
+                            }
+                            else if (activeBotId != null &&
+                                     botSessions.TryGetValue(activeBotId, out var active))
+                            {
+                                target = active;
+                            }
+                        }
+
+                        if (target == null)
                         {
                             channels.Status.Writer.TryWrite("No active bot selected.");
                             continue;
                         }
 
-                        active.HaltNowQueue.Writer.TryWrite(true);
+                        target.HaltNowQueue.Writer.TryWrite(true);
                     }
 
                     await Task.Delay(50, cts.Token);

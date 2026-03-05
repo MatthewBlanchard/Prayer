@@ -7,7 +7,7 @@ public interface IAppUi
     void SetGenerateScriptWriter(ChannelWriter<string> writer);
     void SetSaveExampleWriter(ChannelWriter<bool> writer);
     void SetExecuteScriptWriter(ChannelWriter<bool> writer);
-    void SetHaltNowWriter(ChannelWriter<bool> writer);
+    void SetHaltNowWriter(ChannelWriter<string> writer);
     void SetLoopUpdateWriter(ChannelWriter<LoopUpdate> writer);
     void SetSwitchBotWriter(ChannelWriter<string> writer);
     void SetAddBotWriter(ChannelWriter<AddBotRequest> writer);

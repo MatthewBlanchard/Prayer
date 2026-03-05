@@ -1,4 +1,6 @@
 using System.IO;
+using System.Linq;
+using System.Text;
 
 public static class AppPaths
 {
@@ -23,8 +25,10 @@ public static class AppPaths
     public static readonly string ScriptGenerationExamplesFile = Path.Combine(CacheDir, "script_generation_examples.json");
     public static readonly string SavedBotsFile = Path.Combine(CacheDir, "saved_bots.json");
     public static readonly string SavedLlmSelectionFile = Path.Combine(CacheDir, "saved_llm_selection.json");
+    public static readonly string SpaceMoltSessionsFile = Path.Combine(CacheDir, "spacemolt_sessions.json");
     public static readonly string ItemCatalogByIdCacheFile = Path.Combine(CacheDir, "item_catalog_by_id.json");
     public static readonly string ShipCatalogByIdCacheFile = Path.Combine(CacheDir, "ship_catalog_by_id.json");
+    public static readonly string AgentCheckpointsDir = Path.Combine(CacheDir, "agent_checkpoints");
 
     public static readonly string GalaxyMapFile = Path.Combine(CacheDir, "galaxy_map.json");
     public static readonly string GalaxyKnownPoisFile = Path.Combine(CacheDir, "known_pois.json");
@@ -33,8 +37,27 @@ public static class AppPaths
     {
         Directory.CreateDirectory(LogDir);
         Directory.CreateDirectory(CacheDir);
+        Directory.CreateDirectory(AgentCheckpointsDir);
         Directory.CreateDirectory(MarketsDir);
         Directory.CreateDirectory(ShipyardsDir);
         Directory.CreateDirectory(CatalogsDir);
+    }
+
+    public static string GetAgentCheckpointFile(string botLabel)
+    {
+        var normalized = string.IsNullOrWhiteSpace(botLabel)
+            ? "default"
+            : botLabel.Trim().ToLowerInvariant();
+
+        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        var builder = new StringBuilder(normalized.Length);
+        foreach (var ch in normalized)
+            builder.Append(invalid.Contains(ch) ? '_' : ch);
+
+        var safeName = builder.ToString();
+        if (string.IsNullOrWhiteSpace(safeName))
+            safeName = "default";
+
+        return Path.Combine(AgentCheckpointsDir, $"{safeName}.json");
     }
 }

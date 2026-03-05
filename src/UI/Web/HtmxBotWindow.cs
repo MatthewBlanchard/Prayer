@@ -18,7 +18,7 @@ public sealed class HtmxBotWindow : IAppUi
     private ChannelWriter<string>? _generateScriptWriter;
     private ChannelWriter<bool>? _saveExampleWriter;
     private ChannelWriter<bool>? _executeScriptWriter;
-    private ChannelWriter<bool>? _haltNowWriter;
+    private ChannelWriter<string>? _haltNowWriter;
     private ChannelWriter<LoopUpdate>? _loopUpdateWriter;
     private ChannelWriter<string>? _switchBotWriter;
     private ChannelWriter<AddBotRequest>? _addBotWriter;
@@ -56,7 +56,7 @@ public sealed class HtmxBotWindow : IAppUi
     public void SetGenerateScriptWriter(ChannelWriter<string> writer) => _generateScriptWriter = writer;
     public void SetSaveExampleWriter(ChannelWriter<bool> writer) => _saveExampleWriter = writer;
     public void SetExecuteScriptWriter(ChannelWriter<bool> writer) => _executeScriptWriter = writer;
-    public void SetHaltNowWriter(ChannelWriter<bool> writer) => _haltNowWriter = writer;
+    public void SetHaltNowWriter(ChannelWriter<string> writer) => _haltNowWriter = writer;
     public void SetLoopUpdateWriter(ChannelWriter<LoopUpdate> writer) => _loopUpdateWriter = writer;
     public void SetSwitchBotWriter(ChannelWriter<string> writer) => _switchBotWriter = writer;
     public void SetAddBotWriter(ChannelWriter<AddBotRequest> writer) => _addBotWriter = writer;
@@ -306,7 +306,10 @@ public sealed class HtmxBotWindow : IAppUi
 
         if (req.HttpMethod == "POST" && path == "/api/halt")
         {
-            _haltNowWriter?.TryWrite(true);
+            string? targetBotId;
+            lock (_lock) targetBotId = _snapshot.ActiveBotId;
+            if (!string.IsNullOrWhiteSpace(targetBotId))
+                _haltNowWriter?.TryWrite(targetBotId);
             WriteNoContent(ctx.Response);
             return;
         }

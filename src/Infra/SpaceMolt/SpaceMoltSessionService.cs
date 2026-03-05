@@ -14,7 +14,7 @@ internal sealed class SpaceMoltSessionService
         _baseUrl = baseUrl ?? throw new ArgumentNullException(nameof(baseUrl));
     }
 
-    public async Task<string> CreateSessionAsync()
+    public async Task<SpaceMoltSessionInfo> CreateSessionAsync()
     {
         var response = await _http.PostAsync(_baseUrl + "session", null);
         var raw = await response.Content.ReadAsStringAsync();
@@ -22,12 +22,20 @@ internal sealed class SpaceMoltSessionService
         SpaceMoltApiTransport.EnsureResponseSuccessful(response, raw, "session/auth");
 
         var json = JsonSerializer.Deserialize<JsonElement>(raw);
-        var sessionId = json.GetProperty("session").GetProperty("id").GetString();
+        if (!json.TryGetProperty("session", out var sessionJson) || sessionJson.ValueKind != JsonValueKind.Object)
+            throw new SpaceMoltApiException("Failed to create session.");
+
+        var sessionId = sessionJson.GetProperty("id").GetString();
 
         if (string.IsNullOrWhiteSpace(sessionId))
             throw new SpaceMoltApiException("Failed to create session.");
 
-        return sessionId;
+        return new SpaceMoltSessionInfo
+        {
+            Id = sessionId,
+            CreatedAt = TryParseDateTimeOffset(sessionJson, "created_at"),
+            ExpiresAt = TryParseDateTimeOffset(sessionJson, "expires_at")
+        };
     }
 
     public async Task LoginAsync(string sessionId, string username, string password)
@@ -74,5 +82,20 @@ internal sealed class SpaceMoltSessionService
         }
 
         throw new SpaceMoltApiException("Register succeeded but no password was returned by the API.");
+    }
+
+    private static DateTimeOffset? TryParseDateTimeOffset(JsonElement obj, string property)
+    {
+        if (obj.ValueKind != JsonValueKind.Object ||
+            !obj.TryGetProperty(property, out var value) ||
+            value.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        var raw = value.GetString();
+        return DateTimeOffset.TryParse(raw, out var parsed)
+            ? parsed
+            : null;
     }
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
@@ -16,14 +17,19 @@ public class SpaceMoltHttpClient : IDisposable
     private readonly SpaceMoltCatalogService _catalogService;
     private readonly SpaceMoltMapService _mapService;
     private readonly SpaceMoltNotificationTracker _notificationTracker;
+    private readonly SpaceMoltSessionCache _sessionCache;
 
     private string? _sessionId;
+    private DateTimeOffset? _sessionExpiresAt;
+    private string? _username;
+    private string? _password;
     private readonly Dictionary<string, StationInfo> _stationCache = new(StringComparer.Ordinal);
     private int _currentTick;
     private int _shipCatalogPage = 1;
     private long _requestSequence;
     private GameState? _latestGameState;
     private readonly SemaphoreSlim _stateRefreshLock = new(1, 1);
+    private readonly SemaphoreSlim _sessionRecoveryLock = new(1, 1);
     private bool _isRefreshingLatestState;
 
     private static readonly TimeSpan MarketCacheTtl = TimeSpan.FromHours(24);
@@ -126,6 +132,7 @@ public class SpaceMoltHttpClient : IDisposable
         _sessionService = new SpaceMoltSessionService(_http, BaseUrl);
         _cacheRepository = new SpaceMoltCacheRepository();
         _notificationTracker = new SpaceMoltNotificationTracker(MaxQueuedNotifications, MaxChatMessages);
+        _sessionCache = new SpaceMoltSessionCache();
         _catalogService = new SpaceMoltCatalogService(
             executeAsync: ExecuteAsync,
             cacheRepository: _cacheRepository,
@@ -156,37 +163,54 @@ public class SpaceMoltHttpClient : IDisposable
 
     public async Task CreateSessionAsync()
     {
-        _sessionId = await _sessionService.CreateSessionAsync();
+        var session = await _sessionService.CreateSessionAsync();
+        ApplySession(session);
+        PersistSessionSnapshot();
     }
 
     public async Task LoginAsync(string username, string password)
     {
-        EnsureSession();
-        await _sessionService.LoginAsync(_sessionId!, username, password);
+        _username = username?.Trim();
+        _password = password;
+        if (string.IsNullOrWhiteSpace(_username))
+            throw new ArgumentException("Username is required.", nameof(username));
+        if (string.IsNullOrWhiteSpace(_password))
+            throw new ArgumentException("Password is required.", nameof(password));
+
+        await EnsureUsableSessionAsync(preferCachedSession: true);
+
+        try
+        {
+            await _sessionService.LoginAsync(_sessionId!, _username!, _password!);
+        }
+        catch (Exception ex) when (IsSessionInvalidException(ex))
+        {
+            await RecoverSessionAsync("login");
+            await _sessionService.LoginAsync(_sessionId!, _username!, _password!);
+        }
+
+        PersistSessionSnapshot();
         await RefreshLatestStateFromApiAsync();
     }
 
     public async Task<string> RegisterAsync(string username, string empire, string registrationCode)
     {
-        EnsureSession();
-        string password = await _sessionService.RegisterAsync(_sessionId!, username, empire, registrationCode);
+        _username = username?.Trim();
+        if (string.IsNullOrWhiteSpace(_username))
+            throw new ArgumentException("Username is required.", nameof(username));
+
+        await EnsureUsableSessionAsync(preferCachedSession: false);
+        string password = await _sessionService.RegisterAsync(_sessionId!, _username, empire, registrationCode);
+        _password = password;
+
+        PersistSessionSnapshot();
         await RefreshLatestStateFromApiAsync();
         return password;
     }
 
     public async Task<JsonElement> ExecuteAsync(string command, object? payload = null)
     {
-        EnsureSession();
-
-        long requestId = Interlocked.Increment(ref _requestSequence);
-        JsonElement result = await _transport.ExecuteCommandAsync(
-            _sessionId!,
-            command,
-            payload,
-            DebugEnabled,
-            DebugContext,
-            requestId,
-            content => _notificationTracker.ObservePayload(content, ref _currentTick));
+        JsonElement result = await ExecuteWithRecoveryAsync(command, payload, allowRecoveryRetry: true);
 
         await RefreshLatestStateAfterCommandAsync(command);
         return result;
@@ -355,9 +379,162 @@ public class SpaceMoltHttpClient : IDisposable
         return _notificationTracker.SnapshotChatMessages(maxCount);
     }
 
-    private void EnsureSession()
+    private async Task<JsonElement> ExecuteWithRecoveryAsync(
+        string command,
+        object? payload,
+        bool allowRecoveryRetry)
     {
-        if (_sessionId == null)
-            throw new InvalidOperationException("Session not created.");
+        await EnsureUsableSessionAsync(preferCachedSession: false);
+
+        long requestId = Interlocked.Increment(ref _requestSequence);
+
+        try
+        {
+            JsonElement result = await _transport.ExecuteCommandAsync(
+                _sessionId!,
+                command,
+                payload,
+                DebugEnabled,
+                DebugContext,
+                requestId,
+                content => _notificationTracker.ObservePayload(content, ref _currentTick));
+
+            if (allowRecoveryRetry && IsSessionInvalidPayload(result))
+            {
+                await RecoverSessionAsync($"command:{command}");
+                return await ExecuteWithRecoveryAsync(command, payload, allowRecoveryRetry: false);
+            }
+
+            return result;
+        }
+        catch (Exception ex) when (allowRecoveryRetry && IsSessionInvalidException(ex))
+        {
+            await RecoverSessionAsync($"command:{command}");
+            return await ExecuteWithRecoveryAsync(command, payload, allowRecoveryRetry: false);
+        }
+    }
+
+    private async Task EnsureUsableSessionAsync(bool preferCachedSession)
+    {
+        if (HasUsableSession())
+            return;
+
+        if (preferCachedSession && TryRestoreSessionFromCache())
+            return;
+
+        await CreateSessionAsync();
+    }
+
+    private bool HasUsableSession()
+    {
+        if (string.IsNullOrWhiteSpace(_sessionId))
+            return false;
+
+        if (!_sessionExpiresAt.HasValue)
+            return true;
+
+        // Refresh proactively when very close to expiry to avoid mid-command failures.
+        return _sessionExpiresAt.Value > DateTimeOffset.UtcNow.AddSeconds(30);
+    }
+
+    private bool TryRestoreSessionFromCache()
+    {
+        if (string.IsNullOrWhiteSpace(_username))
+            return false;
+
+        if (!_sessionCache.TryGet(_username!, out var cached))
+            return false;
+
+        if (cached.ExpiresAt.HasValue && cached.ExpiresAt.Value <= DateTimeOffset.UtcNow.AddSeconds(30))
+        {
+            _sessionCache.Remove(_username!);
+            return false;
+        }
+
+        ApplySession(cached);
+        return true;
+    }
+
+    private async Task RecoverSessionAsync(string trigger)
+    {
+        if (string.IsNullOrWhiteSpace(_username) || string.IsNullOrWhiteSpace(_password))
+            throw new InvalidOperationException(
+                $"Session expired during `{trigger}`, and credentials are unavailable for automatic recovery.");
+
+        await _sessionRecoveryLock.WaitAsync();
+        try
+        {
+            // Another caller may have already refreshed the session while we were waiting.
+            if (HasUsableSession())
+            {
+                try
+                {
+                    await _sessionService.LoginAsync(_sessionId!, _username!, _password!);
+                    PersistSessionSnapshot();
+                    return;
+                }
+                catch (Exception ex) when (IsSessionInvalidException(ex))
+                {
+                    // Continue with full recovery.
+                }
+            }
+
+            var session = await _sessionService.CreateSessionAsync();
+            ApplySession(session);
+            await _sessionService.LoginAsync(_sessionId!, _username!, _password!);
+            PersistSessionSnapshot();
+        }
+        finally
+        {
+            _sessionRecoveryLock.Release();
+        }
+    }
+
+    private void ApplySession(SpaceMoltSessionInfo session)
+    {
+        _sessionId = session.Id;
+        _sessionExpiresAt = session.ExpiresAt;
+    }
+
+    private void PersistSessionSnapshot()
+    {
+        if (string.IsNullOrWhiteSpace(_username) || string.IsNullOrWhiteSpace(_sessionId))
+            return;
+
+        _sessionCache.Upsert(_username!, new SpaceMoltSessionInfo
+        {
+            Id = _sessionId!,
+            ExpiresAt = _sessionExpiresAt
+        });
+    }
+
+    private static bool IsSessionInvalidPayload(JsonElement payload)
+    {
+        if (!SpaceMoltApiTransport.TryExtractApiError(payload, out var code, out var message, out _))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(code) &&
+            (string.Equals(code, "session_invalid", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(code, "unauthorized", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(message))
+            return false;
+
+        return message.Contains("invalid session", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("session invalid", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSessionInvalidException(Exception ex)
+    {
+        if (ex is HttpRequestException httpEx && httpEx.StatusCode == HttpStatusCode.Unauthorized)
+            return true;
+
+        return ex is SpaceMoltApiException apiEx &&
+               (apiEx.Message.Contains("session_invalid", StringComparison.OrdinalIgnoreCase) ||
+                apiEx.Message.Contains("invalid session", StringComparison.OrdinalIgnoreCase) ||
+                apiEx.Message.Contains("missing or invalid session", StringComparison.OrdinalIgnoreCase));
     }
 }

@@ -44,7 +44,7 @@ if FUEL() > 5 {
 }
 
 mine carbon_ore;
-sell cargo;
+sell;
 ```
 
 The runtime remains interruptible: clients can halt execution, update script text, and resume with full state visibility.
@@ -204,7 +204,7 @@ Script:
 go nexus_prime;
 repeat {
   mine;
-  sell cargo;
+  sell;
 }
 ```
 

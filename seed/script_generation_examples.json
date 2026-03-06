@@ -11,7 +11,7 @@
   },
   {
     "Prompt": "go node_alpha mine and sell here",
-    "Script": "go node_alpha;\nmine;\ngo nexus_prime;\nsell cargo;",
+    "Script": "go node_alpha;\nmine;\ngo nexus_prime;\nsell;",
     "CreatedUtc": "2026-03-04T00:17:08.5211872Z"
   },
   {
@@ -36,7 +36,7 @@
   },
   {
     "Prompt": "Do a mining loop at nexus prime",
-    "Script": "go nexus_prime;\nrepeat {\n  mine;\n  sell cargo;\n}",
+    "Script": "go nexus_prime;\nrepeat {\n  mine;\n  sell;\n}",
     "CreatedUtc": "2026-03-05T10:17:15.861709Z"
   }
 ]

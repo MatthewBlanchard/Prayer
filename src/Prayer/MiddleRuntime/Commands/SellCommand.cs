@@ -12,10 +12,8 @@ public class SellCommand : AutoDockMultiTurnCommand, IDslCommandGrammar
         ArgSpecs: new[]
         {
             new DslArgumentSpec(
-                DslArgKind.Item | DslArgKind.Enum,
-                Required: false,
-                DefaultValue: "cargo",
-                EnumType: "cargo_keyword")
+                DslArgKind.Item,
+                Required: false)
         });
 
     private List<string>? _sellQueue;
@@ -29,7 +27,7 @@ public class SellCommand : AutoDockMultiTurnCommand, IDslCommandGrammar
     }
 
     public override string BuildHelp(GameState state)
-        => "- sell <item|cargo> → sell one item or all cargo";
+        => "- sell [itemId] → sell one item, or sell all cargo when omitted";
 
     protected override async Task<(bool finished, CommandExecutionResult? result)> StartDockedAsync(
         IRuntimeTransport client,
@@ -38,11 +36,8 @@ public class SellCommand : AutoDockMultiTurnCommand, IDslCommandGrammar
     {
         _sellQueue = null;
 
-        if (cmd.Arg1 == null)
-            return (true, null);
-
         // --- SINGLE ITEM MODE ---
-        if (!string.Equals(cmd.Arg1, "cargo", StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(cmd.Arg1))
         {
             return (true, await SellOneAsync(client, state, cmd.Arg1));
         }

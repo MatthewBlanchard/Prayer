@@ -668,7 +668,7 @@ public static class DslParser
         sb.AppendLine("  }");
         sb.AppendLine("- until MISSION_COMPLETE() {");
         sb.AppendLine("    mine carbon_ore;");
-        sb.AppendLine("    sell cargo;");
+        sb.AppendLine("    sell;");
         sb.AppendLine("  }");
         sb.AppendLine();
 

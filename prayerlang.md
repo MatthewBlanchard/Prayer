@@ -120,7 +120,7 @@ Observed aliases in prompt/logs:
 
 - `stash` is the storage-deposit command.
 - `retrieve` is the storage-withdraw command.
-- `sell;` and `sell cargo;` are both seen in generated outputs.
+- `sell;` is the default way to sell all cargo in generated outputs.
 
 ## Dynamic blocks explained
 

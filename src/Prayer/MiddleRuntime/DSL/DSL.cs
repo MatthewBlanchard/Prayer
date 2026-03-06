@@ -659,19 +659,21 @@ public static class DslParser
             .Where(n => n.Length > 0)
             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToList();
-        sb.AppendLine($"- Boolean flag conditions: {string.Join(", ", booleanTokens)}");
+        if (booleanTokens.Count > 0)
+            sb.AppendLine($"- Boolean flag conditions: {string.Join(", ", booleanTokens)}");
+        sb.AppendLine("- Mission condition: MISSION_COMPLETE(<mission_id_prefix>)  // use first 6+ chars");
         if (numericTokens.Count > 0)
             sb.AppendLine($"- Numeric conditions support: {string.Join(", ", numericTokens.Select(n => $"{n}()"))}");
         sb.AppendLine("- All commands still end with ';' inside repeat blocks.");
         sb.AppendLine();
         sb.AppendLine("Examples:");
-        sb.AppendLine("- if MISSION_COMPLETE() {");
+        sb.AppendLine("- if MISSION_COMPLETE(012345) {");
         sb.AppendLine("    halt;");
         sb.AppendLine("  }");
         sb.AppendLine("- if FUEL() > 5 {");
         sb.AppendLine("    go node_alpha;");
         sb.AppendLine("  }");
-        sb.AppendLine("- until MISSION_COMPLETE() {");
+        sb.AppendLine("- until MISSION_COMPLETE(012345) {");
         sb.AppendLine("    mine carbon_ore;");
         sb.AppendLine("    sell;");
         sb.AppendLine("  }");

@@ -119,12 +119,19 @@
     htmx.ajax('POST', apiUrl('api/execute'), { swap: 'none' });
   };
 
-  window.useMissionPrompt = function (promptText) {
-    var text = (promptText || '').toString();
-    if (text.trim().length === 0) return;
+  window.useMissionPrompt = function (promptText, missionId, returnPoi) {
+    var lines = [];
+    var text = (promptText || '').toString().trim();
+    if (text.length > 0) lines.push(text);
+    var mid = (missionId || '').toString().trim();
+    if (mid.length > 0) lines.push('mission_id=' + mid);
+    var poi = (returnPoi || '').toString().trim();
+    if (poi.length > 0) lines.push('return_poi=' + poi);
+    if (lines.length === 0) return;
+    var finalPrompt = lines.join('\n');
     var promptInput = document.querySelector("#prompt-form textarea[name='prompt']");
     if (!promptInput) return;
-    promptInput.value = text;
+    promptInput.value = finalPrompt;
     promptInput.focus();
   };
 
@@ -562,7 +569,10 @@
   document.addEventListener('click', function (e) {
     var promptBtn = e.target.closest('.mission-use-prompt');
     if (promptBtn) {
-      window.useMissionPrompt(promptBtn.getAttribute('data-mission-prompt') || '');
+      window.useMissionPrompt(
+        promptBtn.getAttribute('data-mission-prompt') || '',
+        promptBtn.getAttribute('data-mission-id') || '',
+        promptBtn.getAttribute('data-return-poi') || '');
       return;
     }
 

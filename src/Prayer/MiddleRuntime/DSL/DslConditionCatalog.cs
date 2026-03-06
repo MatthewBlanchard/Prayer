@@ -12,16 +12,7 @@ public sealed record DslNumericPredicate(
 
 public static class DslConditionCatalog
 {
-    public static IReadOnlyList<DslBooleanPredicate> BooleanPredicates { get; } = new List<DslBooleanPredicate>
-    {
-        new(
-            "MISSION_COMPLETE",
-            state =>
-            {
-                var missions = state.ActiveMissions ?? Array.Empty<MissionInfo>();
-                return missions.Length == 0 || missions.Any(m => m != null && m.Completed);
-            })
-    };
+    public static IReadOnlyList<DslBooleanPredicate> BooleanPredicates { get; } = Array.Empty<DslBooleanPredicate>();
 
     public static IReadOnlyList<DslNumericPredicate> NumericPredicates { get; } = new List<DslNumericPredicate>
     {

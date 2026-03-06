@@ -52,7 +52,7 @@ internal static class MissionsTabRenderer
                         .AppendLine("</div>");
                 }
                 sb.AppendLine("<div class='mission-actions'>");
-                AppendUsePromptButton(sb, mission.Prompt);
+                AppendUsePromptButton(sb, mission.Prompt, mission.MissionId, mission.IssuingPoiId);
                 if (!string.IsNullOrWhiteSpace(mission.IssuingPoiId))
                 {
                     sb.Append("<form class='space-chip-form' hx-post='api/control-input' hx-swap='none' hx-on::after-request='window.executeIfOk(event)'>")
@@ -182,14 +182,31 @@ internal static class MissionsTabRenderer
         sb.AppendLine("</div>");
     }
 
-    private static void AppendUsePromptButton(StringBuilder sb, string? prompt)
+    private static void AppendUsePromptButton(
+        StringBuilder sb,
+        string? prompt,
+        string? missionId,
+        string? returnPoiId)
     {
         if (string.IsNullOrWhiteSpace(prompt))
             return;
 
+        var shortMissionId = GetShortMissionId(missionId);
         sb.Append("<button type='button' class='space-chip mission-use-prompt' data-mission-prompt='")
             .Append(E(prompt))
+            .Append("' data-mission-id='")
+            .Append(E(shortMissionId))
+            .Append("' data-return-poi='")
+            .Append(E(returnPoiId ?? string.Empty))
             .AppendLine("'>Use Prompt</button>");
+    }
+
+    private static string GetShortMissionId(string? missionId)
+    {
+        var value = (missionId ?? string.Empty).Trim();
+        if (value.Length <= 6)
+            return value;
+        return value[..6];
     }
 
     private static string E(string value) => WebUtility.HtmlEncode(value ?? "");

@@ -1,6 +1,7 @@
 public abstract record DslConditionAstNode;
 
 public sealed record DslBooleanTokenConditionAstNode(string Token) : DslConditionAstNode;
+public sealed record DslMissionCompleteConditionAstNode(string MissionId) : DslConditionAstNode;
 
 public sealed record DslComparisonConditionAstNode(
     DslNumericOperandAstNode Left,

@@ -13,6 +13,10 @@ internal static class DslBooleanEvaluator
         new(@"^(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex MissionCompleteRegex =
+        new(@"^(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(\s*(?<mission>[A-Za-z0-9_][A-Za-z0-9_-]*)\s*\)$",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static readonly Regex IdentifierRegex =
         new(@"^[A-Za-z_][A-Za-z0-9_]*$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -36,6 +40,12 @@ internal static class DslBooleanEvaluator
         {
             error = "condition is empty";
             return false;
+        }
+
+        if (TryParseMissionCompleteCondition(expr, out var missionId))
+        {
+            condition = new DslMissionCompleteConditionAstNode(missionId);
+            return true;
         }
 
         if (TryParseBooleanToken(expr, out var booleanToken))
@@ -77,6 +87,13 @@ internal static class DslBooleanEvaluator
 
         switch (condition)
         {
+            case DslMissionCompleteConditionAstNode missionComplete:
+                if (!IsValidMissionIdToken(missionComplete.MissionId))
+                {
+                    error = "MISSION_COMPLETE requires a mission id argument.";
+                    return false;
+                }
+                return true;
             case DslBooleanTokenConditionAstNode booleanToken:
                 if (!IsKnownBooleanToken(booleanToken.Token))
                 {
@@ -115,6 +132,9 @@ internal static class DslBooleanEvaluator
 
         switch (condition)
         {
+            case DslMissionCompleteConditionAstNode missionComplete:
+                value = IsMissionComplete(missionComplete.MissionId, state);
+                return true;
             case DslBooleanTokenConditionAstNode booleanToken:
                 return TryEvaluateBooleanToken(booleanToken.Token, state, out value);
             case DslComparisonConditionAstNode comparison:
@@ -147,12 +167,29 @@ internal static class DslBooleanEvaluator
 
         return condition switch
         {
+            DslMissionCompleteConditionAstNode missionComplete =>
+                $"MISSION_COMPLETE({missionComplete.MissionId})",
             DslBooleanTokenConditionAstNode booleanToken =>
                 booleanToken.Token.Trim().ToUpperInvariant(),
             DslComparisonConditionAstNode comparison =>
                 $"{RenderNumericOperand(comparison.Left)} {comparison.Operator} {RenderNumericOperand(comparison.Right)}",
             _ => string.Empty
         };
+    }
+
+    private static bool TryParseMissionCompleteCondition(string token, out string missionId)
+    {
+        missionId = string.Empty;
+        var match = MissionCompleteRegex.Match((token ?? string.Empty).Trim());
+        if (!match.Success)
+            return false;
+
+        var name = match.Groups["name"].Value.Trim();
+        if (!name.Equals("MISSION_COMPLETE", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        missionId = match.Groups["mission"].Value.Trim();
+        return IsValidMissionIdToken(missionId);
     }
 
     private static bool TryParseBooleanToken(string token, out string normalizedToken)
@@ -302,6 +339,61 @@ internal static class DslBooleanEvaluator
         }
 
         value = predicate.Resolve(state);
+        return true;
+    }
+
+    private static bool IsMissionComplete(string missionId, GameState state)
+    {
+        if (!IsValidMissionIdToken(missionId))
+            return false;
+
+        var missions = state.ActiveMissions ?? Array.Empty<MissionInfo>();
+        foreach (var mission in missions)
+        {
+            if (mission == null)
+                continue;
+
+            if (!MissionMatchesPrefix(mission, missionId))
+                continue;
+
+            return mission.Completed;
+        }
+
+        return false;
+    }
+
+    private static bool MissionMatchesPrefix(MissionInfo mission, string missionPrefix)
+    {
+        if (string.IsNullOrWhiteSpace(missionPrefix))
+            return false;
+
+        return MatchesPrefix(mission.Id, missionPrefix) ||
+               MatchesPrefix(mission.MissionId, missionPrefix);
+    }
+
+    private static bool MatchesPrefix(string? missionIdValue, string prefix)
+    {
+        var id = (missionIdValue ?? string.Empty).Trim();
+        return !string.IsNullOrWhiteSpace(id) &&
+               id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsValidMissionIdToken(string missionId)
+    {
+        if (string.IsNullOrWhiteSpace(missionId))
+            return false;
+
+        if (missionId.Length < 6)
+            return false;
+
+        foreach (var ch in missionId)
+        {
+            if (char.IsLetterOrDigit(ch) || ch == '_' || ch == '-')
+                continue;
+
+            return false;
+        }
+
         return true;
     }
 

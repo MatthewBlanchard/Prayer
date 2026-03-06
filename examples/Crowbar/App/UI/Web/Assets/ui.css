@@ -107,6 +107,12 @@ form[hx-post='api/execute'] button.run-active { border-color:#5ac977; background
 .mission-actions { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
 .mission-chip-danger { border-color:#7f3036; background:#30171a; color:#ffd7da; }
 .mission-chip-danger:hover { border-color:#bb4951; background:#4a2025; }
+.trade-stats { margin-bottom: 2px; }
+.trade-order-card .mission-title { text-transform: uppercase; letter-spacing: 0.3px; }
+.trade-order-card .mission-body { margin-bottom: 0; }
+.shipyard-stats { margin-bottom: 2px; }
+.shipyard-card .mission-title { font-weight: 600; color: #dce8ff; }
+.shipyard-card .mission-actions { margin-top: 6px; }
 @media (max-width: 860px) {
   .space-grid { grid-template-columns:1fr; }
 }

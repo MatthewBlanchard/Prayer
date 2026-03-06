@@ -7,21 +7,27 @@ public static class AppUiStateBuilder
     public static (
         string SpaceStateMarkdown,
         string? TradeStateMarkdown,
+        TradeUiModel? TradeModel,
         string? ShipyardStateMarkdown,
+        ShipyardUiModel? ShipyardModel,
         string? MissionsStateMarkdown,
         string? CatalogStateMarkdown)
         BuildUiState(GameState state)
     {
         var space = BuildSpaceState(state);
         var trade = state.Docked ? BuildTradeState(state) : null;
+        var tradeModel = state.Docked ? BuildTradeModel(state) : null;
         var shipyard = state.Docked && string.Equals(state.CurrentPOI?.Type, "station", StringComparison.Ordinal)
             ? BuildShipyardState(state)
+            : null;
+        var shipyardModel = state.Docked && string.Equals(state.CurrentPOI?.Type, "station", StringComparison.Ordinal)
+            ? BuildShipyardModel(state)
             : null;
         var missions = state.Docked && string.Equals(state.CurrentPOI?.Type, "station", StringComparison.Ordinal)
             ? BuildMissionsState(state)
             : null;
         var catalog = BuildCatalogState(state);
-        return (space, trade, shipyard, missions, catalog);
+        return (space, trade, tradeModel, shipyard, shipyardModel, missions, catalog);
     }
 
     private static string BuildSpaceState(GameState state)
@@ -71,6 +77,59 @@ OPEN ORDERS
 {orders}";
     }
 
+    private static TradeUiModel BuildTradeModel(GameState state)
+    {
+        var cargoItems = (state.Ship.Cargo ?? new Dictionary<string, ItemStack>())
+            .Values
+            .OrderBy(v => v.ItemId, StringComparer.OrdinalIgnoreCase)
+            .Select(v => new TradeUiItem(
+                v.ItemId ?? string.Empty,
+                Math.Max(0, v.Quantity),
+                $"{v.ItemId} x{v.Quantity}"))
+            .ToArray();
+
+        var storageItems = (state.StorageItems ?? new Dictionary<string, ItemStack>())
+            .Values
+            .OrderBy(v => v.ItemId, StringComparer.OrdinalIgnoreCase)
+            .Select(v => new TradeUiItem(
+                v.ItemId ?? string.Empty,
+                Math.Max(0, v.Quantity),
+                $"{v.ItemId} x{v.Quantity}"))
+            .ToArray();
+
+        var openOrders = new List<TradeUiOrder>();
+        foreach (var order in state.OwnBuyOrders ?? Array.Empty<OpenOrderInfo>())
+        {
+            var itemId = order.ItemId ?? string.Empty;
+            openOrders.Add(new TradeUiOrder(
+                "BUY",
+                itemId,
+                Math.Max(0, order.Quantity),
+                order.PriceEach,
+                $"BUY {itemId} qty={order.Quantity} price={order.PriceEach}"));
+        }
+        foreach (var order in state.OwnSellOrders ?? Array.Empty<OpenOrderInfo>())
+        {
+            var itemId = order.ItemId ?? string.Empty;
+            openOrders.Add(new TradeUiOrder(
+                "SELL",
+                itemId,
+                Math.Max(0, order.Quantity),
+                order.PriceEach,
+                $"SELL {itemId} qty={order.Quantity} price={order.PriceEach}"));
+        }
+
+        return new TradeUiModel(
+            state.CurrentPOI?.Id ?? "(unknown)",
+            state.Credits,
+            state.StorageCredits,
+            $"{state.Ship.Fuel}/{state.Ship.MaxFuel}",
+            $"{state.Ship.CargoUsed}/{state.Ship.CargoCapacity}",
+            cargoItems,
+            storageItems,
+            openOrders);
+    }
+
     private static string BuildShipyardState(GameState state)
     {
         var showroom = state.ShipyardShowroomLines?.Length > 0
@@ -88,6 +147,52 @@ SHOWROOM
 
 PLAYER LISTINGS
 {listings}";
+    }
+
+    private static ShipyardUiModel BuildShipyardModel(GameState state)
+    {
+        var showroom = (state.ShipyardShowroomLines ?? Array.Empty<string>())
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v =>
+            {
+                var trimmed = v.Trim();
+                var id = ExtractLeadingToken(trimmed);
+                return new ShipyardUiEntry(id, trimmed);
+            })
+            .ToArray();
+
+        var listings = (state.ShipyardListingLines ?? Array.Empty<string>())
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v =>
+            {
+                var trimmed = v.Trim();
+                var id = ExtractLeadingToken(trimmed);
+                return new ShipyardUiEntry(id, trimmed);
+            })
+            .ToArray();
+
+        var catalogShips = state.ShipCatalogue?.NormalizedEntries?
+            .Where(e => e != null && !string.IsNullOrWhiteSpace(e.Id))
+            .Select(e => new ShipyardUiEntry(
+                e.Id,
+                string.IsNullOrWhiteSpace(e.Name) ? e.Id : $"{e.Id} ({e.Name})"))
+            .ToArray() ?? Array.Empty<ShipyardUiEntry>();
+
+        int currentPage = state.ShipCatalogue?.Page ?? 1;
+        int totalPages = state.ShipCatalogue?.TotalPages ?? 1;
+        int totalShips = state.ShipCatalogue?.Total ?? state.ShipCatalogue?.TotalItems ?? 0;
+
+        return new ShipyardUiModel(
+            state.CurrentPOI?.Id ?? "(unknown)",
+            state.Credits,
+            state.StorageCredits,
+            $"{state.Ship.Fuel}/{state.Ship.MaxFuel}",
+            $"{state.Ship.CargoUsed}/{state.Ship.CargoCapacity}",
+            $"{currentPage}/{totalPages}",
+            totalShips,
+            showroom,
+            listings,
+            catalogShips);
     }
 
     private static string BuildMissionsState(GameState state)
@@ -158,5 +263,17 @@ SHIPS
             lines.Add($"- SELL {order.ItemId} qty={order.Quantity} price={order.PriceEach}");
 
         return lines.Count == 0 ? "- (none)" : string.Join("\n", lines);
+    }
+
+    private static string ExtractLeadingToken(string line)
+    {
+        var value = (line ?? string.Empty).Trim();
+        if (value.Length == 0)
+            return string.Empty;
+
+        return value
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault()?
+            .Trim('`', '[', ']', '(', ')', ',') ?? string.Empty;
     }
 }

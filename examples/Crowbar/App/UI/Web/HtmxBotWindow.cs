@@ -39,6 +39,8 @@ public sealed partial class HtmxBotWindow : IAppUi
         null,
         null,
         null,
+        null,
+        null,
         Array.Empty<MissionPromptOption>(),
         Array.Empty<MissionPromptOption>(),
         Array.Empty<string>(),
@@ -125,7 +127,9 @@ public sealed partial class HtmxBotWindow : IAppUi
         string spaceStateMarkdown,
         IReadOnlyList<string> spaceConnectedSystems,
         string? tradeStateMarkdown,
+        TradeUiModel? tradeModel,
         string? shipyardStateMarkdown,
+        ShipyardUiModel? shipyardModel,
         string? missionsStateMarkdown,
         string? catalogStateMarkdown,
         IReadOnlyList<MissionPromptOption> activeMissionPrompts,
@@ -144,7 +148,9 @@ public sealed partial class HtmxBotWindow : IAppUi
                 spaceStateMarkdown,
                 spaceConnectedSystems,
                 tradeStateMarkdown,
+                tradeModel,
                 shipyardStateMarkdown,
+                shipyardModel,
                 missionsStateMarkdown,
                 catalogStateMarkdown,
                 activeMissionPrompts,
@@ -573,10 +579,10 @@ public sealed partial class HtmxBotWindow : IAppUi
         switch (normalizedTab)
         {
             case "trade":
-                sb.Append("<pre>").Append(E(snapshot.TradeStateMarkdown ?? "(trade unavailable)")).AppendLine("</pre>");
+                sb.Append(TradeTabRenderer.Build(snapshot.TradeModel));
                 break;
             case "shipyard":
-                sb.Append("<pre>").Append(E(snapshot.ShipyardStateMarkdown ?? "(shipyard unavailable)")).AppendLine("</pre>");
+                sb.Append(ShipyardTabRenderer.Build(snapshot.ShipyardModel));
                 break;
             case "missions":
                 sb.Append(MissionsTabRenderer.Build(snapshot.MissionsStateMarkdown, snapshot.ActiveMissionPrompts, snapshot.AvailableMissionPrompts));

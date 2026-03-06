@@ -8,6 +8,8 @@ h4 { margin:10px 0 6px 0; font-size:12px; color:#8eb8ff; }
 pre { margin:0; white-space:pre-wrap; word-break:break-word; }
 textarea, select, input, button { width:100%; box-sizing:border-box; background:#0f1115; color:#d7dae0; border:1px solid #2a2e38; border-radius:6px; padding:6px; }
 button { cursor:pointer; }
+.execute-btn.run-active,
+form[hx-post='api/execute'] button.run-active { border-color:#5ac977; background:#173124; color:#d8ffe1; }
 .row { display:flex; gap:8px; }
 .row > * { flex:1; }
 .small { font-size:12px; color:#9ca3b2; }

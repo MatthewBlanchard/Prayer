@@ -81,6 +81,14 @@
     window._liveScriptRunLineNumber = (typeof lineNumber === 'number') ? lineNumber : null;
   };
 
+  window.setExecuteButtonRunning = function (isRunning) {
+    var executeBtn =
+      document.getElementById('execute-btn') ||
+      document.querySelector("form[hx-post='api/execute'] button");
+    if (!executeBtn) return;
+    executeBtn.classList.toggle('run-active', !!isRunning);
+  };
+
   window.syncCurrentScript = function () {
     fetch(apiUrl('partial/current-script'), { cache: 'no-store' })
       .then(function (res) { return res.ok ? res.json() : null; })
@@ -99,6 +107,7 @@
             window._haltHighlightPendingUntil = 0;
           }
         }
+        window.setExecuteButtonRunning(nextLine !== null);
         if (window._liveScriptRunLineNumber !== nextLine) window.setLiveScriptRunLine(nextLine);
       })
       .catch(function () { });
@@ -494,7 +503,26 @@
   });
 
   document.body.addEventListener('htmx:afterRequest', function (e) {
-    var path = (((e || {}).detail || {}).pathInfo || {}).requestPath || '';
+    var detail = (e || {}).detail || {};
+    var path = (detail.pathInfo || {}).requestPath || '';
+    if (path.endsWith('/api/prompt') ||
+      path.endsWith('/api/prompt-active-missions') ||
+      path === 'api/prompt' ||
+      path === 'api/prompt-active-missions') {
+      if (!detail.failed && detail.xhr && detail.xhr.status >= 200 && detail.xhr.status < 300) {
+        var generatedScript = detail.xhr.responseText || '';
+        if (generatedScript.length > 0) {
+          if (window._scriptEditor) {
+            window._scriptEditor.setValue(generatedScript);
+            window._scriptEditor.focus();
+          } else {
+            var scriptInput = document.getElementById('script-input');
+            if (scriptInput) scriptInput.value = generatedScript;
+          }
+        }
+      }
+    }
+
     if (path.endsWith('/api/add-bot') || path.endsWith('/api/llm-select') || path === 'api/add-bot' || path === 'api/llm-select') {
       window.closeAllSidebarLayers();
     }
@@ -506,19 +534,19 @@
       window._haltHighlightPending = true;
       window._haltHighlightPendingUntil = Date.now() + 10000;
       window.setLiveScriptRunLine(null);
+      window.setExecuteButtonRunning(false);
       return;
     }
 
     if (path.endsWith('/api/execute') ||
       path.endsWith('/api/control-input') ||
-      path.endsWith('/api/prompt') ||
-      path.endsWith('/api/prompt-active-missions') ||
       path === 'api/execute' ||
-      path === 'api/control-input' ||
-      path === 'api/prompt' ||
-      path === 'api/prompt-active-missions') {
+      path === 'api/control-input') {
       window._haltHighlightPending = false;
       window._haltHighlightPendingUntil = 0;
+      if (path.endsWith('/api/execute') || path === 'api/execute') {
+        window.setExecuteButtonRunning(true);
+      }
     }
   });
 

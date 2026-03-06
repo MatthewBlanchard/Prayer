@@ -108,7 +108,7 @@ As of this repo state, command catalog entries are:
 From `src/Prayer/log/llm.log` prompt blocks, the command reference shown to the model uses signatures like:
 
 - `go <destination>;`
-- `mine <target_or_resource?>;`
+- `mine <resource?>;`
 - `sell <item?>;`
 - `buy <item> <count>;`
 - `retrieve <item> <count?>;`

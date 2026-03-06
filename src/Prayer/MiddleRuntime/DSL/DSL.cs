@@ -50,7 +50,7 @@ public static class DslParser
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
             ["go"] = new[] { "destination" },
-            ["mine"] = new[] { "target_or_resource" },
+            ["mine"] = new[] { "resource" },
             ["buy"] = new[] { "item", "count" },
             ["sell"] = new[] { "item" },
             ["cancel_buy"] = new[] { "item" },

@@ -168,7 +168,7 @@ internal static class DslFuzzyMatcher
     private static IReadOnlyList<Candidate> BuildEnumCandidates(DslArgumentSpec spec)
     {
         var map = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        foreach (var value in DslEnumRegistry.ResolveValues(spec))
+        foreach (var value in spec.EnumValues ?? Array.Empty<string>())
             AddAlias(map, value, value);
         return ToCandidates(map, "enum");
     }

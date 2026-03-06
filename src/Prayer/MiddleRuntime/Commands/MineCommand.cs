@@ -13,9 +13,8 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         ArgSpecs: new[]
         {
             new DslArgumentSpec(
-                DslArgKind.Enum | DslArgKind.Item | DslArgKind.Any,
-                Required: false,
-                EnumType: "mining_target")
+                DslArgKind.Item,
+                Required: false)
         });
 
     private bool _stopRequested;
@@ -40,7 +39,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         => !string.IsNullOrWhiteSpace(state.System);
 
     public string BuildHelp(GameState state)
-        => "- mine [asteroid_belt|asteroid|gas_cloud|ice_field|resourceId]? → mine here, auto-go to local POI type, or find+mine a resource, args are optional!";
+        => "- mine [resourceId] → mine nearest mineable POI; if resourceId is provided, seek that resource";
 
     public async Task<(bool finished, CommandExecutionResult? result)> StartAsync(
         IRuntimeTransport client,
@@ -50,55 +49,27 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         ResetState();
 
         var rawArg = (cmd.Arg1 ?? string.Empty).Trim();
-        var requestedType = NormalizeMiningType(rawArg);
+        _resourceMode = true;
 
         if (string.IsNullOrWhiteSpace(rawArg))
         {
             if (state.CurrentPOI?.IsMiningTarget == true && !string.IsNullOrWhiteSpace(state.CurrentPOI.Id))
             {
+                _targetSystemId = state.System;
                 _targetPoiId = state.CurrentPOI.Id;
+            }
+            else if (TryResolveNearestKnownTarget(state, out var knownSystem, out var knownPoi))
+            {
+                _targetSystemId = knownSystem;
+                _targetPoiId = knownPoi;
             }
             else
             {
-                var defaultLocalPoi = SelectDefaultMiningPoi(state);
-                if (defaultLocalPoi == null)
-                {
-                    _stopRequested = true;
-                    _stopReason = $"No local mining POI found in system {state.System}.";
-                    return FinishWithStopReason();
-                }
-
-                _targetPoiId = defaultLocalPoi.Id;
-            }
-        }
-        else if (requestedType != null)
-        {
-            if (state.CurrentPOI != null &&
-                string.Equals(state.CurrentPOI.Type, requestedType, StringComparison.Ordinal) &&
-                !string.IsNullOrWhiteSpace(state.CurrentPOI.Id))
-            {
-                _targetPoiId = state.CurrentPOI.Id;
-            }
-            else
-            {
-                var matchingLocalPoi = state.POIs
-                    .Where(p => string.Equals(p.Type, requestedType, StringComparison.Ordinal))
-                    .OrderByDescending(p => p.Online)
-                    .FirstOrDefault();
-
-                if (matchingLocalPoi == null)
-                {
-                    _stopRequested = true;
-                    _stopReason = $"No local POI of type '{requestedType}' in system {state.System}.";
-                    return FinishWithStopReason();
-                }
-
-                _targetPoiId = matchingLocalPoi.Id;
+                InitializeBfsQueue(state);
             }
         }
         else
         {
-            _resourceMode = true;
             _resourceId = rawArg;
             LoadPersistentResourceExploration();
 
@@ -150,17 +121,6 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         if (_resourceMode)
         {
             if (state.Ship.CargoUsed >= state.Ship.CargoCapacity)
-            {
-                _completionMessage = "Mining complete.";
-                return FinishWithCompletionMessage();
-            }
-        }
-        else
-        {
-            bool navigatingToTarget = !string.IsNullOrWhiteSpace(_targetPoiId) &&
-                                      !string.Equals(state.CurrentPOI?.Id, _targetPoiId, StringComparison.Ordinal);
-
-            if (!navigatingToTarget && !IsClassicMineAvailable(state))
             {
                 _completionMessage = "Mining complete.";
                 return FinishWithCompletionMessage();
@@ -223,28 +183,14 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         IRuntimeTransport client,
         GameState state)
     {
-        if (string.IsNullOrWhiteSpace(_resourceId))
-        {
-            _stopRequested = true;
-            _stopReason = "Mining stopped: missing resource target.";
-            return default;
-        }
-
         if (state.Ship.CargoUsed >= state.Ship.CargoCapacity)
         {
             _completionMessage = "Mining complete.";
             return default;
         }
 
-        if (CurrentPoiHasResource(state))
+        if (CurrentPoiCanBeMined(state))
         {
-            if (!state.CurrentPOI.IsMiningTarget)
-            {
-                _stopRequested = true;
-                _stopReason = $"Found `{_resourceId}` at `{state.CurrentPOI.Id}`, but POI is not mineable.";
-                return default;
-            }
-
             if (state.Docked)
             {
                 await client.ExecuteCommandAsync("undock");
@@ -293,7 +239,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
             _targetPoiId = null;
             _targetSystemId = null;
 
-            if (CurrentPoiHasResource(state))
+            if (CurrentPoiCanBeMined(state))
                 return default;
 
             InitializeBfsQueue(state);
@@ -378,7 +324,9 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
             return default;
         }
 
-        _completionMessage = $"Mining complete: `{_resourceId}` not found in explored mineable POIs.";
+        _completionMessage = string.IsNullOrWhiteSpace(_resourceId)
+            ? "Mining complete: no mineable POI found in explored systems."
+            : $"Mining complete: `{_resourceId}` not found in explored mineable POIs.";
         return default;
     }
 
@@ -422,7 +370,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         });
     }
 
-    private static readonly HashSet<string> SupportedMiningTypes =
+    private static readonly HashSet<string> MineablePoiTypes =
         new(StringComparer.Ordinal)
         {
             "asteroid_belt",
@@ -430,44 +378,6 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
             "gas_cloud",
             "ice_field"
         };
-
-    private static readonly string[] DefaultMiningPriority =
-    {
-        "asteroid_belt",
-        "asteroid",
-        "ice_field",
-        "gas_cloud"
-    };
-
-    private static string? NormalizeMiningType(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-            return null;
-
-        var token = raw.Trim().ToLowerInvariant();
-        return SupportedMiningTypes.Contains(token) ? token : null;
-    }
-
-    private static POIInfo? SelectDefaultMiningPoi(GameState state)
-    {
-        foreach (var type in DefaultMiningPriority)
-        {
-            var match = state.POIs
-                .Where(p => string.Equals(p.Type, type, StringComparison.Ordinal))
-                .OrderByDescending(p => p.Online)
-                .FirstOrDefault();
-
-            if (match != null)
-                return match;
-        }
-
-        return null;
-    }
-
-    private bool IsClassicMineAvailable(GameState state)
-        => !state.Docked &&
-           state.CurrentPOI?.IsMiningTarget == true &&
-           state.Ship.CargoUsed < state.Ship.CargoCapacity;
 
     private void CaptureStopReasonFromResponse(JsonElement response)
     {
@@ -602,10 +512,19 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
 
     private bool CurrentPoiHasResource(GameState state)
     {
-        if (string.IsNullOrWhiteSpace(_resourceId))
+        if (string.IsNullOrWhiteSpace(_resourceId) || state.CurrentPOI?.IsMiningTarget != true)
             return false;
 
         return PoiHasResource(state.CurrentPOI, _resourceId);
+    }
+
+    private bool CurrentPoiCanBeMined(GameState state)
+    {
+        if (state.CurrentPOI?.IsMiningTarget != true)
+            return false;
+
+        return string.IsNullOrWhiteSpace(_resourceId) ||
+               PoiHasResource(state.CurrentPOI, _resourceId!);
     }
 
     private static bool PoiHasResource(POIInfo poi, string resourceId)
@@ -626,23 +545,32 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         systemId = "";
         poiId = "";
 
+        List<string> poiCandidates;
         if (string.IsNullOrWhiteSpace(_resourceId))
-            return false;
+        {
+            poiCandidates = GetKnownMineablePoiIds(state)
+                .Where(id => !_checkedPoiIds.Contains(id))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+        }
+        else
+        {
+            var resourceIndex = state.Galaxy?.Resources?.PoisByResource;
+            if (resourceIndex == null || resourceIndex.Count == 0)
+                return false;
 
-        var resourceIndex = state.Galaxy?.Resources?.PoisByResource;
-        if (resourceIndex == null || resourceIndex.Count == 0)
-            return false;
+            string? matchedResourceKey = resourceIndex.Keys
+                .FirstOrDefault(k => string.Equals(k, _resourceId, StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrWhiteSpace(matchedResourceKey))
+                return false;
 
-        string? matchedResourceKey = resourceIndex.Keys
-            .FirstOrDefault(k => string.Equals(k, _resourceId, StringComparison.OrdinalIgnoreCase));
-        if (string.IsNullOrWhiteSpace(matchedResourceKey))
-            return false;
+            poiCandidates = resourceIndex[matchedResourceKey]
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Where(id => !_checkedPoiIds.Contains(id))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+        }
 
-        var poiCandidates = resourceIndex[matchedResourceKey]
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .Where(id => !_checkedPoiIds.Contains(id))
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
         if (poiCandidates.Count == 0)
             return false;
 
@@ -693,6 +621,31 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         systemId = bestSystem;
         poiId = bestPoi;
         return true;
+    }
+
+    private static IEnumerable<string> GetKnownMineablePoiIds(GameState state)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+
+        if (state.CurrentPOI?.IsMiningTarget == true && !string.IsNullOrWhiteSpace(state.CurrentPOI.Id))
+            ids.Add(state.CurrentPOI.Id);
+
+        foreach (var poi in state.POIs ?? Array.Empty<POIInfo>())
+        {
+            if (poi?.IsMiningTarget == true && !string.IsNullOrWhiteSpace(poi.Id))
+                ids.Add(poi.Id);
+        }
+
+        foreach (var known in state.Galaxy?.Map?.KnownPois ?? new List<GalaxyKnownPoiInfo>())
+        {
+            if (string.IsNullOrWhiteSpace(known.Id) || string.IsNullOrWhiteSpace(known.Type))
+                continue;
+
+            if (MineablePoiTypes.Contains(known.Type))
+                ids.Add(known.Id);
+        }
+
+        return ids;
     }
 
     private void LoadPersistentResourceExploration()

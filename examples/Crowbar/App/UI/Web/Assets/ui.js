@@ -25,6 +25,45 @@
   window._scriptSymbolRegex = null;
   window._haltHighlightPending = false;
   window._haltHighlightPendingUntil = 0;
+  window._statePaneUiState = window._statePaneUiState || {};
+
+  function captureStatePaneUiState(pane) {
+    if (!pane || !pane.id) return;
+    var openKeys = [];
+    pane.querySelectorAll('details[open]').forEach(function (d) {
+      var key = (d.getAttribute('data-persist-key') || '').trim();
+      if (!key) {
+        var summary = d.querySelector('summary');
+        key = summary ? ('summary:' + (summary.textContent || '').trim()) : '';
+      }
+      if (key) openKeys.push(key);
+    });
+    window._statePaneUiState[pane.id] = {
+      scrollTop: pane.scrollTop || 0,
+      openKeys: openKeys
+    };
+  }
+
+  function restoreStatePaneUiState(pane) {
+    if (!pane || !pane.id) return;
+    var state = window._statePaneUiState[pane.id];
+    if (!state) return;
+
+    var openSet = new Set(state.openKeys || []);
+    pane.querySelectorAll('details').forEach(function (d) {
+      var key = (d.getAttribute('data-persist-key') || '').trim();
+      if (!key) {
+        var summary = d.querySelector('summary');
+        key = summary ? ('summary:' + (summary.textContent || '').trim()) : '';
+      }
+      if (!key) return;
+      d.open = openSet.has(key);
+    });
+
+    var top = typeof state.scrollTop === 'number' ? state.scrollTop : 0;
+    pane.scrollTop = top;
+    requestAnimationFrame(function () { pane.scrollTop = top; });
+  }
 
   function refreshEditors() {
     if (window._scriptEditor) window._scriptEditor.refresh();
@@ -641,6 +680,15 @@
   document.body.addEventListener('htmx:beforeRequest', function (e) {
     var detail = (e || {}).detail || {};
     var path = (detail.pathInfo || {}).requestPath || '';
+    var elt = detail.elt || null;
+
+    if ((path.indexOf('partial/state') >= 0) &&
+      elt &&
+      elt.classList &&
+      elt.classList.contains('tab-pane')) {
+      captureStatePaneUiState(elt);
+    }
+
     if (path.endsWith('/api/save-example') || path === 'api/save-example') {
       var scriptValue = '';
       if (window._scriptEditor) {
@@ -673,7 +721,12 @@
     }
   });
 
-  document.addEventListener('htmx:afterSwap', function () {
+  document.addEventListener('htmx:afterSwap', function (e) {
+    var detail = (e || {}).detail || {};
+    var elt = detail.elt || null;
+    if (elt && elt.classList && elt.classList.contains('tab-pane')) {
+      restoreStatePaneUiState(elt);
+    }
     window.ensureScriptEditor();
     refreshEditors();
   });

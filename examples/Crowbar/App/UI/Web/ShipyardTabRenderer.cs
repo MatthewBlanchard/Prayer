@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net;
 using System.Text;
 
@@ -26,7 +27,7 @@ internal static class ShipyardTabRenderer
         AppendStatCard(sb, "Station Credits", model.StationCredits.ToString());
         AppendStatCard(sb, "Fuel", model.Fuel);
         AppendStatCard(sb, "Cargo", model.Cargo);
-        AppendStatCard(sb, "Catalog Page", model.CatalogPage);
+        AppendStatCard(sb, "Catalog Source", model.CatalogPage);
         if (model.TotalShips.HasValue)
             AppendStatCard(sb, "Total Ships", model.TotalShips.Value.ToString());
         sb.AppendLine("</div>");
@@ -37,26 +38,94 @@ internal static class ShipyardTabRenderer
         sb.AppendLine("</div>");
 
         sb.AppendLine("<section class='space-panel'>");
-        sb.AppendLine("<div class='space-panel-title'>Ship Catalog Cache</div>");
+        sb.AppendLine("<div class='space-panel-title'>Galaxy Ship Catalog</div>");
         if (model.CatalogShips.Count == 0)
         {
             sb.AppendLine("<div class='small'>(none)</div>");
         }
         else
         {
-            foreach (var entry in model.CatalogShips)
-            {
-                sb.Append("<div class='mission-item shipyard-card'><div class='mission-title'>")
-                    .Append(E(entry.DisplayText))
-                    .AppendLine("</div>");
-                if (!string.IsNullOrWhiteSpace(entry.Id))
+            var byTier = model.CatalogShips
+                .GroupBy(e => e.Tier.HasValue ? e.Tier.Value.ToString() : "Unknown")
+                .OrderBy(g =>
                 {
-                    sb.AppendLine("<div class='mission-actions'>");
-                    AppendScriptChip(sb, $"commission_quote {entry.Id};", "Quote");
-                    AppendScriptChip(sb, $"buy_ship {entry.Id};", "Buy");
-                    sb.AppendLine("</div>");
+                    if (int.TryParse(g.Key, out var tier))
+                        return tier;
+                    return int.MaxValue;
+                })
+                .ToList();
+            bool first = true;
+            foreach (var tierGroup in byTier)
+            {
+                sb.Append("<details class='catalog-group shipyard-faction-group' data-persist-key='tier:")
+                    .Append(E(tierGroup.Key))
+                    .Append("'");
+                if (first)
+                    sb.Append(" open");
+                sb.Append("><summary>")
+                    .Append(E($"Tier {tierGroup.Key} ({tierGroup.Count()})"))
+                    .AppendLine("</summary>");
+                sb.AppendLine("<div class='catalog-list'>");
+
+                var byType = tierGroup
+                    .GroupBy(ResolveShipType)
+                    .OrderBy(g => g.Key, System.StringComparer.OrdinalIgnoreCase);
+
+                foreach (var typeGroup in byType)
+                {
+                    sb.Append("<details class='catalog-group shipyard-faction-group' data-persist-key='type:")
+                        .Append(E(tierGroup.Key))
+                        .Append(":")
+                        .Append(E(typeGroup.Key))
+                        .AppendLine("'>");
+                    sb.Append("<summary>")
+                        .Append(E($"{typeGroup.Key} ({typeGroup.Count()})"))
+                        .AppendLine("</summary>");
+                    sb.AppendLine("<div class='catalog-list'>");
+
+                    foreach (var entry in typeGroup.OrderBy(e => e.Name ?? e.DisplayText, System.StringComparer.OrdinalIgnoreCase))
+                    {
+                        var headerName = !string.IsNullOrWhiteSpace(entry.Name) ? entry.Name : entry.DisplayText;
+                        var headerClass = string.IsNullOrWhiteSpace(entry.ClassId) ? "-" : entry.ClassId;
+                        var headerPrice = entry.Price.HasValue ? entry.Price.Value.ToString("0.##") : "-";
+                        sb.Append("<details class='mission-item shipyard-card shipyard-ship-detail' data-persist-key='ship:")
+                            .Append(E(entry.Id))
+                            .AppendLine("'>");
+                        sb.Append("<summary class='shipyard-ship-summary'>")
+                            .Append("<span class='shipyard-ship-name'>").Append(E(headerName)).Append("</span>")
+                            .Append("<span class='shipyard-ship-meta'>Class: ").Append(E(headerClass))
+                            .Append(" | Price: ").Append(E(headerPrice)).Append("</span>")
+                            .AppendLine("</summary>");
+
+                        sb.AppendLine("<div class='shipyard-ship-body'>");
+                        sb.AppendLine("<div class='shipyard-ship-stats'>");
+                        AppendShipStat(sb, "ID", entry.Id);
+                        AppendShipStat(sb, "Name", entry.Name);
+                        AppendShipStat(sb, "Faction", entry.Faction);
+                        AppendShipStat(sb, "Class", entry.ClassId);
+                        AppendShipStat(sb, "Category", entry.Category);
+                        AppendShipStat(sb, "Tier", entry.Tier);
+                        AppendShipStat(sb, "Scale", entry.Scale);
+                        AppendShipStat(sb, "Hull", entry.Hull);
+                        AppendShipStat(sb, "Shield", entry.Shield);
+                        AppendShipStat(sb, "Cargo", entry.Cargo);
+                        AppendShipStat(sb, "Speed", entry.Speed);
+                        AppendShipStat(sb, "Price", entry.Price.HasValue ? entry.Price.Value.ToString("0.##") : null);
+                        sb.AppendLine("</div>");
+
+                        if (!string.IsNullOrWhiteSpace(entry.Id))
+                        {
+                            sb.AppendLine("<div class='mission-actions'>");
+                            AppendScriptChip(sb, $"commission_ship {entry.Id};", "Commission");
+                            sb.AppendLine("</div>");
+                        }
+                        sb.AppendLine("</div>");
+                        sb.AppendLine("</details>");
+                    }
+                    sb.AppendLine("</div></details>");
                 }
-                sb.AppendLine("</div>");
+                sb.AppendLine("</div></details>");
+                first = false;
             }
         }
         sb.AppendLine("</section>");
@@ -107,6 +176,30 @@ internal static class ShipyardTabRenderer
             .Append("</div><div class='space-stat-value'>")
             .Append(E(value))
             .AppendLine("</div></div>");
+    }
+
+    private static void AppendShipStat(StringBuilder sb, string label, string? value)
+    {
+        var text = string.IsNullOrWhiteSpace(value) ? "-" : value;
+        sb.Append("<div class='shipyard-ship-stat'><div class='shipyard-ship-stat-label'>")
+            .Append(E(label))
+            .Append("</div><div class='shipyard-ship-stat-value'>")
+            .Append(E(text))
+            .AppendLine("</div></div>");
+    }
+
+    private static void AppendShipStat(StringBuilder sb, string label, int? value)
+    {
+        AppendShipStat(sb, label, value.HasValue ? value.Value.ToString() : null);
+    }
+
+    private static string ResolveShipType(ShipyardUiEntry entry)
+    {
+        if (!string.IsNullOrWhiteSpace(entry.ClassId))
+            return entry.ClassId!;
+        if (!string.IsNullOrWhiteSpace(entry.Category))
+            return entry.Category!;
+        return "Unknown";
     }
 
     private static void AppendScriptChip(StringBuilder sb, string script, string label)

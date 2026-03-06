@@ -24,7 +24,18 @@ public sealed record TradeUiModel(
 
 public sealed record ShipyardUiEntry(
     string Id,
-    string DisplayText);
+    string DisplayText,
+    string Faction,
+    string? Name = null,
+    string? ClassId = null,
+    string? Category = null,
+    int? Tier = null,
+    int? Scale = null,
+    int? Hull = null,
+    int? Shield = null,
+    int? Cargo = null,
+    int? Speed = null,
+    decimal? Price = null);
 
 public sealed record ShipyardUiModel(
     string StationId,

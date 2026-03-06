@@ -5,7 +5,8 @@ public static class AgentPrompt
         "Pursue the user objective with short, deterministic DSL scripts. " +
         "Avoid redundant movement and setup steps. " +
         "Do not add dock before commands that can auto-dock. " +
-        "Do not add go before mine; use mine or mine <resource_id> directly so runtime can resolve navigation.";
+        "Do not add go before mine; use mine or mine <resource_id> directly so runtime can resolve navigation. " +
+        "Do not append a trailing halt; unless the user explicitly asks to stop or pause.";
 
     private static readonly string DslCommandReferenceBlock = DslParser.BuildPromptDslReferenceBlock();
 
@@ -48,6 +49,7 @@ public static class AgentPrompt
             "- blocks are allowed only as: repeat { ... }, if <CONDITION> { ... }, until <CONDITION> { ... }\n" +
             "- avoid explicit dock unless user explicitly asks for dock\n" +
             "- avoid explicit go before mine; use mine or mine <resource_id>\n" +
+            "- do not append trailing halt; unless user explicitly asks to stop/pause\n" +
             "- no markdown fence\n" +
             "Return only the script text.\n" +
             "<|eot_id|>" +

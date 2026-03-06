@@ -665,6 +665,7 @@ public static class DslParser
         if (numericTokens.Count > 0)
             sb.AppendLine($"- Numeric conditions support: {string.Join(", ", numericTokens.Select(n => $"{n}()"))}");
         sb.AppendLine("- All commands still end with ';' inside repeat blocks.");
+        sb.AppendLine("- Do not add a trailing 'halt;' at script end unless user explicitly asks to stop/pause.");
         sb.AppendLine();
         sb.AppendLine("Examples:");
         sb.AppendLine("- if MISSION_COMPLETE(012345) {");

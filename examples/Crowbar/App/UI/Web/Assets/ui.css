@@ -113,6 +113,18 @@ form[hx-post='api/execute'] button.run-active { border-color:#5ac977; background
 .shipyard-stats { margin-bottom: 2px; }
 .shipyard-card .mission-title { font-weight: 600; color: #dce8ff; }
 .shipyard-card .mission-actions { margin-top: 6px; }
+.shipyard-faction-group { margin-bottom: 8px; }
+.shipyard-faction-group > summary { font-weight: 600; color: #9cc2ff; }
+.shipyard-ship-detail { margin-bottom: 8px; }
+.shipyard-ship-summary { cursor: pointer; list-style: none; display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.shipyard-ship-summary::-webkit-details-marker { display:none; }
+.shipyard-ship-name { color:#dce8ff; font-weight:700; }
+.shipyard-ship-meta { color:#9fb1ca; font-size:12px; }
+.shipyard-ship-body { margin-top:8px; }
+.shipyard-ship-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:6px; }
+.shipyard-ship-stat { border:1px solid #263246; border-radius:8px; padding:6px; background:#101824; }
+.shipyard-ship-stat-label { font-size:11px; text-transform:uppercase; letter-spacing:0.4px; color:#8ea2bf; }
+.shipyard-ship-stat-value { margin-top:2px; color:#dce8ff; font-size:12px; }
 @media (max-width: 860px) {
   .space-grid { grid-template-columns:1fr; }
 }

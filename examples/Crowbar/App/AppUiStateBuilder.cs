@@ -157,7 +157,10 @@ PLAYER LISTINGS
             {
                 var trimmed = v.Trim();
                 var id = ExtractLeadingToken(trimmed);
-                return new ShipyardUiEntry(id, trimmed);
+                return new ShipyardUiEntry(
+                    Id: id,
+                    DisplayText: trimmed,
+                    Faction: "Local");
             })
             .ToArray();
 
@@ -167,20 +170,36 @@ PLAYER LISTINGS
             {
                 var trimmed = v.Trim();
                 var id = ExtractLeadingToken(trimmed);
-                return new ShipyardUiEntry(id, trimmed);
+                return new ShipyardUiEntry(
+                    Id: id,
+                    DisplayText: trimmed,
+                    Faction: "Listings");
             })
             .ToArray();
 
-        var catalogShips = state.ShipCatalogue?.NormalizedEntries?
+        var galaxyShips = state.Galaxy?.Catalog?.ShipsById?.Values
+            ?? Enumerable.Empty<CatalogueEntry>();
+        var catalogShips = galaxyShips
             .Where(e => e != null && !string.IsNullOrWhiteSpace(e.Id))
+            .OrderBy(e => ResolveShipFaction(e), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(e => string.IsNullOrWhiteSpace(e.Name) ? e.Id : e.Name, StringComparer.OrdinalIgnoreCase)
             .Select(e => new ShipyardUiEntry(
-                e.Id,
-                string.IsNullOrWhiteSpace(e.Name) ? e.Id : $"{e.Id} ({e.Name})"))
-            .ToArray() ?? Array.Empty<ShipyardUiEntry>();
+                Id: e.Id,
+                DisplayText: string.IsNullOrWhiteSpace(e.Name) ? e.Id : $"{e.Id} ({e.Name})",
+                Faction: ResolveShipFaction(e),
+                Name: string.IsNullOrWhiteSpace(e.Name) ? null : e.Name,
+                ClassId: string.IsNullOrWhiteSpace(e.ClassId) ? e.Class : e.ClassId,
+                Category: string.IsNullOrWhiteSpace(e.Category) ? null : e.Category,
+                Tier: e.Tier,
+                Scale: e.Scale,
+                Hull: e.Hull ?? e.BaseHull,
+                Shield: e.Shield ?? e.BaseShield,
+                Cargo: e.Cargo ?? e.CargoCapacity,
+                Speed: e.Speed ?? e.BaseSpeed,
+                Price: e.Price))
+            .ToArray();
 
-        int currentPage = state.ShipCatalogue?.Page ?? 1;
-        int totalPages = state.ShipCatalogue?.TotalPages ?? 1;
-        int totalShips = state.ShipCatalogue?.Total ?? state.ShipCatalogue?.TotalItems ?? 0;
+        int totalShips = catalogShips.Length;
 
         return new ShipyardUiModel(
             state.CurrentPOI?.Id ?? "(unknown)",
@@ -188,7 +207,7 @@ PLAYER LISTINGS
             state.StorageCredits,
             $"{state.Ship.Fuel}/{state.Ship.MaxFuel}",
             $"{state.Ship.CargoUsed}/{state.Ship.CargoCapacity}",
-            $"{currentPage}/{totalPages}",
+            "Galaxy",
             totalShips,
             showroom,
             listings,
@@ -275,5 +294,25 @@ SHIPS
             .Split(' ', StringSplitOptions.RemoveEmptyEntries)
             .FirstOrDefault()?
             .Trim('`', '[', ']', '(', ')', ',') ?? string.Empty;
+    }
+
+    private static string ResolveShipFaction(CatalogueEntry entry)
+    {
+        var category = (entry.Category ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(category))
+            return category;
+
+        var classId = !string.IsNullOrWhiteSpace(entry.ClassId)
+            ? entry.ClassId
+            : entry.Class;
+        var raw = (classId ?? string.Empty).Trim();
+        if (raw.Length == 0)
+            return "Unknown";
+
+        int sep = raw.IndexOf('_');
+        var token = sep > 0 ? raw[..sep] : raw;
+        return string.IsNullOrWhiteSpace(token)
+            ? "Unknown"
+            : char.ToUpperInvariant(token[0]) + token[1..];
     }
 }

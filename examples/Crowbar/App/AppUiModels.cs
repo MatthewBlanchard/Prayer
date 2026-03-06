@@ -14,6 +14,18 @@ public sealed record TradeUiOrder(
     decimal PriceEach,
     string DisplayText);
 
+public sealed record TradeCatalogItem(
+    string ItemId,
+    string Name,
+    string Category,
+    int? Tier,
+    bool HasLocalBuyOrders,
+    bool HasLocalSellOrders,
+    decimal? MedianBuyPrice,
+    decimal? MedianSellPrice,
+    decimal? GlobalMedianBuyPrice,
+    decimal? GlobalMedianSellPrice);
+
 public sealed record TradeUiModel(
     string StationId,
     int Credits,
@@ -22,6 +34,7 @@ public sealed record TradeUiModel(
     string Cargo,
     IReadOnlyList<TradeUiItem> CargoItems,
     IReadOnlyList<TradeUiItem> StorageItems,
+    IReadOnlyList<TradeCatalogItem> AllItems,
     IReadOnlyList<TradeUiOrder> BuyOrders,
     IReadOnlyList<TradeUiOrder> SellOrders);
 

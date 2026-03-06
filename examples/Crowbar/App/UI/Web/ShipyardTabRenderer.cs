@@ -45,6 +45,7 @@ internal static class ShipyardTabRenderer
         }
         else
         {
+            sb.AppendLine("<input class='catalog-search' type='search' placeholder='Search ship catalog...' oninput='window.filterShipCatalogEntries(this.value)'>");
             var byTier = model.CatalogShips
                 .GroupBy(e => e.Tier.HasValue ? e.Tier.Value.ToString() : "Unknown")
                 .OrderBy(g =>
@@ -88,8 +89,29 @@ internal static class ShipyardTabRenderer
                         var headerName = !string.IsNullOrWhiteSpace(entry.Name) ? entry.Name : entry.DisplayText;
                         var headerClass = string.IsNullOrWhiteSpace(entry.ClassId) ? "-" : entry.ClassId;
                         var headerPrice = entry.Price.HasValue ? entry.Price.Value.ToString("0.##") : "-";
+                        var searchText = string.Join(
+                                " ",
+                                new[]
+                                {
+                                    entry.Id,
+                                    entry.Name,
+                                    entry.Faction,
+                                    entry.ClassId,
+                                    entry.Category,
+                                    entry.Tier?.ToString(),
+                                    entry.Scale?.ToString(),
+                                    entry.Hull?.ToString(),
+                                    entry.Shield?.ToString(),
+                                    entry.Cargo?.ToString(),
+                                    entry.Speed?.ToString(),
+                                    entry.Price?.ToString("0.##")
+                                }
+                                .Where(v => !string.IsNullOrWhiteSpace(v)))
+                            .ToLowerInvariant();
                         sb.Append("<details class='mission-item shipyard-card shipyard-ship-detail' data-persist-key='ship:")
                             .Append(E(entry.Id))
+                            .Append("' data-search='")
+                            .Append(E(searchText))
                             .AppendLine("'>");
                         sb.Append("<summary class='shipyard-ship-summary'>")
                             .Append("<span class='shipyard-ship-name'>").Append(E(headerName)).Append("</span>")

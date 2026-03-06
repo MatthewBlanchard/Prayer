@@ -35,6 +35,93 @@ internal static class TradeTabRenderer
         sb.AppendLine("</div>");
 
         sb.AppendLine("<section class='space-panel'>");
+        sb.AppendLine("<div class='space-panel-title'>All Items</div>");
+        sb.AppendLine("<label class='trade-only-orders-toggle'><input type='checkbox' checked onchange='window.toggleTradeOnlyWithOrders(this.checked)'> Only with buy/sell orders</label>");
+        sb.AppendLine("<input class='catalog-search' type='search' placeholder='Search items...' oninput='window.filterTradeCatalogItems(this.value)'>");
+        if (model.AllItems.Count == 0)
+        {
+            sb.AppendLine("<div class='small'>(none)</div>");
+        }
+        else
+        {
+            var byCategory = model.AllItems
+                .GroupBy(i => string.IsNullOrWhiteSpace(i.Category) ? "Unknown" : i.Category)
+                .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            bool firstCategory = true;
+            foreach (var categoryGroup in byCategory)
+            {
+                sb.Append("<details class='catalog-group trade-item-category'");
+                if (firstCategory)
+                    sb.Append(" open");
+                sb.Append("><summary>")
+                    .Append(E($"{categoryGroup.Key} ({categoryGroup.Count()})"))
+                    .AppendLine("</summary>");
+                sb.AppendLine("<div class='cargo-list'>");
+
+                foreach (var item in categoryGroup.OrderBy(i => i.Name, StringComparer.OrdinalIgnoreCase))
+                {
+                    var searchText = $"{item.ItemId} {item.Name} {item.Category} {item.Tier}".ToLowerInvariant();
+                    sb.Append("<div class='cargo-row trade-catalog-entry' data-search='")
+                        .Append(E(searchText))
+                        .Append("' data-has-orders='")
+                        .Append(item.HasLocalBuyOrders || item.HasLocalSellOrders ? "true" : "false")
+                        .AppendLine("'>");
+                    sb.Append("<div class='cargo-item-main'><div class='cargo-label'>")
+                        .Append(E($"{item.Name} ({item.ItemId})"))
+                        .AppendLine("</div>");
+                    if (item.MedianBuyPrice.HasValue || item.MedianSellPrice.HasValue)
+                    {
+                        sb.Append("<div class='cargo-meta'>Median ");
+                        if (item.MedianBuyPrice.HasValue)
+                        {
+                            sb.Append("bid <span class='trade-order-price'>")
+                                .Append(E($"{item.MedianBuyPrice.Value:0.##}cr"))
+                                .Append("</span>");
+                        }
+                        if (item.MedianBuyPrice.HasValue && item.MedianSellPrice.HasValue)
+                            sb.Append(" | ");
+                        if (item.MedianSellPrice.HasValue)
+                        {
+                            sb.Append("ask <span class='trade-order-price'>")
+                                .Append(E($"{item.MedianSellPrice.Value:0.##}cr"))
+                                .Append("</span>");
+                        }
+                        sb.AppendLine("</div>");
+                    }
+                    if (item.GlobalMedianBuyPrice.HasValue || item.GlobalMedianSellPrice.HasValue)
+                    {
+                        sb.Append("<div class='cargo-meta'>Galactic ");
+                        if (item.GlobalMedianBuyPrice.HasValue)
+                        {
+                            sb.Append("bid <span class='trade-order-price'>")
+                                .Append(E($"{item.GlobalMedianBuyPrice.Value:0.##}cr"))
+                                .Append("</span>");
+                        }
+                        if (item.GlobalMedianBuyPrice.HasValue && item.GlobalMedianSellPrice.HasValue)
+                            sb.Append(" | ");
+                        if (item.GlobalMedianSellPrice.HasValue)
+                        {
+                            sb.Append("ask <span class='trade-order-price'>")
+                                .Append(E($"{item.GlobalMedianSellPrice.Value:0.##}cr"))
+                                .Append("</span>");
+                        }
+                        sb.AppendLine("</div>");
+                    }
+                    sb.AppendLine("</div>");
+                    AppendBuyOrderForm(sb, item.ItemId);
+                    sb.AppendLine("</div>");
+                }
+
+                sb.AppendLine("</div>");
+                sb.AppendLine("</details>");
+                firstCategory = false;
+            }
+        }
+        sb.AppendLine("</section>");
+
+        sb.AppendLine("<section class='space-panel'>");
         sb.AppendLine("<div class='space-panel-title'>Open Orders</div>");
         if (model.BuyOrders.Count == 0 && model.SellOrders.Count == 0)
         {
@@ -175,6 +262,20 @@ internal static class TradeTabRenderer
             .Append("<button type='submit' class='space-chip'>")
             .Append(E(label))
             .AppendLine("</button></form>");
+    }
+
+    private static void AppendBuyOrderForm(StringBuilder sb, string itemId)
+    {
+        if (string.IsNullOrWhiteSpace(itemId))
+            return;
+
+        sb.Append("<form class='trade-buy-form' data-item-id='")
+            .Append(E(itemId))
+            .Append("' hx-post='api/control-input' hx-swap='none' hx-on::after-request='window.executeIfOk(event)' onsubmit='return window.submitTradeBuy(event, this)'>")
+            .Append("<input type='hidden' name='script' value=''>")
+            .Append("<input type='number' name='qty' min='1' step='1' value='1' class='trade-qty-input'>")
+            .Append("<button type='submit' class='space-chip'>Buy</button>")
+            .AppendLine("</form>");
     }
 
     private static string E(string value) => WebUtility.HtmlEncode(value ?? "");

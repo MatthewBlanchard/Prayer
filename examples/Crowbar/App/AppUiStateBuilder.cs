@@ -135,6 +135,22 @@ OPEN ORDERS
             })
             .ToArray();
 
+        var allItems = (state.Galaxy?.Catalog?.ItemsById?.Values ?? Enumerable.Empty<CatalogueEntry>())
+            .Where(e => e != null && !string.IsNullOrWhiteSpace(e.Id))
+            .OrderBy(e => string.IsNullOrWhiteSpace(e.Name) ? e.Id : e.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(e => new TradeCatalogItem(
+                e.Id,
+                string.IsNullOrWhiteSpace(e.Name) ? e.Id : e.Name,
+                string.IsNullOrWhiteSpace(e.Category) ? "Unknown" : e.Category,
+                e.Tier,
+                HasLocalBuyOrders(state, e.Id),
+                HasLocalSellOrders(state, e.Id),
+                ResolveMedianBidPrice(state, e.Id),
+                ResolveMedianAskPrice(state, e.Id),
+                ResolveGlobalMedianBidPrice(state, e.Id),
+                ResolveGlobalMedianAskPrice(state, e.Id)))
+            .ToArray();
+
         return new TradeUiModel(
             state.CurrentPOI?.Id ?? "(unknown)",
             state.Credits,
@@ -143,6 +159,7 @@ OPEN ORDERS
             $"{state.Ship.CargoUsed}/{state.Ship.CargoCapacity}",
             cargoItems,
             storageItems,
+            allItems,
             buyOrders,
             sellOrders);
     }
@@ -436,6 +453,58 @@ AVAILABLE MISSIONS
         }
 
         return null;
+    }
+
+    private static decimal? ResolveGlobalMedianBidPrice(GameState state, string itemId)
+    {
+        if (string.IsNullOrWhiteSpace(itemId))
+            return null;
+
+        if (state.Galaxy?.Market?.GlobalMedianBuyPrices != null &&
+            state.Galaxy.Market.GlobalMedianBuyPrices.TryGetValue(itemId, out var globalMedian) &&
+            globalMedian > 0m)
+        {
+            return globalMedian;
+        }
+
+        return null;
+    }
+
+    private static decimal? ResolveGlobalMedianAskPrice(GameState state, string itemId)
+    {
+        if (string.IsNullOrWhiteSpace(itemId))
+            return null;
+
+        if (state.Galaxy?.Market?.GlobalMedianSellPrices != null &&
+            state.Galaxy.Market.GlobalMedianSellPrices.TryGetValue(itemId, out var globalMedian) &&
+            globalMedian > 0m)
+        {
+            return globalMedian;
+        }
+
+        return null;
+    }
+
+    private static bool HasLocalBuyOrders(GameState state, string itemId)
+    {
+        if (string.IsNullOrWhiteSpace(itemId))
+            return false;
+
+        return state.CurrentMarket?.BuyOrders != null &&
+               state.CurrentMarket.BuyOrders.TryGetValue(itemId, out var bids) &&
+               bids != null &&
+               bids.Any(o => o != null && o.Quantity > 0 && o.PriceEach > 0);
+    }
+
+    private static bool HasLocalSellOrders(GameState state, string itemId)
+    {
+        if (string.IsNullOrWhiteSpace(itemId))
+            return false;
+
+        return state.CurrentMarket?.SellOrders != null &&
+               state.CurrentMarket.SellOrders.TryGetValue(itemId, out var asks) &&
+               asks != null &&
+               asks.Any(o => o != null && o.Quantity > 0 && o.PriceEach > 0);
     }
 
     private static decimal? ComputeMedianPriceFromOrders(List<MarketOrder>? orders)

@@ -115,6 +115,11 @@ form[hx-post='api/execute'] button.run-active { border-color:#5ac977; background
 .trade-order-meta { display:flex; align-items:center; gap:6px; }
 .trade-order-price { color:#ffd67a; font-weight:700; }
 .trade-order-qty { color:#c9d8ef; }
+.trade-buy-form { display:flex; align-items:center; gap:6px; }
+.trade-buy-form .trade-qty-input { width:84px; min-width:84px; padding:4px 6px; }
+.trade-buy-form .space-chip { margin:0; }
+.trade-only-orders-toggle { display:flex; align-items:center; gap:6px; font-size:12px; color:#c9d8ef; margin:0 0 8px 0; }
+.trade-only-orders-toggle input { width:auto; margin:0; }
 .shipyard-stats { margin-bottom: 2px; }
 .shipyard-card .mission-title { font-weight: 600; color: #dce8ff; }
 .shipyard-card .mission-actions { margin-top: 6px; }

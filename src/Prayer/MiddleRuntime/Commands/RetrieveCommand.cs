@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class WithdrawItemsCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
+public class RetrieveCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
 {
     public override string Name => "retrieve";
     public override DslCommandSyntax GetDslSyntax() => new(

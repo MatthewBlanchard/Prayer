@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class DepositItemsCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
+public class StashCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
 {
     public override string Name => "stash";
     public override DslCommandSyntax GetDslSyntax() => new(

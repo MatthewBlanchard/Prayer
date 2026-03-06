@@ -88,8 +88,8 @@ As of this repo state, command catalog entries are:
 - `buy`
 - `cancel_buy`
 - `cancel_sell`
-- `withdraw_items`
-- `deposit_items`
+- `retrieve`
+- `stash`
 - `switch_ship`
 - `install_mod`
 - `uninstall_mod`

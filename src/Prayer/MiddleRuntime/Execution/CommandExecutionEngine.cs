@@ -57,8 +57,8 @@ public sealed class CommandExecutionEngine
         if (state != null)
             ValidateCommandNodes(tree.Statements, state);
 
-        var normalizedSteps = DslInterpreter.Translate(tree);
-        _script = DslInterpreter.RenderScript(normalizedSteps).TrimEnd();
+        var normalizedSteps = DslScriptTransformer.Translate(tree);
+        _script = DslScriptTransformer.RenderScript(tree).TrimEnd();
         _scriptAst = tree;
 
         _logger.LogScriptNormalization("set_script", rawScript, _script);

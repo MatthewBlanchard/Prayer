@@ -74,8 +74,9 @@ public sealed class ScriptGenerationService
 
             try
             {
-                var steps = DslInterpreter.Translate(script, state).ToList();
-                var normalizedScript = DslInterpreter.RenderScript(steps).TrimEnd();
+                var tree = DslParser.ParseTree(script);
+                _ = DslScriptTransformer.Translate(tree, state);
+                var normalizedScript = DslScriptTransformer.RenderScript(tree).TrimEnd();
                 _logger.LogScriptNormalization($"generation_attempt_{attempt}", script, normalizedScript);
                 return new ScriptGenerationResult(generationInput, normalizedScript);
             }
@@ -116,7 +117,7 @@ public sealed class ScriptGenerationService
     {
         try
         {
-            return DslInterpreter.NormalizeScript(script);
+            return DslScriptTransformer.NormalizeScript(script);
         }
         catch
         {

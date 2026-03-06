@@ -45,12 +45,6 @@ public sealed record DslUntilAstNode(DslConditionAstNode Condition, IReadOnlyLis
 public static class DslParser
 {
     private const string HaltKeyword = "halt";
-    private static readonly string[] BooleanTokens =
-    {
-        "MISSION_COMPLETE"
-    };
-    private static readonly HashSet<string> BooleanTokenSet =
-        BooleanTokens.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private static readonly IReadOnlyDictionary<string, string[]> PromptArgNameOverrides =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
@@ -587,7 +581,7 @@ public static class DslParser
     public static DslProgram Parse(string text)
     {
         var tree = ParseTree(text);
-        var commands = DslInterpreter.Translate(tree);
+        var commands = DslScriptTransformer.Translate(tree);
         var steps = commands.Select(c =>
         {
             var parts = new List<string> { c.Action };
@@ -650,8 +644,19 @@ public static class DslParser
         sb.AppendLine("- Blocks are supported via: repeat { ... }");
         sb.AppendLine("- Conditional blocks are supported via: if <CONDITION> { ... }");
         sb.AppendLine("- Until blocks are supported via: until <CONDITION> { ... }");
-        sb.AppendLine($"- Boolean flag conditions: {string.Join(", ", BooleanTokens)}");
-        sb.AppendLine("- Numeric conditions are also supported, e.g. FUEL() > 5, CREDITS() >= 1000");
+        var booleanTokens = DslConditionCatalog.BooleanPredicates
+            .Select(p => p.Name.Trim().ToUpperInvariant())
+            .Where(n => n.Length > 0)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var numericTokens = DslConditionCatalog.NumericPredicates
+            .Select(p => p.Name.Trim().ToUpperInvariant())
+            .Where(n => n.Length > 0)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        sb.AppendLine($"- Boolean flag conditions: {string.Join(", ", booleanTokens)}");
+        if (numericTokens.Count > 0)
+            sb.AppendLine($"- Numeric conditions support: {string.Join(", ", numericTokens.Select(n => $"{n}()"))}");
         sb.AppendLine("- All commands still end with ';' inside repeat blocks.");
         sb.AppendLine();
         sb.AppendLine("Examples:");

@@ -4,126 +4,83 @@ using System.Text;
 
 internal static class DslPrettyPrinter
 {
-    public static string Render(IReadOnlyList<CommandResult> commands)
+    public static string Render(DslAstProgram tree)
     {
-        if (commands == null || commands.Count == 0)
+        if (tree == null || tree.Statements == null || tree.Statements.Count == 0)
             return string.Empty;
 
         var sb = new StringBuilder();
-        int index = 0;
-        AppendRendered(commands, ref index, sb, indent: 0, closeRepeatId: null, closeIfId: null);
-
+        AppendAstNodes(tree.Statements, sb, indent: 0);
         return sb.ToString();
     }
 
-    public static bool ParseConditionalStartArg(string? arg, out string blockId, out string condition)
+    private static void AppendAstNodes(
+        IReadOnlyList<DslAstNode> nodes,
+        StringBuilder sb,
+        int indent)
     {
-        blockId = "";
-        condition = "";
+        foreach (var node in nodes ?? Array.Empty<DslAstNode>())
+        {
+            switch (node)
+            {
+                case DslCommandAstNode commandNode:
+                    AppendAstCommand(commandNode, sb, indent);
+                    break;
 
-        var value = (arg ?? string.Empty).Trim();
-        if (value.Length == 0)
-            return false;
+                case DslRepeatAstNode repeatNode:
+                    AppendIndent(sb, indent);
+                    sb.AppendLine("repeat {");
+                    AppendAstNodes(repeatNode.Body ?? Array.Empty<DslAstNode>(), sb, indent + 2);
+                    AppendIndent(sb, indent);
+                    sb.AppendLine("}");
+                    break;
 
-        int sep = value.IndexOf(':');
-        if (sep <= 0 || sep >= value.Length - 1)
-            return false;
+                case DslIfAstNode ifNode:
+                    AppendIndent(sb, indent);
+                    sb.Append("if ");
+                    sb.Append(DslBooleanEvaluator.RenderCondition(ifNode.Condition));
+                    sb.AppendLine(" {");
+                    AppendAstNodes(ifNode.Body ?? Array.Empty<DslAstNode>(), sb, indent + 2);
+                    AppendIndent(sb, indent);
+                    sb.AppendLine("}");
+                    break;
 
-        blockId = value[..sep].Trim();
-        condition = value[(sep + 1)..].Trim();
-        return blockId.Length > 0 && condition.Length > 0;
+                case DslUntilAstNode untilNode:
+                    AppendIndent(sb, indent);
+                    sb.Append("until ");
+                    sb.Append(DslBooleanEvaluator.RenderCondition(untilNode.Condition));
+                    sb.AppendLine(" {");
+                    AppendAstNodes(untilNode.Body ?? Array.Empty<DslAstNode>(), sb, indent + 2);
+                    AppendIndent(sb, indent);
+                    sb.AppendLine("}");
+                    break;
+            }
+        }
     }
 
-    private static void AppendRendered(
-        IReadOnlyList<CommandResult> commands,
-        ref int index,
+    private static void AppendAstCommand(
+        DslCommandAstNode commandNode,
         StringBuilder sb,
-        int indent,
-        string? closeRepeatId,
-        string? closeIfId)
+        int indent)
     {
-        while (index < commands.Count)
+        var command = new DslCommand(commandNode.Name, commandNode.Args);
+        var normalized = command.ToValidCommand(state: null, command);
+
+        AppendIndent(sb, indent);
+        sb.Append(normalized.Action);
+        if (!string.IsNullOrWhiteSpace(normalized.Arg1))
         {
-            var cmd = commands[index++];
-            if (string.IsNullOrWhiteSpace(cmd.Action))
-                continue;
-
-            if (string.Equals(cmd.Action, DslInterpreter.RepeatStartAction, StringComparison.Ordinal))
-            {
-                AppendIndent(sb, indent);
-                sb.AppendLine("repeat {");
-                AppendRendered(commands, ref index, sb, indent + 2, closeRepeatId: cmd.Arg1, closeIfId: null);
-                AppendIndent(sb, indent);
-                sb.AppendLine("}");
-                continue;
-            }
-
-            if (string.Equals(cmd.Action, DslInterpreter.RepeatEndAction, StringComparison.Ordinal))
-            {
-                if (closeRepeatId != null && string.Equals(cmd.Arg1, closeRepeatId, StringComparison.Ordinal))
-                    return;
-
-                continue;
-            }
-
-            if (string.Equals(cmd.Action, DslInterpreter.IfStartAction, StringComparison.Ordinal))
-            {
-                ParseConditionalStartArg(cmd.Arg1, out var ifId, out var condition);
-                AppendIndent(sb, indent);
-                sb.Append("if ");
-                sb.Append(string.IsNullOrWhiteSpace(condition) ? "UNKNOWN" : condition);
-                sb.AppendLine(" {");
-                AppendRendered(commands, ref index, sb, indent + 2, closeRepeatId: null, closeIfId: ifId);
-                AppendIndent(sb, indent);
-                sb.AppendLine("}");
-                continue;
-            }
-
-            if (string.Equals(cmd.Action, DslInterpreter.IfEndAction, StringComparison.Ordinal))
-            {
-                if (closeIfId != null && string.Equals(cmd.Arg1, closeIfId, StringComparison.Ordinal))
-                    return;
-
-                continue;
-            }
-
-            if (string.Equals(cmd.Action, DslInterpreter.UntilStartAction, StringComparison.Ordinal))
-            {
-                ParseConditionalStartArg(cmd.Arg1, out var untilId, out var condition);
-                AppendIndent(sb, indent);
-                sb.Append("until ");
-                sb.Append(string.IsNullOrWhiteSpace(condition) ? "UNKNOWN" : condition);
-                sb.AppendLine(" {");
-                AppendRendered(commands, ref index, sb, indent + 2, closeRepeatId: null, closeIfId: untilId);
-                AppendIndent(sb, indent);
-                sb.AppendLine("}");
-                continue;
-            }
-
-            if (string.Equals(cmd.Action, DslInterpreter.UntilEndAction, StringComparison.Ordinal))
-            {
-                if (closeIfId != null && string.Equals(cmd.Arg1, closeIfId, StringComparison.Ordinal))
-                    return;
-
-                continue;
-            }
-
-            AppendIndent(sb, indent);
-            sb.Append(cmd.Action);
-            if (!string.IsNullOrWhiteSpace(cmd.Arg1))
-            {
-                sb.Append(' ');
-                sb.Append(cmd.Arg1);
-            }
-
-            if (cmd.Quantity.HasValue)
-            {
-                sb.Append(' ');
-                sb.Append(cmd.Quantity.Value);
-            }
-
-            sb.AppendLine(";");
+            sb.Append(' ');
+            sb.Append(normalized.Arg1);
         }
+
+        if (normalized.Quantity.HasValue)
+        {
+            sb.Append(' ');
+            sb.Append(normalized.Quantity.Value);
+        }
+
+        sb.AppendLine(";");
     }
 
     private static void AppendIndent(StringBuilder sb, int indent)

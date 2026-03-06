@@ -643,13 +643,13 @@ public static class DslParser
         sb.AppendLine("- All commands still end with ';' inside repeat blocks.");
         sb.AppendLine();
         sb.AppendLine("Examples:");
-        sb.AppendLine("- if MISSION_COMPLETE {");
+        sb.AppendLine("- if MISSION_COMPLETE() {");
         sb.AppendLine("    halt;");
         sb.AppendLine("  }");
         sb.AppendLine("- if FUEL() > 5 {");
         sb.AppendLine("    go node_alpha;");
         sb.AppendLine("  }");
-        sb.AppendLine("- until MISSION_COMPLETE {");
+        sb.AppendLine("- until MISSION_COMPLETE() {");
         sb.AppendLine("    mine carbon_ore;");
         sb.AppendLine("    sell cargo;");
         sb.AppendLine("  }");

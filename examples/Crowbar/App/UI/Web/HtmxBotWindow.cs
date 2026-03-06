@@ -24,6 +24,7 @@ public sealed class HtmxBotWindow : IAppUi
     private ChannelWriter<string>? _switchBotWriter;
     private ChannelWriter<AddBotRequest>? _addBotWriter;
     private ChannelWriter<LlmProviderSelection>? _llmSelectionWriter;
+    private Func<string, string, Task<string>>? _generateScriptHandler;
 
     private string _selectedProvider = "llamacpp";
     private string _selectedModel = "model";
@@ -59,6 +60,7 @@ public sealed class HtmxBotWindow : IAppUi
     public void SetSwitchBotWriter(ChannelWriter<string> writer) => _switchBotWriter = writer;
     public void SetAddBotWriter(ChannelWriter<AddBotRequest> writer) => _addBotWriter = writer;
     public void SetLlmSelectionWriter(ChannelWriter<LlmProviderSelection> writer) => _llmSelectionWriter = writer;
+    public void SetGenerateScriptHandler(Func<string, string, Task<string>> handler) => _generateScriptHandler = handler;
 
     public void ConfigureInitialLlmSelection(string provider, string model)
     {
@@ -291,14 +293,33 @@ public sealed class HtmxBotWindow : IAppUi
             var prompt = GetValue(form, "prompt");
             string? activeBotId;
             lock (_lock) activeBotId = _snapshot.ActiveBotId;
-            if (!string.IsNullOrWhiteSpace(prompt) && !string.IsNullOrWhiteSpace(activeBotId))
+            if (string.IsNullOrWhiteSpace(prompt))
             {
-                _runtimeCommandWriter?.TryWrite(new RuntimeCommandRequest(
-                    activeBotId!,
-                    RuntimeCommandNames.GenerateScript,
-                    prompt));
+                WriteText(ctx.Response, "Prompt is required.", "text/plain; charset=utf-8", 400);
+                return;
             }
-            WriteNoContent(ctx.Response);
+
+            if (string.IsNullOrWhiteSpace(activeBotId))
+            {
+                WriteText(ctx.Response, "No active bot selected.", "text/plain; charset=utf-8", 400);
+                return;
+            }
+
+            if (_generateScriptHandler == null)
+            {
+                WriteText(ctx.Response, "Script generation is not configured.", "text/plain; charset=utf-8", 500);
+                return;
+            }
+
+            try
+            {
+                var generatedScript = _generateScriptHandler(activeBotId!, prompt).GetAwaiter().GetResult();
+                WriteText(ctx.Response, generatedScript, "text/plain; charset=utf-8");
+            }
+            catch (Exception ex)
+            {
+                WriteText(ctx.Response, ex.Message, "text/plain; charset=utf-8", 400);
+            }
             return;
         }
 
@@ -310,15 +331,28 @@ public sealed class HtmxBotWindow : IAppUi
             var prompt = BuildActiveMissionObjectivesPrompt(
                 snapshot.ActiveMissionPrompts,
                 snapshot.CantinaStateMarkdown);
-            if (!string.IsNullOrWhiteSpace(snapshot.ActiveBotId))
+
+            if (string.IsNullOrWhiteSpace(snapshot.ActiveBotId))
             {
-                _runtimeCommandWriter?.TryWrite(new RuntimeCommandRequest(
-                    snapshot.ActiveBotId!,
-                    RuntimeCommandNames.GenerateScript,
-                    prompt));
+                WriteText(ctx.Response, "No active bot selected.", "text/plain; charset=utf-8", 400);
+                return;
             }
 
-            WriteNoContent(ctx.Response);
+            if (_generateScriptHandler == null)
+            {
+                WriteText(ctx.Response, "Script generation is not configured.", "text/plain; charset=utf-8", 500);
+                return;
+            }
+
+            try
+            {
+                var generatedScript = _generateScriptHandler(snapshot.ActiveBotId!, prompt).GetAwaiter().GetResult();
+                WriteText(ctx.Response, generatedScript, "text/plain; charset=utf-8");
+            }
+            catch (Exception ex)
+            {
+                WriteText(ctx.Response, ex.Message, "text/plain; charset=utf-8", 400);
+            }
             return;
         }
 
@@ -554,7 +588,7 @@ public sealed class HtmxBotWindow : IAppUi
         sb.Append("<textarea id='script-input' name='script' rows='7' placeholder='script'>").Append(E(currentScript)).AppendLine("</textarea>");
         sb.AppendLine("<button type='submit'>Set Script</button></form>");
         sb.AppendLine(
-            "<div class='row' style='margin-top:8px;'><form hx-post='api/execute' hx-swap='none'><button type='submit' title='Execute'>▶️</button></form><form hx-post='api/halt' hx-swap='none'><button type='submit' title='Halt'>⏹️</button></form><form hx-post='api/save-example' hx-swap='none'><button type='submit' title='Thumbs Up'>👍</button></form><div id='loop-btn-slot' hx-get='partial/loop-btn' hx-trigger='load, every 1000ms' hx-swap='innerHTML'>"
+            "<div class='row' style='margin-top:8px;'><form hx-post='api/execute' hx-swap='none'><button id='execute-btn' class='execute-btn' type='submit' title='Execute'>▶️</button></form><form hx-post='api/halt' hx-swap='none'><button type='submit' title='Halt'>⏹️</button></form><form hx-post='api/save-example' hx-swap='none'><button type='submit' title='Thumbs Up'>👍</button></form><div id='loop-btn-slot' hx-get='partial/loop-btn' hx-trigger='load, every 1000ms' hx-swap='innerHTML'>"
             + BuildLoopButtonFormHtml(activeBotLoopEnabled)
             + "</div></div>");
         sb.AppendLine("<h4>Prompt</h4><form hx-post='api/prompt' hx-swap='none' class='list'><textarea name='prompt' rows='4' placeholder='prompt for script generation'></textarea><button type='submit'>Generate Script</button></form>");

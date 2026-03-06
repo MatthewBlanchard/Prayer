@@ -98,8 +98,7 @@ public sealed class RuntimeHost : IRuntimeHost
             return null;
         }
 
-        _agent.InterruptActiveCommand("Interrupted by direct script generation request");
-        _publishStatus($"[{_label}] Generating script");
+        _publishStatus($"[{_label}] Generating script draft");
 
         var state = _getLatestState() ?? await _stateProvider.GetLatestStateAsync();
         _setLatestState(state);
@@ -121,9 +120,7 @@ public sealed class RuntimeHost : IRuntimeHost
             return null;
         }
 
-        _agent.ActivateScriptControl();
-        _agent.SetScript(generatedScript, state);
-        _publishStatus($"[{_label}] Generated script loaded and activated");
+        _publishStatus($"[{_label}] Script draft generated");
         _publishSnapshot(state);
         return generatedScript;
     }

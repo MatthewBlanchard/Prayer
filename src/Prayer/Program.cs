@@ -250,15 +250,16 @@ app.MapPost("/api/runtime/sessions/{id}/script", (string id, Contracts.SetScript
     return Results.Ok(new Contracts.CommandAckResponse(session.Id, PrayerRuntimeCommandNames.SetScript, message));
 });
 
-app.MapPost("/api/runtime/sessions/{id}/script/generate", (string id, Contracts.GenerateScriptRequest request, RuntimeSessionStore store) =>
+app.MapPost("/api/runtime/sessions/{id}/script/generate", async (string id, Contracts.GenerateScriptRequest request, RuntimeSessionStore store, CancellationToken cancellationToken) =>
 {
     if (!store.TryGet(id, out var session))
         return Results.NotFound();
 
-    if (!session.TryGenerateScript(request.Prompt, out var message))
-        return Results.BadRequest(message);
+    var generatedScript = await session.GenerateScriptAsync(request.Prompt, cancellationToken);
+    if (string.IsNullOrWhiteSpace(generatedScript))
+        return Results.BadRequest("prompt did not produce a script");
 
-    return Results.Ok(new Contracts.CommandAckResponse(session.Id, PrayerRuntimeCommandNames.GenerateScript, message));
+    return Results.Ok(new Contracts.GenerateScriptResponse(generatedScript));
 });
 
 app.MapPost("/api/runtime/sessions/{id}/script/execute", (string id, RuntimeSessionStore store) =>
@@ -668,9 +669,12 @@ internal sealed class PrayerRuntimeSession : IDisposable
         return TryApplyCommand(PrayerRuntimeCommandNames.SetScript, script ?? string.Empty, out message);
     }
 
-    public bool TryGenerateScript(string prompt, out string message)
+    public Task<string?> GenerateScriptAsync(string prompt, CancellationToken cancellationToken = default)
     {
-        return TryApplyCommand(PrayerRuntimeCommandNames.GenerateScript, prompt ?? string.Empty, out message);
+        if (string.IsNullOrWhiteSpace(prompt))
+            return Task.FromResult<string?>(null);
+
+        return RuntimeHost.GenerateScriptAsync(prompt);
     }
 
     public bool TryExecuteScript(out string message)
@@ -738,19 +742,8 @@ internal sealed class PrayerRuntimeSession : IDisposable
                 break;
             }
             case PrayerRuntimeCommandNames.GenerateScript:
-            {
-                if (string.IsNullOrWhiteSpace(argument))
-                    (success, responseMessage) = (false, "prompt cannot be empty");
-                else
-                {
-                    RuntimeHost.RequestHaltNow();
-                    GenerateScriptQueue.Writer.TryWrite(argument);
-                    AppendStatus($"[{Label}] Script generation requested");
-                    (success, responseMessage) = (true, "generation queued");
-                }
-
+                (success, responseMessage) = (false, "generate_script command is no longer supported; use /script/generate");
                 break;
-            }
             case PrayerRuntimeCommandNames.ExecuteScript:
             {
                 var script = Agent.CurrentControlInput;

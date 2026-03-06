@@ -18,6 +18,7 @@ public sealed record RuntimeCommandRequest(string Command, string? Argument = nu
 public sealed record SetScriptRequest(string Script);
 
 public sealed record GenerateScriptRequest(string Prompt);
+public sealed record GenerateScriptResponse(string Script);
 
 public sealed record LoopUpdateRequest(bool Enabled);
 

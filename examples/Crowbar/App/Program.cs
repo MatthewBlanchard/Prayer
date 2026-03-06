@@ -13,8 +13,9 @@ class Program
         AppPaths.EnsureDirectories();
         AppPaths.ResetDebugLogsOnStartup();
 
-        IAppUi ui = new HtmxBotWindow(
+        var htmxUi = new HtmxBotWindow(
             Environment.GetEnvironmentVariable("UI_PREFIX") ?? "http://localhost:5057/");
+        IAppUi ui = htmxUi;
         var prayerBaseUrl = Environment.GetEnvironmentVariable("PRAYER_BASE_URL");
         if (string.IsNullOrWhiteSpace(prayerBaseUrl))
             prayerBaseUrl = "http://localhost:5000/";
@@ -119,6 +120,34 @@ class Program
                 return session.LoopEnabled;
             }
         }
+
+        htmxUi.SetGenerateScriptHandler(async (botId, prompt) =>
+        {
+            if (string.IsNullOrWhiteSpace(prompt))
+                throw new InvalidOperationException("Prompt is required.");
+
+            BotSession? target;
+            string? prayerSessionId = null;
+            lock (botLock)
+            {
+                target = botSessions.TryGetValue(botId, out var byId)
+                    ? byId
+                    : null;
+                if (target != null)
+                    prayerSessionId = target.PrayerSessionId;
+            }
+
+            if (target == null)
+                throw new InvalidOperationException("Selected bot no longer exists.");
+
+            if (string.IsNullOrWhiteSpace(prayerSessionId))
+                throw new InvalidOperationException($"[{target.Label}] Prayer session is not available.");
+
+            channels.Status.Writer.TryWrite($"Generating script draft for {target.Label}...");
+            var generatedScript = await prayerApi.GenerateScriptAsync(prayerSessionId, prompt);
+            channels.Status.Writer.TryWrite($"Generated script draft for {target.Label}. Review and set script to apply.");
+            return generatedScript;
+        });
 
         var snapshotPublisher = new UiSnapshotPublisher(
             channels.UiSnapshots.Writer,

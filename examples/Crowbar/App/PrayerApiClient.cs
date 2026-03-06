@@ -73,6 +73,20 @@ public sealed class PrayerApiClient
         await EnsureSuccessWithDetailsAsync(response);
     }
 
+    public async Task<string> GenerateScriptAsync(string sessionId, string prompt)
+    {
+        var response = await _http.PostAsJsonAsync(
+            $"api/runtime/sessions/{sessionId}/script/generate",
+            new Contracts.GenerateScriptRequest(prompt));
+        await EnsureSuccessWithDetailsAsync(response);
+
+        var payload = await response.Content.ReadFromJsonAsync<Contracts.GenerateScriptResponse>();
+        if (payload == null || string.IsNullOrWhiteSpace(payload.Script))
+            throw new InvalidOperationException("Prayer did not return generated script text.");
+
+        return payload.Script;
+    }
+
     public async Task SetLoopEnabledAsync(string sessionId, bool enabled)
     {
         var response = await _http.PutAsJsonAsync(

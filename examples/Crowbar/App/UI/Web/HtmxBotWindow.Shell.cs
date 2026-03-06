@@ -108,46 +108,48 @@ public sealed partial class HtmxBotWindow
 
     private void AppendStateShellHtml(StringBuilder sb)
     {
-        sb.AppendLine("<div class='state-column'>");
-        sb.AppendLine("<div id='state-strip-inline' hx-get='partial/state-strip' hx-trigger='load, every 1000ms' hx-swap='innerHTML'></div>");
-        sb.AppendLine("<div id='state-panel' class='card'>");
-        sb.AppendLine("<div class='tabs' role='tablist' aria-label='State Sections'>");
+        sb.AppendLine(
+            $$"""
+            <div class='state-column'>
+              <div id='state-strip-inline' hx-get='partial/state-strip' hx-trigger='load, every 1000ms' hx-swap='innerHTML'></div>
+              <div id='state-panel' class='card'>
+                <div class='tabs' role='tablist' aria-label='State Sections'>
+            {{BuildStateTabsHtml()}}
+                </div>
+                <div class='tab-content'>
+            {{BuildStatePanesHtml()}}
+                </div>
+              </div>
+            </div>
+            """);
+    }
 
-        foreach (var tab in StateTabs)
-        {
-            string tabId = $"tab-{tab.Id}";
-            string paneId = $"state-pane-{tab.Id}";
-            string selected = tab.ActiveOnLoad ? "true" : "false";
-            string tabindex = tab.ActiveOnLoad ? "0" : "-1";
-            sb.Append("<button id='").Append(tabId)
-                .Append("' type='button' class='tab-btn' role='tab' data-tab='").Append(tab.Id)
-                .Append("' aria-selected='").Append(selected)
-                .Append("' aria-controls='").Append(paneId)
-                .Append("' tabindex='").Append(tabindex)
-                .Append("'>").Append(E(tab.Label)).AppendLine("</button>");
-        }
+    private static string BuildStateTabsHtml()
+    {
+        return string.Join(
+            Environment.NewLine,
+            StateTabs.Select(tab =>
+            {
+                string tabId = $"tab-{tab.Id}";
+                string paneId = $"state-pane-{tab.Id}";
+                string selected = tab.ActiveOnLoad ? "true" : "false";
+                string tabindex = tab.ActiveOnLoad ? "0" : "-1";
+                return $"<button id='{tabId}' type='button' class='tab-btn' role='tab' data-tab='{tab.Id}' aria-selected='{selected}' aria-controls='{paneId}' tabindex='{tabindex}'>{E(tab.Label)}</button>";
+            }));
+    }
 
-        sb.AppendLine("</div>");
-        sb.AppendLine("<div class='tab-content'>");
-        foreach (var tab in StateTabs)
-        {
-            string paneId = $"state-pane-{tab.Id}";
-            string tabId = $"tab-{tab.Id}";
-            string activeClass = tab.ActiveOnLoad ? " active" : "";
-            string hidden = tab.ActiveOnLoad ? "" : " hidden";
-            sb.Append("<div id='").Append(paneId)
-                .Append("' class='tab-pane").Append(activeClass)
-                .Append("' role='tabpanel' aria-labelledby='").Append(tabId).Append("'")
-                .Append(hidden)
-                .Append(" hx-get='partial/state?tab=").Append(tab.Id)
-                .Append("' hx-trigger='").Append(tab.Trigger)
-                .Append("' hx-swap='innerHTML'></div>")
-                .AppendLine();
-        }
-
-        sb.AppendLine("</div>");
-        sb.AppendLine("</div>");
-        sb.AppendLine("</div>");
+    private static string BuildStatePanesHtml()
+    {
+        return string.Join(
+            Environment.NewLine,
+            StateTabs.Select(tab =>
+            {
+                string paneId = $"state-pane-{tab.Id}";
+                string tabId = $"tab-{tab.Id}";
+                string activeClass = tab.ActiveOnLoad ? " active" : "";
+                string hidden = tab.ActiveOnLoad ? "" : " hidden";
+                return $"<div id='{paneId}' class='tab-pane{activeClass}' role='tabpanel' aria-labelledby='{tabId}'{hidden} hx-get='partial/state?tab={tab.Id}' hx-trigger='{tab.Trigger}' hx-swap='innerHTML'></div>";
+            }));
     }
 
     private void AppendScriptShellHtml(StringBuilder sb, string currentScript)

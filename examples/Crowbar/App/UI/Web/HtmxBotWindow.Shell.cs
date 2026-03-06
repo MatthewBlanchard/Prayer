@@ -20,6 +20,7 @@ public sealed partial class HtmxBotWindow
     {
         new StateTabDefinition("space", "Space", "load, every 1000ms", ActiveOnLoad: true),
         new StateTabDefinition("missions", "Missions", "load, every 1000ms"),
+        new StateTabDefinition("map", "Map", "load, every 1000ms"),
         new StateTabDefinition("trade", "Trade", "load, every 1000ms"),
         new StateTabDefinition("shipyard", "Shipyard", "load, every 1000ms"),
     };

@@ -22,10 +22,68 @@ public static class AppUiStateBuilder
 
     private static SpaceUiModel BuildSpaceModel(GameState state)
     {
+        var currentSystem = (state.System ?? string.Empty).Trim();
+        var currentPoiId = (state.CurrentPOI?.Id ?? string.Empty).Trim();
+
         var pois = (state.POIs ?? Array.Empty<POIInfo>())
             .Where(p => p != null && !string.IsNullOrWhiteSpace(p.Id))
             .OrderBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(p => new SpaceUiPoi(p.Id, $"{p.Id} ({p.Type})"))
+            .Select(p => new SpaceUiPoi(
+                p.Id,
+                $"{p.Id} ({p.Type})",
+                p.Type ?? string.Empty,
+                p.X,
+                p.Y))
+            .ToArray();
+
+        var mapBySystemId = (state.Galaxy?.Map?.Systems ?? new List<GalaxySystemInfo>())
+            .Where(s => s != null && !string.IsNullOrWhiteSpace(s.Id))
+            .GroupBy(s => s.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        var localSystemIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(currentSystem))
+            localSystemIds.Add(currentSystem);
+
+        foreach (var connected in state.Systems ?? Array.Empty<string>())
+        {
+            if (string.IsNullOrWhiteSpace(connected))
+                continue;
+            localSystemIds.Add(connected.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(currentSystem) &&
+            mapBySystemId.TryGetValue(currentSystem, out var currentSystemEntry))
+        {
+            foreach (var neighbor in currentSystemEntry.Connections ?? new List<string>())
+            {
+                if (string.IsNullOrWhiteSpace(neighbor))
+                    continue;
+                localSystemIds.Add(neighbor.Trim());
+            }
+        }
+
+        var localSystems = localSystemIds
+            .Select(id =>
+            {
+                mapBySystemId.TryGetValue(id, out var systemEntry);
+                var connections = (systemEntry?.Connections ?? new List<string>())
+                    .Where(c => !string.IsNullOrWhiteSpace(c))
+                    .Select(c => c.Trim())
+                    .Where(localSystemIds.Contains)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(c => c, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+
+                return new SpaceUiSystemNode(
+                    id,
+                    systemEntry?.X,
+                    systemEntry?.Y,
+                    string.Equals(id, currentSystem, StringComparison.OrdinalIgnoreCase),
+                    connections);
+            })
+            .OrderByDescending(s => s.IsCurrent)
+            .ThenBy(s => s.Id, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         var cargoItems = (state.Ship.Cargo ?? new Dictionary<string, ItemStack>())
@@ -42,8 +100,8 @@ public static class AppUiStateBuilder
             .ToArray();
 
         return new SpaceUiModel(
-            state.System ?? string.Empty,
-            state.CurrentPOI?.Id ?? "(unknown)",
+            currentSystem,
+            string.IsNullOrWhiteSpace(currentPoiId) ? "(unknown)" : currentPoiId,
             state.Docked ? "True" : "False",
             state.Credits,
             $"{state.Ship.Fuel}/{state.Ship.MaxFuel}",
@@ -51,7 +109,8 @@ public static class AppUiStateBuilder
             $"{state.Ship.Shield}/{state.Ship.MaxShield}",
             $"{state.Ship.CargoUsed}/{state.Ship.CargoCapacity}",
             pois,
-            cargoItems);
+            cargoItems,
+            localSystems);
     }
 
     private static TradeUiModel BuildTradeModel(GameState state)

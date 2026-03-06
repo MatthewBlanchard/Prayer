@@ -578,6 +578,9 @@ public sealed partial class HtmxBotWindow : IAppUi
             case "missions":
                 sb.Append(MissionsTabRenderer.Build(snapshot.ActiveMissionPrompts, snapshot.AvailableMissionPrompts));
                 break;
+            case "map":
+                sb.Append(MapTabRenderer.Build(snapshot.SpaceModel));
+                break;
             default:
                 sb.Append(SpaceTabRenderer.Build(snapshot.SpaceModel, snapshot.SpaceConnectedSystems));
                 break;

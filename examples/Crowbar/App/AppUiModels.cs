@@ -2,7 +2,17 @@ using System.Collections.Generic;
 
 public sealed record SpaceUiPoi(
     string Target,
-    string Label);
+    string Label,
+    string Type,
+    double? X,
+    double? Y);
+
+public sealed record SpaceUiSystemNode(
+    string Id,
+    double? X,
+    double? Y,
+    bool IsCurrent,
+    IReadOnlyList<string> Connections);
 
 public sealed record SpaceUiCargoItem(
     string ItemId,
@@ -19,7 +29,8 @@ public sealed record SpaceUiModel(
     string Shield,
     string Cargo,
     IReadOnlyList<SpaceUiPoi> Pois,
-    IReadOnlyList<SpaceUiCargoItem> CargoItems);
+    IReadOnlyList<SpaceUiCargoItem> CargoItems,
+    IReadOnlyList<SpaceUiSystemNode> LocalSystems);
 
 public sealed record TradeUiItem(
     string ItemId,

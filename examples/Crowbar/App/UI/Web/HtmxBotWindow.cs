@@ -12,6 +12,8 @@ public sealed class HtmxBotWindow : IAppUi
 {
     private static readonly Lazy<string> UiCssAsset = new(() => ReadUiAsset("ui.css"));
     private static readonly Lazy<string> UiJsAsset = new(() => ReadUiAsset("ui.js"));
+    private static readonly string UiHttpErrorLogFile = Path.Combine(AppPaths.LogDir, "ui_http_errors.log");
+    private static readonly string UiHttpTraceLogFile = Path.Combine(AppPaths.LogDir, "ui_http_trace.log");
 
     private readonly object _lock = new();
     private readonly string _prefix;
@@ -188,16 +190,43 @@ public sealed class HtmxBotWindow : IAppUi
 
     private void HandleRequestSafely(HttpListenerContext ctx)
     {
+        var started = DateTime.UtcNow;
+        var requestPath = ctx.Request?.Url?.AbsolutePath ?? "/";
         try
         {
             HandleRequest(ctx);
         }
         catch (Exception ex)
         {
+            try
+            {
+                LogUiHttpError("request_unhandled_exception", ex, ctx.Request);
+            }
+            catch
+            {
+                // Never throw from error logging.
+            }
             WriteText(ctx.Response, $"Internal server error: {ex.Message}", "text/plain", 500);
         }
         finally
         {
+            try
+            {
+                if (requestPath.EndsWith("/api/prompt", StringComparison.OrdinalIgnoreCase) ||
+                    requestPath.EndsWith("/api/prompt-active-missions", StringComparison.OrdinalIgnoreCase))
+                {
+                    LogUiHttpTrace(
+                        "request_complete",
+                        ctx.Request,
+                        ctx.Response?.StatusCode ?? 0,
+                        (DateTime.UtcNow - started).TotalMilliseconds);
+                }
+            }
+            catch
+            {
+                // Never throw from trace logging.
+            }
+
             try
             {
                 ctx.Response.OutputStream.Close();
@@ -282,6 +311,12 @@ public sealed class HtmxBotWindow : IAppUi
             var prompt = GetValue(form, "prompt");
             string? activeBotId;
             lock (_lock) activeBotId = _snapshot.ActiveBotId;
+            LogUiHttpTrace(
+                "prompt_request_received",
+                req,
+                statusCode: null,
+                elapsedMs: null,
+                details: $"prompt_len={(prompt ?? string.Empty).Length} active_bot={(string.IsNullOrWhiteSpace(activeBotId) ? "none" : "present")}");
             if (string.IsNullOrWhiteSpace(prompt))
             {
                 WriteText(ctx.Response, "Prompt is required.", "text/plain; charset=utf-8", 400);
@@ -303,10 +338,17 @@ public sealed class HtmxBotWindow : IAppUi
             try
             {
                 var generatedScript = _generateScriptHandler(activeBotId!, prompt).GetAwaiter().GetResult();
+                LogUiHttpTrace(
+                    "prompt_request_generated",
+                    req,
+                    statusCode: null,
+                    elapsedMs: null,
+                    details: $"script_len={(generatedScript ?? string.Empty).Length}");
                 WriteText(ctx.Response, generatedScript, "text/plain; charset=utf-8");
             }
             catch (Exception ex)
             {
+                LogUiHttpError("prompt_request_failed", ex, req);
                 WriteText(ctx.Response, ex.Message, "text/plain; charset=utf-8", 400);
             }
             return;
@@ -320,6 +362,12 @@ public sealed class HtmxBotWindow : IAppUi
             var prompt = BuildActiveMissionObjectivesPrompt(
                 snapshot.ActiveMissionPrompts,
                 snapshot.CantinaStateMarkdown);
+            LogUiHttpTrace(
+                "prompt_active_missions_request_received",
+                req,
+                statusCode: null,
+                elapsedMs: null,
+                details: $"prompt_len={(prompt ?? string.Empty).Length} active_bot={(string.IsNullOrWhiteSpace(snapshot.ActiveBotId) ? "none" : "present")}");
 
             if (string.IsNullOrWhiteSpace(snapshot.ActiveBotId))
             {
@@ -336,10 +384,17 @@ public sealed class HtmxBotWindow : IAppUi
             try
             {
                 var generatedScript = _generateScriptHandler(snapshot.ActiveBotId!, prompt).GetAwaiter().GetResult();
+                LogUiHttpTrace(
+                    "prompt_active_missions_generated",
+                    req,
+                    statusCode: null,
+                    elapsedMs: null,
+                    details: $"script_len={(generatedScript ?? string.Empty).Length}");
                 WriteText(ctx.Response, generatedScript, "text/plain; charset=utf-8");
             }
             catch (Exception ex)
             {
+                LogUiHttpError("prompt_active_missions_failed", ex, req);
                 WriteText(ctx.Response, ex.Message, "text/plain; charset=utf-8", 400);
             }
             return;
@@ -568,8 +623,8 @@ public sealed class HtmxBotWindow : IAppUi
         sb.AppendLine("<button type='submit'>Set Script</button></form>");
         sb.AppendLine(
             "<div class='row' style='margin-top:8px;'><form hx-post='api/execute' hx-swap='none'><button id='execute-btn' class='execute-btn' type='submit' title='Execute'>▶️</button></form><form hx-post='api/halt' hx-swap='none'><button type='submit' title='Halt'>⏹️</button></form><form hx-post='api/save-example' hx-swap='none'><button type='submit' title='Thumbs Up'>👍</button></form></div>");
-        sb.AppendLine("<h4>Prompt</h4><form hx-post='api/prompt' hx-swap='none' class='list'><textarea name='prompt' rows='4' placeholder='prompt for script generation'></textarea><button type='submit'>Generate Script</button></form>");
-        sb.AppendLine("<form hx-post='api/prompt-active-missions' hx-swap='none'><button type='submit'>Generate From Active Mission Objectives</button></form>");
+        sb.AppendLine("<h4>Prompt</h4><form id='prompt-form' hx-post='api/prompt' hx-swap='none' hx-on::after-request='window.handlePromptAfterRequest(event)' class='list'><textarea name='prompt' rows='4' placeholder='prompt for script generation'></textarea><button type='submit'>Generate Script</button></form>");
+        sb.AppendLine("<form id='prompt-missions-form' hx-post='api/prompt-active-missions' hx-swap='none' hx-on::after-request='window.handlePromptAfterRequest(event)'><button type='submit'>Generate From Active Mission Objectives</button></form>");
         sb.AppendLine("<div id='right-panel' hx-get='partial/right' hx-trigger='load, every 1000ms' hx-swap='innerHTML'></div></div>");
         sb.AppendLine("<script>");
         sb.AppendLine(UiJsAsset.Value);
@@ -1053,7 +1108,43 @@ public sealed class HtmxBotWindow : IAppUi
         => form.TryGetValue(key, out var value) ? value : null;
 
     private static string UrlDecode(string value)
-        => Uri.UnescapeDataString((value ?? "").Replace("+", " "));
+    {
+        var normalized = (value ?? "").Replace("+", " ");
+        try
+        {
+            return WebUtility.UrlDecode(normalized) ?? "";
+        }
+        catch
+        {
+            return normalized;
+        }
+    }
+
+    private static void LogUiHttpError(string context, Exception ex, HttpListenerRequest? request)
+    {
+        var method = request?.HttpMethod ?? "(unknown)";
+        var path = request?.Url?.AbsolutePath ?? "(unknown)";
+        var rawUrl = request?.RawUrl ?? "(unknown)";
+        var line = $"[{DateTime.UtcNow:O}] {context} | method={method} | path={path} | raw={rawUrl}{Environment.NewLine}{ex}{Environment.NewLine}{Environment.NewLine}";
+        File.AppendAllText(UiHttpErrorLogFile, line);
+    }
+
+    private static void LogUiHttpTrace(
+        string context,
+        HttpListenerRequest? request,
+        int? statusCode,
+        double? elapsedMs,
+        string? details = null)
+    {
+        var method = request?.HttpMethod ?? "(unknown)";
+        var path = request?.Url?.AbsolutePath ?? "(unknown)";
+        var rawUrl = request?.RawUrl ?? "(unknown)";
+        var status = statusCode.HasValue ? statusCode.Value.ToString() : "-";
+        var elapsed = elapsedMs.HasValue ? elapsedMs.Value.ToString("F1") : "-";
+        var suffix = string.IsNullOrWhiteSpace(details) ? "" : $" | {details}";
+        var line = $"[{DateTime.UtcNow:O}] {context} | method={method} | path={path} | raw={rawUrl} | status={status} | elapsed_ms={elapsed}{suffix}{Environment.NewLine}";
+        File.AppendAllText(UiHttpTraceLogFile, line);
+    }
 
     private static string E(string value) => WebUtility.HtmlEncode(value ?? "");
 

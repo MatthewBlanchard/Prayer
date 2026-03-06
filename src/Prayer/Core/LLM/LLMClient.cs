@@ -112,13 +112,14 @@ public class OpenAIClient : ILLMClient
         try
         {
             var messages = BuildMessages(prompt);
+            var resolvedTemperature = ResolveTemperatureForModel(temperature);
 
             var payload = new
             {
                 model = _model,
                 messages,
                 max_completion_tokens = maxTokens,
-                temperature,
+                temperature = resolvedTemperature,
                 top_p = topP
             };
 
@@ -167,6 +168,15 @@ public class OpenAIClient : ILLMClient
         sb.AppendLine();
 
         await File.AppendAllTextAsync(_logFile, sb.ToString());
+    }
+
+    private float ResolveTemperatureForModel(float requestedTemperature)
+    {
+        // GPT-5 chat variants currently reject non-default temperature values.
+        if (_model.StartsWith("gpt-5", StringComparison.OrdinalIgnoreCase))
+            return 1f;
+
+        return requestedTemperature;
     }
 
     private async Task LogErrorAsync(string type, string content)

@@ -81,6 +81,28 @@
     window._liveScriptRunLineNumber = (typeof lineNumber === 'number') ? lineNumber : null;
   };
 
+  window.handlePromptAfterRequest = function (e) {
+    var detail = (e || {}).detail || {};
+    var xhr = detail.xhr || null;
+    if (!xhr) return;
+
+    var responseText = xhr.responseText || '';
+    if (xhr.status < 200 || xhr.status >= 300) {
+      if (responseText.length > 0) window.alert(responseText);
+      return;
+    }
+
+    if (responseText.length === 0) return;
+    if (window._scriptEditor) {
+      window._scriptEditor.setValue(responseText);
+      window._scriptEditor.focus();
+      return;
+    }
+
+    var scriptInput = document.getElementById('script-input');
+    if (scriptInput) scriptInput.value = responseText;
+  };
+
   window.setExecuteButtonRunning = function (isRunning) {
     var executeBtn =
       document.getElementById('execute-btn') ||
@@ -505,24 +527,6 @@
   document.body.addEventListener('htmx:afterRequest', function (e) {
     var detail = (e || {}).detail || {};
     var path = (detail.pathInfo || {}).requestPath || '';
-    if (path.endsWith('/api/prompt') ||
-      path.endsWith('/api/prompt-active-missions') ||
-      path === 'api/prompt' ||
-      path === 'api/prompt-active-missions') {
-      if (!detail.failed && detail.xhr && detail.xhr.status >= 200 && detail.xhr.status < 300) {
-        var generatedScript = detail.xhr.responseText || '';
-        if (generatedScript.length > 0) {
-          if (window._scriptEditor) {
-            window._scriptEditor.setValue(generatedScript);
-            window._scriptEditor.focus();
-          } else {
-            var scriptInput = document.getElementById('script-input');
-            if (scriptInput) scriptInput.value = generatedScript;
-          }
-        }
-      }
-    }
-
     if (path.endsWith('/api/add-bot') || path.endsWith('/api/llm-select') || path === 'api/add-bot' || path === 'api/llm-select') {
       window.closeAllSidebarLayers();
     }

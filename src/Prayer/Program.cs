@@ -255,11 +255,19 @@ app.MapPost("/api/runtime/sessions/{id}/script/generate", async (string id, Cont
     if (!store.TryGet(id, out var session))
         return Results.NotFound();
 
-    var generatedScript = await session.GenerateScriptAsync(request.Prompt, cancellationToken);
-    if (string.IsNullOrWhiteSpace(generatedScript))
-        return Results.BadRequest("prompt did not produce a script");
+    try
+    {
+        var generatedScript = await session.GenerateScriptAsync(request.Prompt, cancellationToken);
+        if (string.IsNullOrWhiteSpace(generatedScript))
+            return Results.BadRequest("prompt did not produce a script");
 
-    return Results.Ok(new Contracts.GenerateScriptResponse(generatedScript));
+        return Results.Ok(new Contracts.GenerateScriptResponse(generatedScript));
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Script generation failed for session {SessionId}", id);
+        return Results.BadRequest($"script generation failed: {ex.Message}");
+    }
 });
 
 app.MapPost("/api/runtime/sessions/{id}/script/execute", (string id, RuntimeSessionStore store) =>

@@ -13,6 +13,7 @@ public interface IAgentLogger
         string? details = null);
 
     Task LogPlannerPromptAsync(string stage, string prompt);
+    Task LogPromptGenerationPairAsync(int attempt, int maxAttempts, string prompt, string generatedScript, bool parseSucceeded);
 
     Task LogScriptWriterContextTokensAsync(
         int attempt,
@@ -73,6 +74,33 @@ public sealed class FileAgentLogger : IAgentLogger
         catch
         {
             // Prompt logging should never block gameplay.
+        }
+    }
+
+    public async Task LogPromptGenerationPairAsync(
+        int attempt,
+        int maxAttempts,
+        string prompt,
+        string generatedScript,
+        bool parseSucceeded)
+    {
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"[{DateTime.UtcNow:O}] === prompt_generation_pair ===");
+            sb.AppendLine($"attempt={attempt}/{maxAttempts}");
+            sb.AppendLine($"parse_succeeded={parseSucceeded}");
+            sb.AppendLine("PROMPT:");
+            sb.AppendLine(prompt ?? string.Empty);
+            sb.AppendLine("GENERATED_SCRIPT:");
+            sb.AppendLine(generatedScript ?? string.Empty);
+            sb.AppendLine();
+
+            await File.AppendAllTextAsync(AppPaths.PromptGenerationPairsLogFile, sb.ToString());
+        }
+        catch
+        {
+            // Pair logging should never block script generation.
         }
     }
 

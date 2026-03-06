@@ -80,11 +80,23 @@ public sealed class ScriptGenerationService
                 var tree = DslParser.ParseTree(script);
                 _ = DslScriptTransformer.Translate(tree, state);
                 var normalizedScript = DslScriptTransformer.RenderScript(tree).TrimEnd();
+                await _logger.LogPromptGenerationPairAsync(
+                    attempt,
+                    attempts,
+                    prompt,
+                    normalizedScript,
+                    parseSucceeded: true);
                 _logger.LogScriptNormalization($"generation_attempt_{attempt}", script, normalizedScript);
                 return new ScriptGenerationResult(generationInput, normalizedScript);
             }
             catch (FormatException ex)
             {
+                await _logger.LogPromptGenerationPairAsync(
+                    attempt,
+                    attempts,
+                    prompt,
+                    script,
+                    parseSucceeded: false);
                 previousScript = script;
                 previousError = ex.Message;
                 _setStatus?.Invoke($"Script generation retry {attempt}/{attempts}");

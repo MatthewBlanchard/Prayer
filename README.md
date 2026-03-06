@@ -1,6 +1,6 @@
 ![Prayer](prayer.png)
 
-WARNING: Slop ahead! Most of this code was written by Codex and hasn't been well tested! This is a WIP preview!
+WARNING: Slop ahead! Most of this code and this README was written by Codex and hasn't been well tested! This is a WIP preview!
 
 # Prayer
 

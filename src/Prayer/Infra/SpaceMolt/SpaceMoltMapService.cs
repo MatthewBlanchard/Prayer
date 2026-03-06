@@ -40,18 +40,23 @@ internal sealed class SpaceMoltMapService
         {
             if (!forceRefresh &&
                 _cachedMap != null &&
-                (_cachedMap.Systems.Count > 0 || _cachedMap.KnownPois.Count > 0))
+                HasRouteTopology(_cachedMap))
                 return _cachedMap;
 
             if (!forceRefresh)
             {
                 var hydrated = GalaxyMapSnapshotFile.LoadWithKnownPois(_mapFile, _knownPoisFile);
-                if (hydrated.Systems.Count > 0 || hydrated.KnownPois.Count > 0)
+                if (HasRouteTopology(hydrated))
                 {
                     _cachedMap = hydrated;
                     GalaxyStateHub.MergeMap(_cachedMap);
                     return _cachedMap;
                 }
+
+                // Keep best-effort POI history available while we fetch a full map.
+                _cachedMap = hydrated;
+                if (_cachedMap.Systems.Count > 0 || _cachedMap.KnownPois.Count > 0)
+                    GalaxyStateHub.MergeMap(_cachedMap);
             }
 
             JsonElement mapResult = await _executeAsync("get_map", null);
@@ -123,5 +128,15 @@ internal sealed class SpaceMoltMapService
         {
             _mapCacheLock.Release();
         }
+    }
+
+    private static bool HasRouteTopology(GalaxyMapSnapshot? map)
+    {
+        if (map == null || map.Systems == null || map.Systems.Count == 0)
+            return false;
+
+        return map.Systems.Any(s => s != null &&
+                                    s.Connections != null &&
+                                    s.Connections.Count > 0);
     }
 }

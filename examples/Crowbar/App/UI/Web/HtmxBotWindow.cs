@@ -857,18 +857,15 @@ public sealed class HtmxBotWindow : IAppUi
             if (File.Exists(AppPaths.GalaxyMapFile))
             {
                 using var mapDoc = JsonDocument.Parse(File.ReadAllText(AppPaths.GalaxyMapFile));
-                if (mapDoc.RootElement.ValueKind == JsonValueKind.Object &&
-                    mapDoc.RootElement.TryGetProperty("Systems", out var systemsElement) &&
-                    systemsElement.ValueKind == JsonValueKind.Array)
+                if (TryGetArrayPropertyCaseInsensitive(mapDoc.RootElement, "systems", out var systemsElement))
                 {
                     foreach (var system in systemsElement.EnumerateArray())
                     {
-                        if (TryGetStringPropertyCaseInsensitive(system, "id", out var systemId))
+                        if (TryGetStringPropertyCaseInsensitive(system, "id", out var systemId) ||
+                            TryGetStringPropertyCaseInsensitive(system, "system_id", out systemId))
                             systems.Add(systemId.Trim());
 
-                        if (system.ValueKind == JsonValueKind.Object &&
-                            system.TryGetProperty("Pois", out var poisElement) &&
-                            poisElement.ValueKind == JsonValueKind.Array)
+                        if (TryGetArrayPropertyCaseInsensitive(system, "pois", out var poisElement))
                         {
                             foreach (var poi in poisElement.EnumerateArray())
                             {
@@ -892,9 +889,17 @@ public sealed class HtmxBotWindow : IAppUi
             if (File.Exists(AppPaths.GalaxyKnownPoisFile))
             {
                 using var knownDoc = JsonDocument.Parse(File.ReadAllText(AppPaths.GalaxyKnownPoisFile));
+                JsonElement knownPoisArray = default;
+                bool hasKnownPoisArray =
+                    knownDoc.RootElement.ValueKind == JsonValueKind.Array ||
+                    TryGetArrayPropertyCaseInsensitive(knownDoc.RootElement, "pois", out knownPoisArray);
+
                 if (knownDoc.RootElement.ValueKind == JsonValueKind.Array)
+                    knownPoisArray = knownDoc.RootElement;
+
+                if (hasKnownPoisArray && knownPoisArray.ValueKind == JsonValueKind.Array)
                 {
-                    foreach (var poi in knownDoc.RootElement.EnumerateArray())
+                    foreach (var poi in knownPoisArray.EnumerateArray())
                     {
                         if (TryGetStringPropertyCaseInsensitive(poi, "id", out var poiId))
                             pois.Add(poiId.Trim());
@@ -932,6 +937,30 @@ public sealed class HtmxBotWindow : IAppUi
                 return false;
 
             value = prop.Value.GetString() ?? string.Empty;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetArrayPropertyCaseInsensitive(
+        JsonElement element,
+        string propertyName,
+        out JsonElement value)
+    {
+        value = default;
+        if (element.ValueKind != JsonValueKind.Object)
+            return false;
+
+        foreach (var prop in element.EnumerateObject())
+        {
+            if (!prop.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (prop.Value.ValueKind != JsonValueKind.Array)
+                return false;
+
+            value = prop.Value;
             return true;
         }
 

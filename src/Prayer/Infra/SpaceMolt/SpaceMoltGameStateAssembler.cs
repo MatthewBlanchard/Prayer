@@ -16,6 +16,17 @@ internal sealed class SpaceMoltGameStateAssembler
 
     public async Task<GameState> BuildAsync(JsonElement status)
     {
+        try
+        {
+            // Hydrate map cache/state during ordinary state refreshes so script validation
+            // can resolve global targets before any `go` step executes.
+            await _owner.GetMapSnapshotAsync(forceRefresh: false);
+        }
+        catch
+        {
+            // Best-effort: map hydration failures should not block state assembly.
+        }
+
         var player = SpaceMoltApiTransport.RequireObjectProperty(status, "player", "get_status");
         var ship = SpaceMoltApiTransport.RequireObjectProperty(status, "ship", "get_status");
 

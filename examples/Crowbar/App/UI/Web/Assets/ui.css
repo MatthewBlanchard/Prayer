@@ -49,6 +49,11 @@ details.catalog-group > summary { cursor:pointer; color:#8eb8ff; }
 .cm-s-material-darker .cm-atom { color:#ffd166; font-weight:600; }
 .cm-s-material-darker .cm-variable-2 { color:#79c0ff; font-weight:600; }
 .cm-s-material-darker .cm-string-2 { color:#ff9e64; font-weight:600; }
+.cm-s-material-darker .cm-def { color:#7ee787; font-weight:700; }
+.cm-s-material-darker .cm-operator { color:#ff7b72; font-weight:600; }
+.cm-s-material-darker .cm-number { color:#a5d6ff; font-weight:600; }
+.cm-s-material-darker .cm-builtin { color:#f2cc8f; font-weight:600; }
+.cm-s-material-darker .cm-bracket { color:#b9c0cc; }
 .script-code { white-space:pre-wrap; word-break:break-word; }
 #state-panel { overflow:hidden; }
 #right-panel { overflow-y:auto; }

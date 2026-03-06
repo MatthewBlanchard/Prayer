@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 
 internal static class DslFuzzyMatcher
 {
@@ -92,15 +94,33 @@ internal static class DslFuzzyMatcher
         if (candidates.Count == 0)
             return null;
 
-        if (candidates.Any(c => string.Equals(c.Canonical, trimmed, StringComparison.Ordinal)))
+        if (candidates.Any(c => c.Aliases.Any(alias => string.Equals(alias, normalized, StringComparison.Ordinal))))
             return null;
 
         if (TryFindBestMatch(normalized, candidates, spec, out var best) &&
             best.Score >= MinDidYouMeanScore)
         {
+            LogGoValidationFailureDiagnostics(
+                action,
+                argIndex,
+                trimmed,
+                normalized,
+                state,
+                candidates,
+                best.Canonical,
+                best.Score);
             return $"Command '{action}' argument {argIndex} value '{trimmed}' is not recognized. Did you mean '{best.Canonical}'?";
         }
 
+        LogGoValidationFailureDiagnostics(
+            action,
+            argIndex,
+            trimmed,
+            normalized,
+            state,
+            candidates,
+            bestCanonical: null,
+            bestScore: null);
         return $"Command '{action}' argument {argIndex} value '{trimmed}' is not recognized.";
     }
 
@@ -169,27 +189,37 @@ internal static class DslFuzzyMatcher
             foreach (var poi in state.POIs)
                 AddAlias(poiMap, poi.Id, poi.Id);
 
-            var mapCache = state.Galaxy?.Map?.Systems?.Count > 0
-                ? state.Galaxy.Map
-                : LoadMapCache();
-            foreach (var system in mapCache.Systems)
-            {
-                AddAlias(systemMap, system.Id, system.Id);
-                foreach (var poi in system.Pois)
-                    AddAlias(poiMap, poi.Id, poi.Id);
-            }
-
-            foreach (var poi in mapCache.KnownPois)
-            {
-                AddAlias(poiMap, poi.Id, poi.Id);
-                AddAlias(poiMap, poi.Id, poi.Name);
-            }
+            // Merge both in-memory and persisted map snapshots; runtime map can be partial.
+            AddMapCandidates(state.Galaxy?.Map, systemMap, poiMap);
+            AddMapCandidates(LoadMapCache(), systemMap, poiMap);
         }
 
         var candidates = new List<Candidate>();
         candidates.AddRange(ToCandidates(systemMap, "system"));
         candidates.AddRange(ToCandidates(poiMap, "poi"));
         return candidates;
+    }
+
+    private static void AddMapCandidates(
+        GalaxyMapSnapshot? map,
+        Dictionary<string, HashSet<string>> systemMap,
+        Dictionary<string, HashSet<string>> poiMap)
+    {
+        if (map == null)
+            return;
+
+        foreach (var system in map.Systems)
+        {
+            AddAlias(systemMap, system.Id, system.Id);
+            foreach (var poi in system.Pois)
+                AddAlias(poiMap, poi.Id, poi.Id);
+        }
+
+        foreach (var poi in map.KnownPois)
+        {
+            AddAlias(poiMap, poi.Id, poi.Id);
+            AddAlias(poiMap, poi.Id, poi.Name);
+        }
     }
 
     private static IReadOnlyList<Candidate> ToCandidates(
@@ -316,5 +346,90 @@ internal static class DslFuzzyMatcher
         return GalaxyMapSnapshotFile.LoadWithKnownPois(
             AppPaths.GalaxyMapFile,
             AppPaths.GalaxyKnownPoisFile);
+    }
+
+    private static void LogGoValidationFailureDiagnostics(
+        string action,
+        int argIndex,
+        string rawArg,
+        string normalizedArg,
+        GameState state,
+        IReadOnlyList<Candidate> candidates,
+        string? bestCanonical,
+        double? bestScore)
+    {
+        if (!string.Equals(action, "go", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        try
+        {
+            var stateMap = state.Galaxy?.Map;
+            var diskMap = LoadMapCache();
+
+            bool inStateCurrent = string.Equals(Normalize(state.System), normalizedArg, StringComparison.Ordinal);
+            bool inStateNeighbors = state.Systems.Any(s => string.Equals(Normalize(s), normalizedArg, StringComparison.Ordinal));
+            bool inStateLivePois = state.POIs.Any(p => string.Equals(Normalize(p.Id), normalizedArg, StringComparison.Ordinal));
+            bool inStateMapSystems = (stateMap?.Systems ?? new List<GalaxySystemInfo>())
+                .Any(s => string.Equals(Normalize(s.Id), normalizedArg, StringComparison.Ordinal));
+            bool inStateMapPois = (stateMap?.KnownPois ?? new List<GalaxyKnownPoiInfo>())
+                .Any(p => string.Equals(Normalize(p.Id), normalizedArg, StringComparison.Ordinal) ||
+                          string.Equals(Normalize(p.Name), normalizedArg, StringComparison.Ordinal));
+            bool inDiskMapSystems = diskMap.Systems
+                .Any(s => string.Equals(Normalize(s.Id), normalizedArg, StringComparison.Ordinal));
+            bool inDiskMapPois = diskMap.KnownPois
+                .Any(p => string.Equals(Normalize(p.Id), normalizedArg, StringComparison.Ordinal) ||
+                          string.Equals(Normalize(p.Name), normalizedArg, StringComparison.Ordinal));
+            bool inCandidateAliases = candidates.Any(c =>
+                c.Aliases.Any(alias => string.Equals(alias, normalizedArg, StringComparison.Ordinal)));
+
+            var sb = new StringBuilder();
+            sb.Append('[').Append(DateTime.UtcNow.ToString("O")).Append("] ");
+            sb.Append("go-arg-validation-fail ");
+            sb.Append("arg_index=").Append(argIndex).Append(' ');
+            sb.Append("raw='").Append(rawArg).Append("' ");
+            sb.Append("normalized='").Append(normalizedArg).Append("' ");
+            sb.Append("candidate_count=").Append(candidates.Count).Append(' ');
+            sb.Append("state.system='").Append(state.System ?? "").Append("' ");
+            sb.Append("state.systems_count=").Append(state.Systems?.Length ?? 0).Append(' ');
+            sb.Append("state.pois_count=").Append(state.POIs?.Length ?? 0).Append(' ');
+            sb.Append("state.map.systems_count=").Append(stateMap?.Systems?.Count ?? 0).Append(' ');
+            sb.Append("state.map.known_pois_count=").Append(stateMap?.KnownPois?.Count ?? 0).Append(' ');
+            sb.Append("disk.map.systems_count=").Append(diskMap.Systems.Count).Append(' ');
+            sb.Append("disk.map.known_pois_count=").Append(diskMap.KnownPois.Count).Append(' ');
+            sb.Append("found_in_state_current=").Append(inStateCurrent).Append(' ');
+            sb.Append("found_in_state_neighbors=").Append(inStateNeighbors).Append(' ');
+            sb.Append("found_in_state_live_pois=").Append(inStateLivePois).Append(' ');
+            sb.Append("found_in_state_map_systems=").Append(inStateMapSystems).Append(' ');
+            sb.Append("found_in_state_map_pois=").Append(inStateMapPois).Append(' ');
+            sb.Append("found_in_disk_map_systems=").Append(inDiskMapSystems).Append(' ');
+            sb.Append("found_in_disk_map_pois=").Append(inDiskMapPois).Append(' ');
+            sb.Append("found_in_candidates=").Append(inCandidateAliases).Append(' ');
+            if (!string.IsNullOrWhiteSpace(bestCanonical) && bestScore.HasValue)
+            {
+                sb.Append("best='").Append(bestCanonical).Append("' ");
+                sb.Append("best_score=").Append(bestScore.Value.ToString("0.000"));
+            }
+
+            sb.AppendLine();
+            File.AppendAllText(AppPaths.GoArgValidationLogFile, sb.ToString());
+
+            var dump = new StringBuilder();
+            dump.AppendLine($"[{DateTime.UtcNow:O}] go-arg-validation-mapdump");
+            dump.AppendLine($"raw='{rawArg}' normalized='{normalizedArg}' arg_index={argIndex}");
+            dump.AppendLine("state_galaxy_map:");
+            dump.AppendLine(JsonSerializer.Serialize(
+                stateMap ?? new GalaxyMapSnapshot(),
+                new JsonSerializerOptions { WriteIndented = true }));
+            dump.AppendLine("disk_loaded_map:");
+            dump.AppendLine(JsonSerializer.Serialize(
+                diskMap,
+                new JsonSerializerOptions { WriteIndented = true }));
+            dump.AppendLine();
+            File.AppendAllText(AppPaths.GoArgValidationMapDumpLogFile, dump.ToString());
+        }
+        catch
+        {
+            // Diagnostics must never block command validation.
+        }
     }
 }

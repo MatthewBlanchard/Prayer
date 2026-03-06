@@ -344,6 +344,13 @@
 
     if (!CodeMirror.modes.spacemolt) {
       CodeMirror.defineMode('spacemolt', function () {
+        var functionNameRegex = /[A-Za-z_][A-Za-z0-9_]*(?=\s*\()/;
+        var numberRegex = /(?:\d+\.\d+|\d+)\b/;
+        var boolWordRegex = /\b(?:true|false|and|or|not)\b/i;
+        var multiOpRegex = /(?:==|!=|<=|>=|&&|\|\|)/;
+        var singleOpRegex = /[+\-*/%<>=!]/;
+        var bracketRegex = /[(){}]/;
+
         return {
           startState: function () { return { lineStart: true }; },
           token: function (stream, state) {
@@ -361,6 +368,26 @@
               stream.next();
               state.lineStart = false;
               return 'operator';
+            }
+            if (stream.match(functionNameRegex, true, true)) {
+              state.lineStart = false;
+              return 'def';
+            }
+            if (stream.match(numberRegex, true, true)) {
+              state.lineStart = false;
+              return 'number';
+            }
+            if (stream.match(boolWordRegex, true, true)) {
+              state.lineStart = false;
+              return 'builtin';
+            }
+            if (stream.match(multiOpRegex, true, true) || stream.match(singleOpRegex, true, true)) {
+              state.lineStart = false;
+              return 'operator';
+            }
+            if (stream.match(bracketRegex, true, true)) {
+              state.lineStart = false;
+              return 'bracket';
             }
             if (window._scriptSystemRegex && stream.match(window._scriptSystemRegex, true, true)) {
               state.lineStart = false;

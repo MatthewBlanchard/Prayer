@@ -89,6 +89,15 @@ Client config:
 
 - `PRAYER_BASE_URL` (default `http://localhost:5000/`)
 
+LLM provider env vars:
+
+- `LLM_PROVIDER` (`openai`, `anthropic`, `groq`, `llamacpp`)
+- `LLM_MODEL` (optional explicit model override)
+- `OPENAI_API_KEY` + optional `OPENAI_MODEL`
+- `ANTHROPIC_API_KEY` + optional `ANTHROPIC_MODEL`
+- `GROQ_API_KEY` + optional `GROQ_MODEL`
+- `LLAMACPP_BASE_URL` + optional `LLAMACPP_MODEL`
+
 ## Example project: Crowbar
 
 The repo includes `examples/Crowbar`, a full sample client app that talks to Prayer over HTTP.

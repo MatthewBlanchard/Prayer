@@ -895,14 +895,19 @@ internal sealed class PrayerLlmRegistry
         _providersById["llamacpp"] = new LlamaCppProvider(llamaCppBaseUrl, llamaCppModel);
 
         var openAiApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        var anthropicApiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
         var groqApiKey = Environment.GetEnvironmentVariable("GROQ_API_KEY");
         var openAiDefaultModel = Environment.GetEnvironmentVariable("OPENAI_MODEL")
             ?? "gpt-4o-mini";
+        var anthropicDefaultModel = Environment.GetEnvironmentVariable("ANTHROPIC_MODEL")
+            ?? "claude-3-5-sonnet-latest";
         var groqDefaultModel = Environment.GetEnvironmentVariable("GROQ_MODEL")
             ?? "llama-3.3-70b-versatile";
 
         if (!string.IsNullOrWhiteSpace(openAiApiKey))
             _providersById["openai"] = new OpenAIProvider(openAiApiKey, openAiDefaultModel);
+        if (!string.IsNullOrWhiteSpace(anthropicApiKey))
+            _providersById["anthropic"] = new AnthropicProvider(anthropicApiKey, anthropicDefaultModel);
         if (!string.IsNullOrWhiteSpace(groqApiKey))
             _providersById["groq"] = new GroqProvider(groqApiKey, groqDefaultModel);
 
@@ -911,6 +916,8 @@ internal sealed class PrayerLlmRegistry
             ? requestedProvider
             : _providersById.ContainsKey("openai")
                 ? "openai"
+                : _providersById.ContainsKey("anthropic")
+                    ? "anthropic"
                 : _providersById.ContainsKey("groq")
                     ? "groq"
                     : "llamacpp";
@@ -925,6 +932,7 @@ internal sealed class PrayerLlmRegistry
         return normalized switch
         {
             "openai" => "openai",
+            "anthropic" => "anthropic",
             "groq" => "groq",
             "llamacpp" => "llamacpp",
             _ => "llamacpp"

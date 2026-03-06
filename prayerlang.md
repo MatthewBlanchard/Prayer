@@ -112,7 +112,7 @@ From `src/Prayer/log/llm.log` prompt blocks, the command reference shown to the 
 - `sell <item?>;`
 - `buy <item> <count>;`
 - `retrieve <item> <count?>;`
-- `stash <item>;`
+- `stash <item?>;`
 - `list_ship_for_sale <ship> <price>;`
 - `wait <count?>;`
 

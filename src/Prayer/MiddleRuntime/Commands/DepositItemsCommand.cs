@@ -11,26 +11,25 @@ public class DepositItemsCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
         ArgSpecs: new[]
         {
             new DslArgumentSpec(
-                DslArgKind.Item | DslArgKind.Enum,
-                Required: true,
-                EnumType: "cargo_keyword")
+                DslArgKind.Item,
+                Required: false)
         });
 
     protected override bool IsAvailableWhenDocked(GameState state)
         => state.Docked && state.Ship.Cargo.Count > 0;
 
     public override string BuildHelp(GameState state)
-        => "- stash <itemId|cargo> → move one stack or dump all cargo to storage";
+        => "- stash [itemId] → move one stack, or stash all cargo when omitted";
 
     protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
         IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
-        if (!state.Docked || string.IsNullOrWhiteSpace(cmd.Arg1))
+        if (!state.Docked)
             return null;
 
-        if (string.Equals(cmd.Arg1, "cargo", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(cmd.Arg1))
         {
             var cargoItems = state.Ship.Cargo
                 .Where(kvp => kvp.Value.Quantity > 0)

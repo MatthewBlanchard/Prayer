@@ -74,14 +74,6 @@ internal static class SpaceTabRenderer
             AppendList(sb, vm.CargoItems);
         sb.AppendLine("</section>");
 
-        sb.AppendLine("<section class='space-panel'>");
-        sb.AppendLine("<div class='space-panel-title'>Active Missions</div>");
-        if (vm.ActiveMissions.Count == 0)
-            sb.AppendLine("<div class='small'>(none)</div>");
-        else
-            AppendList(sb, vm.ActiveMissions);
-        sb.AppendLine("</section>");
-
         sb.AppendLine("</section>");
         return sb.ToString();
     }
@@ -139,8 +131,8 @@ internal static class SpaceTabRenderer
 
     private static void AppendGoChip(StringBuilder sb, string target, string label)
     {
-        sb.Append("<form class='space-chip-form' hx-post='api/go-target' hx-swap='none'>")
-            .Append("<input type='hidden' name='target' value='").Append(E(target)).Append("'>")
+        sb.Append("<form class='space-chip-form' hx-post='api/control-input' hx-swap='none' hx-on::after-request='window.executeIfOk(event)'>")
+            .Append("<input type='hidden' name='script' value='go ").Append(E(target)).Append(";'>")
             .Append("<button type='submit' class='space-chip'>")
             .Append(E(label))
             .AppendLine("</button></form>");
@@ -161,8 +153,6 @@ internal static class SpaceTabRenderer
 
         bool inPois = false;
         bool inCargo = false;
-        bool inMissions = false;
-
         foreach (var raw in lines)
         {
             var line = raw.Trim();
@@ -221,7 +211,6 @@ internal static class SpaceTabRenderer
             {
                 inPois = true;
                 inCargo = false;
-                inMissions = false;
                 continue;
             }
 
@@ -229,15 +218,6 @@ internal static class SpaceTabRenderer
             {
                 inPois = false;
                 inCargo = true;
-                inMissions = false;
-                continue;
-            }
-
-            if (line.Equals("ACTIVE MISSIONS", StringComparison.OrdinalIgnoreCase))
-            {
-                inPois = false;
-                inCargo = false;
-                inMissions = true;
                 continue;
             }
 
@@ -265,10 +245,6 @@ internal static class SpaceTabRenderer
             {
                 vm.CargoItems.Add(item);
             }
-            else if (inMissions)
-            {
-                vm.ActiveMissions.Add(item);
-            }
         }
 
         return vm;
@@ -286,7 +262,6 @@ internal static class SpaceTabRenderer
         public string Cargo { get; set; } = "";
         public List<(string Target, string Label)> Pois { get; } = new();
         public List<string> CargoItems { get; } = new();
-        public List<string> ActiveMissions { get; } = new();
 
         public string SystemOrFallback => string.IsNullOrWhiteSpace(System) ? "(unknown system)" : System;
         public string PoiOrFallback => string.IsNullOrWhiteSpace(Poi) ? "(unknown poi)" : Poi;

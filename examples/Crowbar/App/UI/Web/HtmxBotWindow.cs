@@ -40,6 +40,7 @@ public sealed partial class HtmxBotWindow : IAppUi
         null,
         null,
         Array.Empty<MissionPromptOption>(),
+        Array.Empty<MissionPromptOption>(),
         Array.Empty<string>(),
         Array.Empty<string>(),
         null,
@@ -125,9 +126,10 @@ public sealed partial class HtmxBotWindow : IAppUi
         IReadOnlyList<string> spaceConnectedSystems,
         string? tradeStateMarkdown,
         string? shipyardStateMarkdown,
-        string? cantinaStateMarkdown,
+        string? missionsStateMarkdown,
         string? catalogStateMarkdown,
         IReadOnlyList<MissionPromptOption> activeMissionPrompts,
+        IReadOnlyList<MissionPromptOption> availableMissionPrompts,
         IReadOnlyList<string> memory,
         IReadOnlyList<string> executionStatusLines,
         string? controlInput,
@@ -143,9 +145,10 @@ public sealed partial class HtmxBotWindow : IAppUi
                 spaceConnectedSystems,
                 tradeStateMarkdown,
                 shipyardStateMarkdown,
-                cantinaStateMarkdown,
+                missionsStateMarkdown,
                 catalogStateMarkdown,
                 activeMissionPrompts,
+                availableMissionPrompts,
                 memory,
                 executionStatusLines,
                 controlInput,
@@ -369,8 +372,7 @@ public sealed partial class HtmxBotWindow : IAppUi
             lock (_lock) snapshot = _snapshot;
 
             var prompt = BuildActiveMissionObjectivesPrompt(
-                snapshot.ActiveMissionPrompts,
-                snapshot.CantinaStateMarkdown);
+                snapshot.ActiveMissionPrompts);
             LogUiHttpTrace(
                 "prompt_active_missions_request_received",
                 req,
@@ -436,34 +438,6 @@ public sealed partial class HtmxBotWindow : IAppUi
                     activeBotId!,
                     RuntimeCommandNames.ExecuteScript));
             }
-            WriteNoContent(ctx.Response);
-            return;
-        }
-
-        if (req.HttpMethod == "POST" && path == "/api/go-target")
-        {
-            var form = ReadForm(req);
-            var target = (GetValue(form, "target") ?? "").Trim();
-            if (string.IsNullOrWhiteSpace(target))
-            {
-                WriteText(ctx.Response, "Target is required.", "text/plain; charset=utf-8", 400);
-                return;
-            }
-
-            string? activeBotId;
-            lock (_lock) activeBotId = _snapshot.ActiveBotId;
-            if (!string.IsNullOrWhiteSpace(activeBotId))
-            {
-                _runtimeCommandWriter?.TryWrite(new RuntimeCommandRequest(
-                    activeBotId!,
-                    RuntimeCommandNames.SetScript,
-                    $"go {target};"));
-
-                _runtimeCommandWriter?.TryWrite(new RuntimeCommandRequest(
-                    activeBotId!,
-                    RuntimeCommandNames.ExecuteScript));
-            }
-
             WriteNoContent(ctx.Response);
             return;
         }
@@ -604,8 +578,8 @@ public sealed partial class HtmxBotWindow : IAppUi
             case "shipyard":
                 sb.Append("<pre>").Append(E(snapshot.ShipyardStateMarkdown ?? "(shipyard unavailable)")).AppendLine("</pre>");
                 break;
-            case "cantina":
-                sb.Append("<pre>").Append(E(snapshot.CantinaStateMarkdown ?? "(cantina unavailable)")).AppendLine("</pre>");
+            case "missions":
+                sb.Append(MissionsTabRenderer.Build(snapshot.MissionsStateMarkdown, snapshot.ActiveMissionPrompts, snapshot.AvailableMissionPrompts));
                 break;
             case "catalog":
                 AppendCatalogHtml(sb, snapshot.CatalogStateMarkdown);
@@ -705,8 +679,7 @@ public sealed partial class HtmxBotWindow : IAppUi
     }
 
     private static string BuildActiveMissionObjectivesPrompt(
-        IReadOnlyList<MissionPromptOption> activeMissionPrompts,
-        string? cantinaStateMarkdown)
+        IReadOnlyList<MissionPromptOption> activeMissionPrompts)
     {
         var sb = new StringBuilder();
         bool wroteAnyLine = false;

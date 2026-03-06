@@ -89,6 +89,12 @@ form[hx-post='api/execute'] button.run-active { border-color:#5ac977; background
 .space-chip { width:auto; border:1px solid #335279; border-radius:999px; background:#172339; color:#c3dcff; padding:4px 10px; font-size:12px; }
 .space-chip:hover { background:#203150; border-color:#4b76ad; }
 .space-list { margin:0; padding-left:16px; display:flex; flex-direction:column; gap:4px; }
+.mission-item { border:1px solid #2a2e38; border-radius:8px; background:#111621; padding:8px; margin-bottom:8px; }
+.mission-title { color:#dce8ff; font-size:13px; font-weight:600; margin-bottom:4px; }
+.mission-body { color:#9fb1ca; font-size:12px; white-space:pre-wrap; word-break:break-word; margin-bottom:6px; }
+.mission-actions { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
+.mission-chip-danger { border-color:#7f3036; background:#30171a; color:#ffd7da; }
+.mission-chip-danger:hover { border-color:#bb4951; background:#4a2025; }
 @media (max-width: 860px) {
   .space-grid { grid-template-columns:1fr; }
 }

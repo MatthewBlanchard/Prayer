@@ -93,8 +93,13 @@ public static class DslParser
     private static readonly TextParser<string> Integer =
         Span.Regex("[0-9]+").Select(x => x.ToStringValue());
 
+    // Command args must support ids like mission UUID fragments that can start
+    // with digits and then include letters/hyphens (e.g. "6a1b-...").
+    private static readonly TextParser<string> ArgIdentifier =
+        Span.Regex("[A-Za-z0-9_][A-Za-z0-9_-]*").Select(x => x.ToStringValue());
+
     private static readonly TextParser<string> ArgumentToken =
-        Integer.Try().Or(Identifier);
+        ArgIdentifier.Try().Or(Integer);
 
     private static readonly TextParser<string> ConditionExpression =
         Span.Regex("[^\\{\\r\\n]+")
@@ -940,7 +945,7 @@ public static class DslParser
         if (string.IsNullOrWhiteSpace(value))
             return false;
 
-        if (!(char.IsLetter(value[0]) || value[0] == '_'))
+        if (!(char.IsLetterOrDigit(value[0]) || value[0] == '_'))
             return false;
 
         for (int i = 1; i < value.Length; i++)

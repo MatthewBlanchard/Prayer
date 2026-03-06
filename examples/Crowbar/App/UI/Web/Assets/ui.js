@@ -111,6 +111,23 @@
     executeBtn.classList.toggle('run-active', !!isRunning);
   };
 
+  window.executeIfOk = function (e) {
+    var detail = (e || {}).detail || {};
+    var xhr = detail.xhr || null;
+    if (!xhr) return;
+    if (xhr.status < 200 || xhr.status >= 300) return;
+    htmx.ajax('POST', apiUrl('api/execute'), { swap: 'none' });
+  };
+
+  window.useMissionPrompt = function (promptText) {
+    var text = (promptText || '').toString();
+    if (text.trim().length === 0) return;
+    var promptInput = document.querySelector("#prompt-form textarea[name='prompt']");
+    if (!promptInput) return;
+    promptInput.value = text;
+    promptInput.focus();
+  };
+
   window.syncCurrentScript = function () {
     fetch(apiUrl('partial/current-script'), { cache: 'no-store' })
       .then(function (res) { return res.ok ? res.json() : null; })
@@ -543,6 +560,12 @@
   });
 
   document.addEventListener('click', function (e) {
+    var promptBtn = e.target.closest('.mission-use-prompt');
+    if (promptBtn) {
+      window.useMissionPrompt(promptBtn.getAttribute('data-mission-prompt') || '');
+      return;
+    }
+
     var addBtn = e.target.closest('#open-add-bot');
     if (addBtn) {
       window.openSidebarLayer('add-bot-panel-layer');

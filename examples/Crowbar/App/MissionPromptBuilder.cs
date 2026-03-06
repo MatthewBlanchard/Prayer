@@ -6,27 +6,37 @@ public static class MissionPromptBuilder
 {
     public static IReadOnlyList<MissionPromptOption> BuildOptions(GameState state)
     {
-        if (state.ActiveMissions == null || state.ActiveMissions.Length == 0)
+        return BuildMissionOptions(state, state.ActiveMissions, requirePrompt: true);
+    }
+
+    public static IReadOnlyList<MissionPromptOption> BuildAvailableOptions(GameState state)
+    {
+        return BuildMissionOptions(state, state.AvailableMissions, requirePrompt: false);
+    }
+
+    private static IReadOnlyList<MissionPromptOption> BuildMissionOptions(
+        GameState state,
+        MissionInfo[]? missions,
+        bool requirePrompt)
+    {
+        if (missions == null || missions.Length == 0)
             return Array.Empty<MissionPromptOption>();
 
         var options = new List<MissionPromptOption>();
-        foreach (var mission in state.ActiveMissions)
+        foreach (var mission in missions)
         {
             if (mission == null)
                 continue;
 
-            string objective = !string.IsNullOrWhiteSpace(mission.ObjectivesSummary)
-                ? mission.ObjectivesSummary
-                : (!string.IsNullOrWhiteSpace(mission.ProgressText)
-                    ? mission.ProgressText
-                    : mission.Description);
-
-            if (string.IsNullOrWhiteSpace(objective))
+            var objective = BuildObjective(mission);
+            if (requirePrompt && string.IsNullOrWhiteSpace(objective))
                 continue;
 
-            string missionId = !string.IsNullOrWhiteSpace(mission.MissionId)
-                ? mission.MissionId
-                : mission.Id;
+            // Use canonical mission.Id for executable command arguments.
+            // mission.MissionId can contain display-friendly text that is not DSL-token safe.
+            string missionId = !string.IsNullOrWhiteSpace(mission.Id)
+                ? mission.Id
+                : mission.MissionId;
             string title = !string.IsNullOrWhiteSpace(mission.Title)
                 ? mission.Title
                 : missionId;
@@ -37,11 +47,20 @@ public static class MissionPromptBuilder
             options.Add(new MissionPromptOption(
                 missionId ?? string.Empty,
                 label,
-                objective.Trim(),
+                (objective ?? string.Empty).Trim(),
                 ResolveIssuingPoiId(state, mission)));
         }
 
         return options;
+    }
+
+    private static string BuildObjective(MissionInfo mission)
+    {
+        if (!string.IsNullOrWhiteSpace(mission.ObjectivesSummary))
+            return mission.ObjectivesSummary;
+        if (!string.IsNullOrWhiteSpace(mission.ProgressText))
+            return mission.ProgressText;
+        return mission.Description ?? string.Empty;
     }
 
     private static string ResolveIssuingPoiId(GameState state, MissionInfo mission)

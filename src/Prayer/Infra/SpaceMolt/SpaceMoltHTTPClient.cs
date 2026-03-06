@@ -59,6 +59,7 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
     private static readonly HashSet<string> MutationCommands = new(StringComparer.OrdinalIgnoreCase)
     {
         "accept_mission",
+        "abandon_mission",
         "attack",
         "battle",
         "buy",

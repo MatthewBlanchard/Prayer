@@ -56,6 +56,7 @@ public sealed class UiSnapshotPublisher
             null,
             null,
             Array.Empty<MissionPromptOption>(),
+            Array.Empty<MissionPromptOption>(),
             Array.Empty<string>(),
             _getExecutionStatusLinesForBot(activeBotId),
             null,
@@ -89,15 +90,17 @@ public sealed class UiSnapshotPublisher
         var activeBotId = _getActiveBotId();
         var uiState = AppUiStateBuilder.BuildUiState(snapshot.State);
         var missionPrompts = MissionPromptBuilder.BuildOptions(snapshot.State);
+        var availableMissionPrompts = MissionPromptBuilder.BuildAvailableOptions(snapshot.State);
         LogBotTabsIfChanged("publish_prayer_snapshot", tabs, activeBotId);
         _uiWriter.TryWrite(new UiSnapshot(
             uiState.SpaceStateMarkdown,
             snapshot.State.Systems ?? Array.Empty<string>(),
             uiState.TradeStateMarkdown,
             uiState.ShipyardStateMarkdown,
-            uiState.CantinaStateMarkdown,
+            uiState.MissionsStateMarkdown,
             uiState.CatalogStateMarkdown,
             missionPrompts,
+            availableMissionPrompts,
             snapshot.Memory,
             snapshot.ExecutionStatusLines,
             snapshot.ControlInput,

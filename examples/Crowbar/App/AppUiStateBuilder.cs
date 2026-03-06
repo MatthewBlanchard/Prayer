@@ -8,7 +8,7 @@ public static class AppUiStateBuilder
         string SpaceStateMarkdown,
         string? TradeStateMarkdown,
         string? ShipyardStateMarkdown,
-        string? CantinaStateMarkdown,
+        string? MissionsStateMarkdown,
         string? CatalogStateMarkdown)
         BuildUiState(GameState state)
     {
@@ -17,11 +17,11 @@ public static class AppUiStateBuilder
         var shipyard = state.Docked && string.Equals(state.CurrentPOI?.Type, "station", StringComparison.Ordinal)
             ? BuildShipyardState(state)
             : null;
-        var cantina = state.Docked && string.Equals(state.CurrentPOI?.Type, "station", StringComparison.Ordinal)
-            ? BuildCantinaState(state)
+        var missions = state.Docked && string.Equals(state.CurrentPOI?.Type, "station", StringComparison.Ordinal)
+            ? BuildMissionsState(state)
             : null;
         var catalog = BuildCatalogState(state);
-        return (space, trade, shipyard, cantina, catalog);
+        return (space, trade, shipyard, missions, catalog);
     }
 
     private static string BuildSpaceState(GameState state)
@@ -30,7 +30,6 @@ public static class AppUiStateBuilder
             .Select(p => $"- {p.Id} ({p.Type})")
             .ToArray();
         var cargo = FormatCargo(state.Ship.Cargo);
-        var missions = FormatMissions(state.ActiveMissions);
 
         return
 $@"CONTEXT: SPACE
@@ -47,10 +46,7 @@ POIS
 {(pois.Length == 0 ? "- (none)" : string.Join("\n", pois))}
 
 CARGO ITEMS
-{cargo}
-
-ACTIVE MISSIONS
-{missions}";
+{cargo}";
     }
 
     private static string BuildTradeState(GameState state)
@@ -94,10 +90,10 @@ PLAYER LISTINGS
 {listings}";
     }
 
-    private static string BuildCantinaState(GameState state)
+    private static string BuildMissionsState(GameState state)
     {
         return
-$@"CONTEXT: CANTINA
+$@"CONTEXT: MISSIONS
 STATION: {state.CurrentPOI?.Id ?? "(unknown)"}
 AVAILABLE MISSIONS
 {FormatMissions(state.AvailableMissions)}";

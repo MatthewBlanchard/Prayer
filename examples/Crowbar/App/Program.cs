@@ -13,6 +13,10 @@ class Program
         AppPaths.EnsureDirectories();
         AppPaths.ResetDebugLogsOnStartup();
 
+        var sink = new ChannelLogSink();
+        LogSink.SetInstance(sink);
+        sink.Start();
+
         var htmxUi = new HtmxBotWindow(
             Environment.GetEnvironmentVariable("UI_PREFIX") ?? "http://localhost:5057/");
         IAppUi ui = htmxUi;
@@ -58,14 +62,7 @@ class Program
         void LogAuth(string message)
         {
             var line = $"[{DateTime.UtcNow:O}] {message}{Environment.NewLine}";
-            try
-            {
-                File.AppendAllText(AppPaths.AuthFlowLogFile, line);
-            }
-            catch
-            {
-                // Never crash startup because logging failed.
-            }
+            LogSink.Instance.Enqueue(new LogEvent(DateTime.UtcNow, LogKind.AuthFlow, line, AppPaths.AuthFlowLogFile));
         }
 
         BotSession? GetActiveBot()
@@ -648,6 +645,8 @@ class Program
             uiRenderTask.ContinueWith(_ => { }),
             Task.WhenAll(pollerHandles.Select(p => p.Task.ContinueWith(_ => { })))
         );
+
+        await sink.DrainAndStopAsync();
     }
 
 }

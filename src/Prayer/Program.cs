@@ -8,6 +8,10 @@ using Contracts = Prayer.Contracts;
 
 AppPaths.EnsureDirectories();
 
+var sink = new ChannelLogSink();
+LogSink.SetInstance(sink);
+sink.Start();
+
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.AddSimpleConsole(options =>
 {
@@ -345,6 +349,7 @@ app.Lifetime.ApplicationStopping.Register(() =>
 {
     var store = app.Services.GetRequiredService<RuntimeSessionStore>();
     store.Dispose();
+    sink.DrainAndStopAsync().GetAwaiter().GetResult();
 });
 
 static Contracts.SessionSummary ToSessionSummary(PrayerRuntimeSession session)

@@ -12,8 +12,6 @@ public sealed partial class HtmxBotWindow : IAppUi
 {
     private static readonly Lazy<string> UiCssAsset = new(() => ReadUiAsset("ui.css"));
     private static readonly Lazy<string> UiJsAsset = new(() => ReadUiAsset("ui.js"));
-    private static readonly string UiHttpErrorLogFile = Path.Combine(AppPaths.LogDir, "ui_http_errors.log");
-    private static readonly string UiHttpTraceLogFile = Path.Combine(AppPaths.LogDir, "ui_http_trace.log");
 
     private readonly object _lock = new();
     private readonly string _prefix;
@@ -1014,7 +1012,7 @@ public sealed partial class HtmxBotWindow : IAppUi
         var path = request?.Url?.AbsolutePath ?? "(unknown)";
         var rawUrl = request?.RawUrl ?? "(unknown)";
         var line = $"[{DateTime.UtcNow:O}] {context} | method={method} | path={path} | raw={rawUrl}{Environment.NewLine}{ex}{Environment.NewLine}{Environment.NewLine}";
-        File.AppendAllText(UiHttpErrorLogFile, line);
+        LogSink.Instance.Enqueue(new LogEvent(DateTime.UtcNow, LogKind.UiHttpError, line, AppPaths.UiHttpErrorLogFile));
     }
 
     private static void LogUiHttpTrace(
@@ -1031,7 +1029,7 @@ public sealed partial class HtmxBotWindow : IAppUi
         var elapsed = elapsedMs.HasValue ? elapsedMs.Value.ToString("F1") : "-";
         var suffix = string.IsNullOrWhiteSpace(details) ? "" : $" | {details}";
         var line = $"[{DateTime.UtcNow:O}] {context} | method={method} | path={path} | raw={rawUrl} | status={status} | elapsed_ms={elapsed}{suffix}{Environment.NewLine}";
-        File.AppendAllText(UiHttpTraceLogFile, line);
+        LogSink.Instance.Enqueue(new LogEvent(DateTime.UtcNow, LogKind.UiHttpTrace, line, AppPaths.UiHttpTraceLogFile));
     }
 
     private static string E(string value) => WebUtility.HtmlEncode(value ?? "");

@@ -92,6 +92,7 @@ public class GalaxySystemInfo
 {
     public string Id { get; set; } = "";
     public string Empire { get; set; } = "";
+    public bool IsStronghold { get; set; }
     public double? X { get; set; }
     public double? Y { get; set; }
     public List<string> Connections { get; set; } = new();

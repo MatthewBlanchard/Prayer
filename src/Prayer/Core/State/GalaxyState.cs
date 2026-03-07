@@ -408,6 +408,7 @@ internal static class GalaxyStateHub
                 {
                     Id = system.Id,
                     Empire = system.Empire,
+                    IsStronghold = system.IsStronghold,
                     X = system.X,
                     Y = system.Y,
                     Connections = (system.Connections ?? new List<string>())

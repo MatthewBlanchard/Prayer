@@ -83,6 +83,10 @@ internal static class GalaxyMapSnapshotFile
             string empire = TryGetString(systemObj, "empire")
                             ?? TryGetString(systemObj, "Empire")
                             ?? "";
+            bool isStronghold = TryGetBool(systemObj, "is_stronghold")
+                                ?? TryGetBool(systemObj, "isStronghold")
+                                ?? TryGetBool(systemObj, "IsStronghold")
+                                ?? false;
 
             double? x = null;
             double? y = null;
@@ -138,6 +142,7 @@ internal static class GalaxyMapSnapshotFile
             {
                 Id = systemId,
                 Empire = empire,
+                IsStronghold = isStronghold,
                 X = x,
                 Y = y,
                 Connections = connections,
@@ -233,6 +238,10 @@ internal static class GalaxyMapSnapshotFile
             string empire = TryGetString(systemObj, "Empire")
                             ?? TryGetString(systemObj, "empire")
                             ?? "";
+            bool isStronghold = TryGetBool(systemObj, "IsStronghold")
+                                ?? TryGetBool(systemObj, "is_stronghold")
+                                ?? TryGetBool(systemObj, "isStronghold")
+                                ?? false;
             double? x = TryGetDouble(systemObj, "X");
             double? y = TryGetDouble(systemObj, "Y");
             if (TryGetObject(systemObj, "Position", out var legacyPosition) ||
@@ -287,6 +296,7 @@ internal static class GalaxyMapSnapshotFile
             {
                 Id = systemId,
                 Empire = empire,
+                IsStronghold = isStronghold,
                 X = x,
                 Y = y,
                 Connections = connections,
@@ -392,6 +402,22 @@ internal static class GalaxyMapSnapshotFile
             return value;
 
         return null;
+    }
+
+    private static bool? TryGetBool(JsonElement obj, string key)
+    {
+        if (obj.ValueKind != JsonValueKind.Object)
+            return null;
+
+        if (!obj.TryGetProperty(key, out var prop))
+            return null;
+
+        return prop.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => null
+        };
     }
 }
 

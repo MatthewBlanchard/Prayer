@@ -18,14 +18,25 @@ Natural language should turn into SpaceMolt gameplay smoothly and execution shou
 
 ## Core idea: natural language -> control language -> gameplay
 
-Prayer’s killer feature is the control language plus the agent that writes it.
+Prayer is to SpaceMolt what Claude Code is to a codebase — an agent that translates natural language intent into executable behavior at runtime.
 
-- A user expresses intent in natural language.
-- The agent turns that intent into control-language script.
-- Prayer executes script through deterministic runtime semantics.
+The analogy is direct:
+
+| Claude Code / Codex | Prayer |
+|---|---|
+| Natural language → code | Natural language → control script |
+| Runs in a terminal / editor | Runs in the SpaceMolt game runtime |
+| Code is the artifact | Script is the artifact |
+| You read, edit, re-run | You inspect, edit, halt, resume |
+
+The loop:
+
+- A user expresses intent in natural language ("mine carbon at nexus then sell in a loop").
+- The generation agent turns that into a control-language script.
+- Prayer executes the script through deterministic runtime semantics.
 - Clients observe state/status and can halt, resume, or edit at any point.
 
-This keeps the UX conversational while avoiding black-box automation.
+The script is always visible and editable — never a black box. The agent writes the plan; the runtime carries it out; the user stays in control.
 
 ## DSL quick primer
 

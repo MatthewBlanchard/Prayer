@@ -99,7 +99,7 @@ public sealed class ChannelLogSink : ILogSink, IAsyncDisposable
     {
         if (!_writers.TryGetValue(filePath, out var writer))
         {
-            writer = new StreamWriter(filePath, append: true, Encoding.UTF8) { AutoFlush = false };
+            writer = new StreamWriter(filePath, append: true, Encoding.UTF8) { AutoFlush = true };
             _writers[filePath] = writer;
         }
         return writer;

@@ -25,6 +25,8 @@ public interface IAppUi
         string? controlInput,
         int? currentScriptLine,
         string? lastGenerationPrompt,
+        int? currentTick,
+        System.DateTime? lastSpaceMoltPostUtc,
         IReadOnlyList<BotTab> bots,
         string? activeBotId);
 

@@ -61,6 +61,8 @@ public sealed class UiSnapshotPublisher
             null,
             null,
             null,
+            null,
+            null,
             tabs,
             activeBotId));
     }
@@ -104,6 +106,8 @@ public sealed class UiSnapshotPublisher
             snapshot.ControlInput,
             snapshot.CurrentScriptLine,
             snapshot.LastGenerationPrompt,
+            snapshot.CurrentTick,
+            snapshot.LastSpaceMoltPostUtc,
             tabs,
             activeBotId));
     }

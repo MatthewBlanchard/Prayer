@@ -216,7 +216,9 @@ public sealed class PrayerApiClient
             snapshot.ExecutionStatusLines,
             snapshot.ControlInput,
             snapshot.CurrentScriptLine,
-            snapshot.LastGenerationPrompt);
+            snapshot.LastGenerationPrompt,
+            snapshot.CurrentTick,
+            snapshot.LastSpaceMoltPostUtc);
     }
 }
 
@@ -226,7 +228,9 @@ public sealed record AppPrayerRuntimeState(
     IReadOnlyList<string> ExecutionStatusLines,
     string? ControlInput,
     int? CurrentScriptLine,
-    string? LastGenerationPrompt);
+    string? LastGenerationPrompt,
+    int? CurrentTick,
+    DateTime? LastSpaceMoltPostUtc);
 
 public sealed record AppPrayerRuntimeStatePollResult(
     AppPrayerRuntimeState? State,

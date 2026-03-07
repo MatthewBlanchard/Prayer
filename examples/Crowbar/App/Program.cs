@@ -600,6 +600,8 @@ class Program
                         snapshot.ControlInput,
                         snapshot.CurrentScriptLine,
                         snapshot.LastGenerationPrompt,
+                        snapshot.CurrentTick,
+                        snapshot.LastSpaceMoltPostUtc,
                         snapshot.Bots,
                         snapshot.ActiveBotId
                     );

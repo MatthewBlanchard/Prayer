@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 public sealed record UiSnapshot(
@@ -13,6 +14,8 @@ public sealed record UiSnapshot(
     string? ControlInput,
     int? CurrentScriptLine,
     string? LastGenerationPrompt,
+    int? CurrentTick,
+    DateTime? LastSpaceMoltPostUtc,
     IReadOnlyList<BotTab> Bots,
     string? ActiveBotId
 );

@@ -28,7 +28,8 @@ public interface IAppUi
         int? currentTick,
         System.DateTime? lastSpaceMoltPostUtc,
         IReadOnlyList<BotTab> bots,
-        string? activeBotId);
+        string? activeBotId,
+        CraftingUiModel? craftingModel = null);
 
     void Run();
 }

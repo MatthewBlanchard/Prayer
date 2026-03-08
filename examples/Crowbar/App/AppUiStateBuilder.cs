@@ -8,7 +8,8 @@ public static class AppUiStateBuilder
         SpaceUiModel SpaceModel,
         TradeUiModel? TradeModel,
         ShipyardUiModel? ShipyardModel,
-        CatalogUiModel? CatalogModel)
+        CatalogUiModel? CatalogModel,
+        CraftingUiModel? CraftingModel)
         BuildUiState(GameState state)
     {
         var spaceModel = BuildSpaceModel(state);
@@ -17,7 +18,8 @@ public static class AppUiStateBuilder
             ? BuildShipyardModel(state)
             : null;
         var catalog = BuildCatalogModel(state);
-        return (spaceModel, tradeModel, shipyardModel, catalog);
+        var crafting = BuildCraftingModel(state);
+        return (spaceModel, tradeModel, shipyardModel, catalog, crafting);
     }
 
     private static SpaceUiModel BuildSpaceModel(GameState state)
@@ -355,6 +357,27 @@ public static class AppUiStateBuilder
             .ToArray();
 
         return new CatalogUiModel(itemEntries, shipEntries);
+    }
+
+    private static CraftingUiModel BuildCraftingModel(GameState state)
+    {
+        var recipes = (state.AvailableRecipes ?? Array.Empty<CatalogueEntry>())
+            .Where(e => e != null && !string.IsNullOrWhiteSpace(e.Id))
+            .OrderBy(e => string.IsNullOrWhiteSpace(e.Category) ? "Unknown" : e.Category, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(e => e.Tier ?? int.MaxValue)
+            .ThenBy(e => string.IsNullOrWhiteSpace(e.Name) ? e.Id : e.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(e => new CraftingUiEntry(
+                e.Id,
+                string.IsNullOrWhiteSpace(e.Name) ? e.Id : e.Name,
+                string.IsNullOrWhiteSpace(e.Category) ? "Unknown" : e.Category,
+                e.Tier,
+                string.IsNullOrWhiteSpace(e.Name) ? e.Id : $"`{e.Id}`: {e.Name}"))
+            .ToArray();
+
+        return new CraftingUiModel(
+            state.Docked && recipes.Length > 0,
+            state.CurrentPOI?.Id ?? "(unknown)",
+            recipes);
     }
 
     private static string FormatShowroomLine(ShipyardShowroomEntry entry)

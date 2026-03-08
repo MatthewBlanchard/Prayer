@@ -89,6 +89,18 @@ public sealed record CatalogUiModel(
     IReadOnlyList<CatalogUiEntry> Items,
     IReadOnlyList<CatalogUiEntry> Ships);
 
+public sealed record CraftingUiEntry(
+    string RecipeId,
+    string Name,
+    string Category,
+    int? Tier,
+    string DisplayText);
+
+public sealed record CraftingUiModel(
+    bool HasCrafting,
+    string StationId,
+    IReadOnlyList<CraftingUiEntry> Recipes);
+
 public sealed record ShipyardUiEntry(
     string Id,
     string DisplayText,

@@ -601,7 +601,8 @@ class Program
                         snapshot.CurrentTick,
                         snapshot.LastSpaceMoltPostUtc,
                         snapshot.Bots,
-                        snapshot.ActiveBotId
+                        snapshot.ActiveBotId,
+                        snapshot.CraftingModel
                     );
                 }
             }

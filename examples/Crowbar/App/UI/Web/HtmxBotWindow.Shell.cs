@@ -22,6 +22,7 @@ public sealed partial class HtmxBotWindow
         new StateTabDefinition("missions", "Missions", "load, every 1000ms"),
         new StateTabDefinition("trade", "Trade", "load, every 1000ms"),
         new StateTabDefinition("shipyard", "Shipyard", "load, every 1000ms"),
+        new StateTabDefinition("crafting", "Crafting", "load, every 1000ms"),
     };
 
     private string BuildShellHtml()

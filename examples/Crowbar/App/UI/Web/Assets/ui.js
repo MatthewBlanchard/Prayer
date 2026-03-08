@@ -472,6 +472,47 @@
     if (input && input.value !== next) input.value = next;
   };
 
+  window._craftingQuery = window._craftingQuery || '';
+  window.filterCraftingRecipes = function (query) {
+    var next = (typeof query === 'string' ? query : window._craftingQuery || '');
+    var q = next.toLowerCase().trim();
+    window._craftingQuery = next;
+
+    var pane = document.getElementById('state-pane-crafting');
+    if (!pane) return;
+
+    pane.querySelectorAll('.cargo-row').forEach(function (row) {
+      var hay = row.getAttribute('data-search') || '';
+      row.style.display = q === '' || hay.indexOf(q) >= 0 ? '' : 'none';
+    });
+
+    Array.prototype.slice.call(pane.querySelectorAll('details.catalog-group'))
+      .reverse()
+      .forEach(function (group) {
+        var hasVisible = Array.prototype.some.call(
+          group.querySelectorAll('.cargo-row'),
+          function (row) { return row.style.display !== 'none'; });
+        group.style.display = hasVisible ? '' : 'none';
+      });
+
+    var input = pane.querySelector("input.catalog-search[oninput*='filterCraftingRecipes']");
+    if (input && input.value !== next) input.value = next;
+  };
+
+  window.submitCraft = function (_event, form) {
+    if (!form) return false;
+    var recipeId = (form.getAttribute('data-item-id') || '').trim();
+    if (!recipeId) return false;
+    var qtyInput = form.querySelector("input[name='qty']");
+    var qty = parseInt((qtyInput && qtyInput.value) ? qtyInput.value : '1', 10);
+    if (!Number.isFinite(qty) || qty < 1) qty = 1;
+    if (qty > 10) qty = 10;
+    if (qtyInput) qtyInput.value = String(qty);
+    var scriptInput = form.querySelector("input[name='script']");
+    if (scriptInput) scriptInput.value = 'craft ' + recipeId + ' ' + qty + ';';
+    return true;
+  };
+
   window.initGalaxyMapCanvas = function (canvas) {
     if (!canvas || canvas._mapHandlersAttached) return;
     canvas._mapHandlersAttached = true;
@@ -1696,6 +1737,7 @@ function zy(y) { return cy - ((y - cy) * zoom); }
     }
     window.filterTradeCatalogItems(window._tradeCatalogQuery || '');
     window.filterShipCatalogEntries(window._shipCatalogQuery || '');
+    window.filterCraftingRecipes(window._craftingQuery || '');
     window.applyMapSubtabSelection();
     window.renderGalaxyMapCanvases();
     window.refreshTickStatusBar();

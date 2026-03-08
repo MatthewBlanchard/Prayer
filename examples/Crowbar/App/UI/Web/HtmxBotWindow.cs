@@ -136,7 +136,8 @@ public sealed partial class HtmxBotWindow : IAppUi
         int? currentTick,
         DateTime? lastSpaceMoltPostUtc,
         IReadOnlyList<BotTab> bots,
-        string? activeBotId)
+        string? activeBotId,
+        CraftingUiModel? craftingModel = null)
     {
         lock (_lock)
         {
@@ -156,7 +157,8 @@ public sealed partial class HtmxBotWindow : IAppUi
                 currentTick,
                 lastSpaceMoltPostUtc,
                 bots,
-                activeBotId);
+                activeBotId,
+                craftingModel);
         }
     }
 
@@ -584,6 +586,9 @@ public sealed partial class HtmxBotWindow : IAppUi
                 break;
             case "shipyard":
                 sb.Append(ShipyardTabRenderer.Build(snapshot.ShipyardModel));
+                break;
+            case "crafting":
+                sb.Append(CraftingTabRenderer.Build(snapshot.CraftingModel));
                 break;
             case "missions":
                 sb.Append(MissionsTabRenderer.Build(snapshot.ActiveMissionPrompts, snapshot.AvailableMissionPrompts));

@@ -64,7 +64,8 @@ public sealed class UiSnapshotPublisher
             null,
             null,
             tabs,
-            activeBotId));
+            activeBotId,
+            null));
     }
 
     public void PublishActiveSnapshot(string? noStateMessage = null)
@@ -109,6 +110,7 @@ public sealed class UiSnapshotPublisher
             snapshot.CurrentTick,
             snapshot.LastSpaceMoltPostUtc,
             tabs,
-            activeBotId));
+            activeBotId,
+            uiState.CraftingModel));
     }
 }

@@ -26,6 +26,7 @@ public partial class GameState
     public ShipyardListingEntry[] ShipyardListings { get; set; } = Array.Empty<ShipyardListingEntry>();
     public Catalogue ShipCatalogue { get; set; } = new();
     public OwnedShipInfo[] OwnedShips { get; set; } = Array.Empty<OwnedShipInfo>();
+    public CatalogueEntry[] AvailableRecipes { get; set; } = [];
 
     public MissionInfo[] ActiveMissions { get; set; } = Array.Empty<MissionInfo>();
     public MissionInfo[] AvailableMissions { get; set; } = Array.Empty<MissionInfo>();

@@ -202,6 +202,53 @@ Modules: {Ship.ModuleCount}
 ";
     }
 
+    internal string RenderCraftingLlmMarkdown()
+    {
+        var estimatedPrices = BuildEstimatedItemPrices();
+        var cargo = FormatCargo(Ship.Cargo, estimatedPrices);
+        var storage = StorageItems != null && StorageItems.Count > 0
+            ? FormatCargo(StorageItems, estimatedPrices)
+            : "";
+
+        var storageSection = string.IsNullOrWhiteSpace(storage)
+            ? ""
+            : $"\n### Storage Items\n{storage}\n";
+
+        return
+$@"
+Active Context: `CraftingState`
+Current Station: `{CurrentPOI.Id}`
+Credits: {Credits}
+Cargo: {Ship.CargoUsed}/{Ship.CargoCapacity}
+
+### Available Recipes
+{FormatAvailableRecipes(AvailableRecipes)}
+
+### Cargo
+{cargo}
+{storageSection}{BuildNotificationsLlmSection()}
+";
+    }
+
+    internal static string FormatAvailableRecipes(CatalogueEntry[] recipes)
+    {
+        if (recipes == null || recipes.Length == 0)
+            return "- _(none)_";
+
+        return string.Join("\n", recipes
+            .OrderBy(r => string.IsNullOrWhiteSpace(r.Category) ? "Unknown" : r.Category, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.Tier ?? int.MaxValue)
+            .ThenBy(r => string.IsNullOrWhiteSpace(r.Name) ? r.Id : r.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(r =>
+            {
+                string id = string.IsNullOrWhiteSpace(r.Id) ? "?" : r.Id;
+                string name = string.IsNullOrWhiteSpace(r.Name) ? id : r.Name;
+                string category = string.IsNullOrWhiteSpace(r.Category) ? "Unknown" : r.Category;
+                string tier = r.Tier.HasValue ? $" T{r.Tier.Value}" : "";
+                return $"- `{id}`: {name} | {category}{tier}";
+            }));
+    }
+
     internal string RenderShipCatalogLlmMarkdown()
     {
         int currentPage = ShipCatalogue.Page ?? 1;

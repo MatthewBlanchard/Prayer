@@ -8,6 +8,7 @@ internal sealed class SpaceMoltCatalogService
 {
     internal const string FullShipCatalogueCacheFileKey = "ships_full_catalog";
     internal const string FullItemCatalogueCacheFileKey = "items_full_catalog";
+    internal const string FullRecipeCatalogueCacheFileKey = "recipes_full_catalog";
 
     private readonly Func<string, object?, Task<JsonElement>> _executeAsync;
     private readonly SpaceMoltCacheRepository _cacheRepository;
@@ -20,6 +21,8 @@ internal sealed class SpaceMoltCatalogService
     private DateTime? _itemCatalogByIdFetchedAtUtc;
     private Dictionary<string, CatalogueEntry>? _shipCatalogByIdCache;
     private DateTime? _shipCatalogByIdFetchedAtUtc;
+    private Dictionary<string, CatalogueEntry>? _recipeCatalogByIdCache;
+    private DateTime? _recipeCatalogByIdFetchedAtUtc;
 
     public SpaceMoltCatalogService(
         Func<string, object?, Task<JsonElement>> executeAsync,
@@ -61,6 +64,15 @@ internal sealed class SpaceMoltCatalogService
             _shipCatalogByIdFetchedAtUtc = shipFetchedAtUtc;
             GalaxyStateHub.MergeShipCatalog(shipById);
         }
+
+        if (_cacheRepository.TryLoadCatalogByIdCacheFromDisk(
+            AppPaths.RecipeCatalogByIdCacheFile,
+            out var recipeById,
+            out var recipeFetchedAtUtc))
+        {
+            _recipeCatalogByIdCache = recipeById;
+            _recipeCatalogByIdFetchedAtUtc = recipeFetchedAtUtc;
+        }
     }
 
     public bool TryGetCachedCatalogue(string fileKey, out SpaceMoltCatalogueCacheEntry entry)
@@ -82,6 +94,15 @@ internal sealed class SpaceMoltCatalogService
         try
         {
             await GetFullShipCatalogByIdAsync(forceRefresh: false);
+        }
+        catch
+        {
+            // Best-effort: state refresh should not fail because catalog refresh failed.
+        }
+
+        try
+        {
+            await GetFullRecipeCatalogByIdAsync(forceRefresh: false);
         }
         catch
         {
@@ -178,6 +199,47 @@ internal sealed class SpaceMoltCatalogService
         _shipCatalogByIdCache = dictionary;
         _shipCatalogByIdFetchedAtUtc = fetchedAtUtc;
         GalaxyStateHub.MergeShipCatalog(dictionary);
+        return dictionary;
+    }
+
+    public async Task<IReadOnlyDictionary<string, CatalogueEntry>> GetFullRecipeCatalogByIdAsync(
+        bool forceRefresh = false)
+    {
+        if (!forceRefresh &&
+            _recipeCatalogByIdCache != null &&
+            _recipeCatalogByIdCache.Count > 0 &&
+            _recipeCatalogByIdFetchedAtUtc.HasValue)
+        {
+            var age = DateTime.UtcNow - _recipeCatalogByIdFetchedAtUtc.Value;
+            if (age <= _catalogueCacheTtl)
+                return _recipeCatalogByIdCache;
+        }
+
+        if (!forceRefresh &&
+            _cacheRepository.TryLoadCatalogByIdCacheFromDisk(
+                AppPaths.RecipeCatalogByIdCacheFile,
+                out var diskCached,
+                out var diskFetchedAtUtc))
+        {
+            var age = DateTime.UtcNow - diskFetchedAtUtc;
+            if (age <= _catalogueCacheTtl)
+            {
+                _recipeCatalogByIdCache = diskCached;
+                _recipeCatalogByIdFetchedAtUtc = diskFetchedAtUtc;
+                return diskCached;
+            }
+        }
+
+        Catalogue fullCatalogue = await GetOrRefreshFullCatalogueAsync(
+            type: "recipes",
+            fullCacheFileKey: FullRecipeCatalogueCacheFileKey,
+            forceRefresh: forceRefresh);
+
+        var dictionary = BuildCatalogById(fullCatalogue.NormalizedEntries);
+        var fetchedAtUtc = DateTime.UtcNow;
+        _cacheRepository.SaveCatalogByIdCacheToDisk(AppPaths.RecipeCatalogByIdCacheFile, dictionary, fetchedAtUtc);
+        _recipeCatalogByIdCache = dictionary;
+        _recipeCatalogByIdFetchedAtUtc = fetchedAtUtc;
         return dictionary;
     }
 

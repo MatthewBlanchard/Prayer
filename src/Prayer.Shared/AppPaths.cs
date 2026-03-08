@@ -36,6 +36,7 @@ public static class AppPaths
     public static readonly string SpaceMoltSessionsFile = Path.Combine(CacheDir, "spacemolt_sessions.json");
     public static readonly string ItemCatalogByIdCacheFile = Path.Combine(CacheDir, "item_catalog_by_id.json");
     public static readonly string ShipCatalogByIdCacheFile = Path.Combine(CacheDir, "ship_catalog_by_id.json");
+    public static readonly string RecipeCatalogByIdCacheFile = Path.Combine(CacheDir, "recipe_catalog_by_id.json");
     public static readonly string AgentCheckpointsDir = Path.Combine(CacheDir, "agent_checkpoints");
 
     public static readonly string GalaxyMapFile = Path.Combine(CacheDir, "galaxy_map.json");

@@ -301,6 +301,12 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
         return await _catalogService.GetFullShipCatalogByIdAsync(forceRefresh);
     }
 
+    internal async Task<IReadOnlyDictionary<string, CatalogueEntry>> GetFullRecipeCatalogByIdAsync(
+        bool forceRefresh = false)
+    {
+        return await _catalogService.GetFullRecipeCatalogByIdAsync(forceRefresh);
+    }
+
     public async Task<JsonElement> FindRouteAsync(
         string targetSystem,
         CancellationToken cancellationToken = default)

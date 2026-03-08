@@ -23,6 +23,7 @@ public sealed class RuntimeGameStateDto
     public RuntimeShipyardListingEntryDto[] ShipyardListings { get; set; } = Array.Empty<RuntimeShipyardListingEntryDto>();
     public RuntimeCatalogueDto ShipCatalogue { get; set; } = new();
     public RuntimeOwnedShipInfoDto[] OwnedShips { get; set; } = Array.Empty<RuntimeOwnedShipInfoDto>();
+    public RuntimeCatalogueEntryDto[] AvailableRecipes { get; set; } = Array.Empty<RuntimeCatalogueEntryDto>();
     public RuntimeMissionInfoDto[] ActiveMissions { get; set; } = Array.Empty<RuntimeMissionInfoDto>();
     public RuntimeMissionInfoDto[] AvailableMissions { get; set; } = Array.Empty<RuntimeMissionInfoDto>();
     public RuntimeGameNotificationDto[] Notifications { get; set; } = Array.Empty<RuntimeGameNotificationDto>();

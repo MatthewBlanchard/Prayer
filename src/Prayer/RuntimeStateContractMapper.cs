@@ -26,6 +26,7 @@ internal static class RuntimeStateContractMapper
             ShipyardListings = source.ShipyardListings.Select(Map).ToArray(),
             ShipCatalogue = Map(source.ShipCatalogue),
             OwnedShips = source.OwnedShips.Select(Map).ToArray(),
+            AvailableRecipes = source.AvailableRecipes.Select(Map).ToArray(),
             ActiveMissions = source.ActiveMissions.Select(Map).ToArray(),
             AvailableMissions = source.AvailableMissions.Select(Map).ToArray(),
             Notifications = source.Notifications.Select(Map).ToArray(),

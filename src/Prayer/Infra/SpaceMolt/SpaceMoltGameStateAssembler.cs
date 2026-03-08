@@ -193,6 +193,16 @@ internal sealed class SpaceMoltGameStateAssembler
                 stationInfo.ShipyardShowroom ?? Array.Empty<ShipyardShowroomEntry>(),
                 stationInfo.ShipyardListings ?? Array.Empty<ShipyardListingEntry>(),
                 state.ShipCatalogue);
+
+            try
+            {
+                var recipeCatalog = await _owner.GetFullRecipeCatalogByIdAsync(forceRefresh: false);
+                state.AvailableRecipes = recipeCatalog.Values.ToArray();
+            }
+            catch
+            {
+                // Best-effort: recipe catalog failure should not block state assembly.
+            }
         }
         else
         {

@@ -1732,6 +1732,20 @@ function zy(y) { return cy - ((y - cy) * zoom); }
   document.addEventListener('htmx:afterSwap', function (e) {
     var detail = (e || {}).detail || {};
     var elt = detail.elt || null;
+    if (elt && elt.id === 'state-tabs') {
+      var panel = document.getElementById('state-panel');
+      if (panel) {
+        var activePane = panel.querySelector('.tab-pane.active');
+        var activeTab = activePane ? (activePane.id || '').replace(/^state-pane-/, '') : '';
+        var activeBtn = activeTab
+          ? elt.querySelector("[role='tab'].tab-btn[data-tab='" + activeTab + "']")
+          : null;
+        var targetBtn = activeBtn ||
+          elt.querySelector("[role='tab'].tab-btn[data-tab='map']") ||
+          elt.querySelector("[role='tab'].tab-btn");
+        if (targetBtn) activateStateTab(targetBtn, false);
+      }
+    }
     if (elt && elt.classList && elt.classList.contains('tab-pane')) {
       restoreStatePaneUiState(elt);
     }

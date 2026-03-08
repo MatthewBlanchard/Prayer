@@ -283,6 +283,14 @@ public sealed partial class HtmxBotWindow : IAppUi
             return;
         }
 
+        if (req.HttpMethod == "GET" && path == "/partial/state-tabs")
+        {
+            UiSnapshot snapshot;
+            lock (_lock) snapshot = _snapshot;
+            WriteText(ctx.Response, BuildStateTabsHtml(snapshot), "text/html; charset=utf-8");
+            return;
+        }
+
         if (req.HttpMethod == "GET" && path == "/partial/state-strip")
         {
             WriteText(ctx.Response, BuildStateStripHtml(), "text/html; charset=utf-8");

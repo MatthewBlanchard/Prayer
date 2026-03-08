@@ -14,15 +14,16 @@ public sealed partial class HtmxBotWindow
         string Id,
         string Label,
         string Trigger,
-        bool ActiveOnLoad = false);
+        bool ActiveOnLoad = false,
+        bool RequiresDocked = false);
 
     private static readonly IReadOnlyList<StateTabDefinition> StateTabs = new[]
     {
         new StateTabDefinition("map", "Map", "load, every 1000ms", ActiveOnLoad: true),
         new StateTabDefinition("missions", "Missions", "load, every 1000ms"),
         new StateTabDefinition("trade", "Trade", "load, every 1000ms"),
-        new StateTabDefinition("shipyard", "Shipyard", "load, every 1000ms"),
-        new StateTabDefinition("crafting", "Crafting", "load, every 1000ms"),
+        new StateTabDefinition("shipyard", "Shipyard", "load, every 1000ms", RequiresDocked: true),
+        new StateTabDefinition("crafting", "Crafting", "load, every 1000ms", RequiresDocked: true),
     };
 
     private string BuildShellHtml()
@@ -109,13 +110,16 @@ public sealed partial class HtmxBotWindow
 
     private void AppendStateShellHtml(StringBuilder sb)
     {
+        UiSnapshot snapshot;
+        lock (_lock) snapshot = _snapshot;
+
         sb.AppendLine(
             $$"""
             <div class='state-column'>
               <div id='state-strip-inline' hx-get='partial/state-strip' hx-trigger='load, every 1000ms' hx-swap='innerHTML'></div>
               <div id='state-panel' class='card'>
-                <div class='tabs' role='tablist' aria-label='State Sections'>
-            {{BuildStateTabsHtml()}}
+                <div id='state-tabs' class='tabs' role='tablist' aria-label='State Sections' hx-get='partial/state-tabs' hx-trigger='load, every 1000ms' hx-swap='innerHTML'>
+            {{BuildStateTabsHtml(snapshot)}}
                 </div>
                 <div class='tab-content'>
             {{BuildStatePanesHtml()}}
@@ -126,11 +130,12 @@ public sealed partial class HtmxBotWindow
             """);
     }
 
-    private static string BuildStateTabsHtml()
+    private static string BuildStateTabsHtml(UiSnapshot snapshot)
     {
+        var visibleTabs = GetVisibleStateTabs(snapshot);
         return string.Join(
             Environment.NewLine,
-            StateTabs.Select(tab =>
+            visibleTabs.Select(tab =>
             {
                 string tabId = $"tab-{tab.Id}";
                 string paneId = $"state-pane-{tab.Id}";
@@ -138,6 +143,20 @@ public sealed partial class HtmxBotWindow
                 string tabindex = tab.ActiveOnLoad ? "0" : "-1";
                 return $"<button id='{tabId}' type='button' class='tab-btn' role='tab' data-tab='{tab.Id}' aria-selected='{selected}' aria-controls='{paneId}' tabindex='{tabindex}'>{E(tab.Label)}</button>";
             }));
+    }
+
+    private static IReadOnlyList<StateTabDefinition> GetVisibleStateTabs(UiSnapshot snapshot)
+    {
+        var isDocked = IsDocked(snapshot);
+        return StateTabs
+            .Where(tab => !tab.RequiresDocked || isDocked)
+            .ToArray();
+    }
+
+    private static bool IsDocked(UiSnapshot snapshot)
+    {
+        return snapshot.SpaceModel != null &&
+               string.Equals((snapshot.SpaceModel.Docked ?? string.Empty).Trim(), "true", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildStatePanesHtml()

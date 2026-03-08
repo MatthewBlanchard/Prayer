@@ -174,22 +174,6 @@ internal static class MapTabRenderer
                 : $"go {stationPoi.Target}; dock;";
             AppendMapActionButton(sb, "Dock", dockScript);
         }
-        if (stationPoi != null)
-        {
-            var currentIsStation = currentPoi != null && IsStationPoi(currentPoi);
-            if (isDocked && currentIsStation)
-            {
-                AppendMapUiButton(sb, "Shipyard", "window.openStateTab('shipyard')");
-            }
-            else
-            {
-                var shipyardScript = currentPoi != null &&
-                                     string.Equals(currentPoi.Target, stationPoi.Target, StringComparison.OrdinalIgnoreCase)
-                    ? "dock;"
-                    : $"go {stationPoi.Target}; dock;";
-                AppendMapActionButton(sb, "Shipyard", shipyardScript);
-            }
-        }
         sb.AppendLine("</div>");
     }
 
@@ -205,18 +189,6 @@ internal static class MapTabRenderer
             .Append("<button type='submit' class='map-action-btn'>")
             .Append(E(label))
             .AppendLine("</button></form>");
-    }
-
-    private static void AppendMapUiButton(StringBuilder sb, string label, string onClickJs)
-    {
-        if (string.IsNullOrWhiteSpace(onClickJs))
-            return;
-
-        sb.Append("<button type='button' class='map-action-btn map-action-btn-ui' onclick=\"")
-            .Append(E(onClickJs))
-            .Append("\">")
-            .Append(E(label))
-            .AppendLine("</button>");
     }
 
     private static string E(string value) => WebUtility.HtmlEncode(value ?? string.Empty);

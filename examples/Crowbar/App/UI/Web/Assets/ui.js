@@ -617,7 +617,7 @@
           return cx + ((x - cx) * zoom) + panX;
         }
         function projectY(y) {
-          return cy + ((y - cy) * zoom) + panY;
+          return cy - ((y - cy) * zoom) + panY;
         }
 
         var nearestSystem = null;

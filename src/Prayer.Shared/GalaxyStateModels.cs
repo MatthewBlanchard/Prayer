@@ -26,6 +26,6 @@ public class GalaxyMarket
 
 public class GalaxyCatalog
 {
-    public Dictionary<string, CatalogueEntry> ItemsById { get; set; } = new(StringComparer.Ordinal);
-    public Dictionary<string, CatalogueEntry> ShipsById { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ItemCatalogueEntry> ItemsById { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ShipCatalogueEntry> ShipsById { get; set; } = new(StringComparer.Ordinal);
 }

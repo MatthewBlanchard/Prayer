@@ -186,7 +186,10 @@ $@"- {name}
         string RenderItem(CatalogueEntry e)
         {
             var price = e.Price.HasValue ? $" | Price: {e.Price.Value:0}" : "";
-            var category = string.IsNullOrWhiteSpace(e.Category) ? "" : $" | Category: {e.Category}";
+            string categoryValue = !string.IsNullOrWhiteSpace(e.Category)
+                ? e.Category
+                : e.Type;
+            var category = string.IsNullOrWhiteSpace(categoryValue) ? "" : $" | Category: {categoryValue}";
             var tier = e.Tier.HasValue ? $" | Tier: {e.Tier.Value}" : "";
             return $"- {e.Id} ({e.Name}){category}{tier}{price}";
         }

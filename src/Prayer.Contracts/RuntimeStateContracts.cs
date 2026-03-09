@@ -78,8 +78,8 @@ public sealed class RuntimeGalaxyMarketDto
 
 public sealed class RuntimeGalaxyCatalogDto
 {
-    public Dictionary<string, RuntimeCatalogueEntryDto> ItemsById { get; set; } = new(StringComparer.Ordinal);
-    public Dictionary<string, RuntimeCatalogueEntryDto> ShipsById { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, RuntimeItemCatalogueEntryDto> ItemsById { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, RuntimeShipCatalogueEntryDto> ShipsById { get; set; } = new(StringComparer.Ordinal);
 }
 
 public sealed class RuntimeGalaxyMapSnapshotDto
@@ -297,7 +297,7 @@ public sealed class RuntimeCatalogueDto
     public RuntimeCatalogueEntryDto[] Ships { get; set; } = Array.Empty<RuntimeCatalogueEntryDto>();
 }
 
-public sealed class RuntimeCatalogueEntryDto
+public class RuntimeCatalogueEntryDto
 {
     [JsonPropertyName("id")]
     public string Id { get; set; } = "";
@@ -313,6 +313,9 @@ public sealed class RuntimeCatalogueEntryDto
 
     [JsonPropertyName("category")]
     public string Category { get; set; } = "";
+
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "";
 
     [JsonPropertyName("tier")]
     public int? Tier { get; set; }
@@ -355,6 +358,14 @@ public sealed class RuntimeCatalogueEntryDto
 
     [JsonPropertyName("inputs")]
     public RuntimeRecipeIngredientEntryDto[] Inputs { get; set; } = Array.Empty<RuntimeRecipeIngredientEntryDto>();
+}
+
+public sealed class RuntimeItemCatalogueEntryDto : RuntimeCatalogueEntryDto
+{
+}
+
+public sealed class RuntimeShipCatalogueEntryDto : RuntimeCatalogueEntryDto
+{
 }
 
 public sealed class RuntimeRecipeIngredientEntryDto

@@ -6,11 +6,11 @@ using System.Text.Json;
 
 internal sealed class SpaceMoltCacheRepository
 {
-    private sealed class CatalogByIdSnapshot
+    private sealed class CatalogByIdSnapshot<TEntry> where TEntry : CatalogueEntry
     {
         public DateTime FetchedAtUtc { get; set; }
         public int EntryCount { get; set; }
-        public Dictionary<string, CatalogueEntry> Entries { get; set; } = new(StringComparer.Ordinal);
+        public Dictionary<string, TEntry> Entries { get; set; } = new(StringComparer.Ordinal);
     }
 
     public void LoadMarketCachesFromDisk(
@@ -248,10 +248,11 @@ internal sealed class SpaceMoltCacheRepository
         SafeDelete(GetCatalogueCachePath(fileKey));
     }
 
-    public void SaveCatalogByIdCacheToDisk(
+    public void SaveCatalogByIdCacheToDisk<TEntry>(
         string cachePath,
-        IReadOnlyDictionary<string, CatalogueEntry> byId,
+        IReadOnlyDictionary<string, TEntry> byId,
         DateTime fetchedAtUtc)
+        where TEntry : CatalogueEntry
     {
         try
         {
@@ -261,11 +262,11 @@ internal sealed class SpaceMoltCacheRepository
                 WriteIndented = true
             };
 
-            var snapshot = new CatalogByIdSnapshot
+            var snapshot = new CatalogByIdSnapshot<TEntry>
             {
                 FetchedAtUtc = fetchedAtUtc,
                 EntryCount = byId.Count,
-                Entries = new Dictionary<string, CatalogueEntry>(byId, StringComparer.Ordinal)
+                Entries = new Dictionary<string, TEntry>(byId, StringComparer.Ordinal)
             };
 
             string json = JsonSerializer.Serialize(snapshot, options);
@@ -277,12 +278,13 @@ internal sealed class SpaceMoltCacheRepository
         }
     }
 
-    public bool TryLoadCatalogByIdCacheFromDisk(
+    public bool TryLoadCatalogByIdCacheFromDisk<TEntry>(
         string cachePath,
-        out Dictionary<string, CatalogueEntry> byId,
+        out Dictionary<string, TEntry> byId,
         out DateTime fetchedAtUtc)
+        where TEntry : CatalogueEntry
     {
-        byId = new Dictionary<string, CatalogueEntry>(StringComparer.Ordinal);
+        byId = new Dictionary<string, TEntry>(StringComparer.Ordinal);
         fetchedAtUtc = default;
 
         try
@@ -294,21 +296,21 @@ internal sealed class SpaceMoltCacheRepository
             if (string.IsNullOrWhiteSpace(raw))
                 return false;
 
-            var snapshot = JsonSerializer.Deserialize<CatalogByIdSnapshot>(raw);
+            var snapshot = JsonSerializer.Deserialize<CatalogByIdSnapshot<TEntry>>(raw);
             if (snapshot != null &&
                 snapshot.FetchedAtUtc != default &&
                 snapshot.Entries != null &&
                 snapshot.Entries.Count > 0)
             {
-                byId = new Dictionary<string, CatalogueEntry>(snapshot.Entries, StringComparer.Ordinal);
+                byId = new Dictionary<string, TEntry>(snapshot.Entries, StringComparer.Ordinal);
                 fetchedAtUtc = snapshot.FetchedAtUtc;
                 return true;
             }
 
-            var legacy = JsonSerializer.Deserialize<Dictionary<string, CatalogueEntry>>(raw);
+            var legacy = JsonSerializer.Deserialize<Dictionary<string, TEntry>>(raw);
             if (legacy != null && legacy.Count > 0)
             {
-                byId = new Dictionary<string, CatalogueEntry>(legacy, StringComparer.Ordinal);
+                byId = new Dictionary<string, TEntry>(legacy, StringComparer.Ordinal);
                 fetchedAtUtc = File.GetLastWriteTimeUtc(cachePath);
                 return true;
             }

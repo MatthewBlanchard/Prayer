@@ -236,14 +236,14 @@ Cargo: {Ship.CargoUsed}/{Ship.CargoCapacity}
             return "- _(none)_";
 
         return string.Join("\n", recipes
-            .OrderBy(r => string.IsNullOrWhiteSpace(r.Category) ? "Unknown" : r.Category, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(r => ResolveCatalogCategory(r), StringComparer.OrdinalIgnoreCase)
             .ThenBy(r => r.Tier ?? int.MaxValue)
             .ThenBy(r => string.IsNullOrWhiteSpace(r.Name) ? r.Id : r.Name, StringComparer.OrdinalIgnoreCase)
             .Select(r =>
             {
                 string id = string.IsNullOrWhiteSpace(r.Id) ? "?" : r.Id;
                 string name = string.IsNullOrWhiteSpace(r.Name) ? id : r.Name;
-                string category = string.IsNullOrWhiteSpace(r.Category) ? "Unknown" : r.Category;
+                string category = ResolveCatalogCategory(r);
                 string tier = r.Tier.HasValue ? $" T{r.Tier.Value}" : "";
                 return $"- `{id}`: {name} | {category}{tier}";
             }));
@@ -772,7 +772,7 @@ Your Open Sell Orders:
             string shipClass = !string.IsNullOrWhiteSpace(e.ClassId)
                 ? e.ClassId
                 : (string.IsNullOrWhiteSpace(e.Class) ? "-" : e.Class);
-            string category = string.IsNullOrWhiteSpace(e.Category) ? "-" : e.Category;
+            string category = ResolveCatalogCategoryOrDash(e);
             int? hull = e.Hull ?? e.BaseHull;
             int? shield = e.Shield ?? e.BaseShield;
             int? cargo = e.Cargo ?? e.CargoCapacity;
@@ -783,6 +783,25 @@ Your Open Sell Orders:
 
             return $"- `{id}`: {name} | Class {shipClass} | {category} | T{e.Tier?.ToString() ?? "-"} | Scale {e.Scale?.ToString() ?? "-"} | Hull {hull?.ToString() ?? "-"} | Shield {shield?.ToString() ?? "-"} | Cargo {cargo?.ToString() ?? "-"} | Speed {speed?.ToString() ?? "-"} | {price}";
         }));
+    }
+
+    private static string ResolveCatalogCategory(CatalogueEntry entry)
+    {
+        string category = (entry.Category ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(category))
+            return category;
+
+        string type = (entry.Type ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(type))
+            return type;
+
+        return "Unknown";
+    }
+
+    private static string ResolveCatalogCategoryOrDash(CatalogueEntry entry)
+    {
+        string value = ResolveCatalogCategory(entry);
+        return string.Equals(value, "Unknown", StringComparison.Ordinal) ? "-" : value;
     }
 
     private static string FormatNotifications(GameNotification[] notifications)

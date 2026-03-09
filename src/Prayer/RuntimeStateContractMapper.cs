@@ -116,6 +116,72 @@ internal static class RuntimeStateContractMapper
         };
     }
 
+    private static Contracts.RuntimeItemCatalogueEntryDto Map(ItemCatalogueEntry source)
+    {
+        return new Contracts.RuntimeItemCatalogueEntryDto
+        {
+            Id = source.Id,
+            Name = source.Name,
+            ClassId = source.ClassId,
+            Class = source.Class,
+            Category = source.Category,
+            Type = source.Type,
+            Tier = source.Tier,
+            Scale = source.Scale,
+            Hull = source.Hull,
+            BaseHull = source.BaseHull,
+            Shield = source.Shield,
+            BaseShield = source.BaseShield,
+            Cargo = source.Cargo,
+            CargoCapacity = source.CargoCapacity,
+            Speed = source.Speed,
+            BaseSpeed = source.BaseSpeed,
+            Price = source.Price,
+            MaterialsById = source.MaterialsById == null
+                ? null
+                : new Dictionary<string, int>(source.MaterialsById, StringComparer.Ordinal),
+            Ingredients = (source.Ingredients ?? Array.Empty<RecipeIngredientEntry>())
+                .Select(Map)
+                .ToArray(),
+            Inputs = (source.Inputs ?? Array.Empty<RecipeIngredientEntry>())
+                .Select(Map)
+                .ToArray()
+        };
+    }
+
+    private static Contracts.RuntimeShipCatalogueEntryDto Map(ShipCatalogueEntry source)
+    {
+        return new Contracts.RuntimeShipCatalogueEntryDto
+        {
+            Id = source.Id,
+            Name = source.Name,
+            ClassId = source.ClassId,
+            Class = source.Class,
+            Category = source.Category,
+            Type = source.Type,
+            Tier = source.Tier,
+            Scale = source.Scale,
+            Hull = source.Hull,
+            BaseHull = source.BaseHull,
+            Shield = source.Shield,
+            BaseShield = source.BaseShield,
+            Cargo = source.Cargo,
+            CargoCapacity = source.CargoCapacity,
+            Speed = source.Speed,
+            BaseSpeed = source.BaseSpeed,
+            Price = source.Price,
+            MaterialsById = source.MaterialsById == null
+                ? null
+                : new Dictionary<string, int>(source.MaterialsById, StringComparer.Ordinal),
+            Ingredients = (source.Ingredients ?? Array.Empty<RecipeIngredientEntry>())
+                .Select(Map)
+                .ToArray(),
+            Inputs = (source.Inputs ?? Array.Empty<RecipeIngredientEntry>())
+                .Select(Map)
+                .ToArray()
+        };
+    }
+
     private static Contracts.RuntimeGalaxyMapSnapshotDto Map(GalaxyMapSnapshot source)
     {
         return new Contracts.RuntimeGalaxyMapSnapshotDto
@@ -385,6 +451,7 @@ internal static class RuntimeStateContractMapper
             ClassId = source.ClassId,
             Class = source.Class,
             Category = source.Category,
+            Type = source.Type,
             Tier = source.Tier,
             Scale = source.Scale,
             Hull = source.Hull,

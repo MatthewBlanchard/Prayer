@@ -206,6 +206,7 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
         }
 
         PersistSessionSnapshot();
+        await _catalogService.EnsureFreshCataloguesAsync(forceRefresh: true);
         await RefreshLatestStateFromApiAsync();
     }
 
@@ -220,6 +221,7 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
         _password = password;
 
         PersistSessionSnapshot();
+        await _catalogService.EnsureFreshCataloguesAsync(forceRefresh: true);
         await RefreshLatestStateFromApiAsync();
         return password;
     }
@@ -289,13 +291,13 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
         }
     }
 
-    public async Task<IReadOnlyDictionary<string, CatalogueEntry>> GetFullItemCatalogByIdAsync(
+    public async Task<IReadOnlyDictionary<string, ItemCatalogueEntry>> GetFullItemCatalogByIdAsync(
         bool forceRefresh = false)
     {
         return await _catalogService.GetFullItemCatalogByIdAsync(forceRefresh);
     }
 
-    public async Task<IReadOnlyDictionary<string, CatalogueEntry>> GetFullShipCatalogByIdAsync(
+    public async Task<IReadOnlyDictionary<string, ShipCatalogueEntry>> GetFullShipCatalogByIdAsync(
         bool forceRefresh = false)
     {
         return await _catalogService.GetFullShipCatalogByIdAsync(forceRefresh);

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -81,6 +82,9 @@ public class CatalogueEntry
     [JsonPropertyName("category")]
     public string Category { get; set; } = "";
 
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "";
+
     [JsonPropertyName("tier")]
     public int? Tier { get; set; }
 
@@ -122,6 +126,78 @@ public class CatalogueEntry
 
     [JsonPropertyName("inputs")]
     public RecipeIngredientEntry[] Inputs { get; set; } = Array.Empty<RecipeIngredientEntry>();
+}
+
+public sealed class ItemCatalogueEntry : CatalogueEntry
+{
+    public static ItemCatalogueEntry From(CatalogueEntry source)
+    {
+        return new ItemCatalogueEntry
+        {
+            Id = source.Id,
+            Name = source.Name,
+            ClassId = source.ClassId,
+            Class = source.Class,
+            Category = source.Category,
+            Type = source.Type,
+            Tier = source.Tier,
+            Scale = source.Scale,
+            Hull = source.Hull,
+            BaseHull = source.BaseHull,
+            Shield = source.Shield,
+            BaseShield = source.BaseShield,
+            Cargo = source.Cargo,
+            CargoCapacity = source.CargoCapacity,
+            Speed = source.Speed,
+            BaseSpeed = source.BaseSpeed,
+            Price = source.Price,
+            MaterialsById = source.MaterialsById == null
+                ? null
+                : new Dictionary<string, int>(source.MaterialsById, StringComparer.Ordinal),
+            Ingredients = source.Ingredients == null
+                ? Array.Empty<RecipeIngredientEntry>()
+                : (RecipeIngredientEntry[])source.Ingredients.Clone(),
+            Inputs = source.Inputs == null
+                ? Array.Empty<RecipeIngredientEntry>()
+                : (RecipeIngredientEntry[])source.Inputs.Clone()
+        };
+    }
+}
+
+public sealed class ShipCatalogueEntry : CatalogueEntry
+{
+    public static ShipCatalogueEntry From(CatalogueEntry source)
+    {
+        return new ShipCatalogueEntry
+        {
+            Id = source.Id,
+            Name = source.Name,
+            ClassId = source.ClassId,
+            Class = source.Class,
+            Category = source.Category,
+            Type = source.Type,
+            Tier = source.Tier,
+            Scale = source.Scale,
+            Hull = source.Hull,
+            BaseHull = source.BaseHull,
+            Shield = source.Shield,
+            BaseShield = source.BaseShield,
+            Cargo = source.Cargo,
+            CargoCapacity = source.CargoCapacity,
+            Speed = source.Speed,
+            BaseSpeed = source.BaseSpeed,
+            Price = source.Price,
+            MaterialsById = source.MaterialsById == null
+                ? null
+                : new Dictionary<string, int>(source.MaterialsById, StringComparer.Ordinal),
+            Ingredients = source.Ingredients == null
+                ? Array.Empty<RecipeIngredientEntry>()
+                : (RecipeIngredientEntry[])source.Ingredients.Clone(),
+            Inputs = source.Inputs == null
+                ? Array.Empty<RecipeIngredientEntry>()
+                : (RecipeIngredientEntry[])source.Inputs.Clone()
+        };
+    }
 }
 
 public sealed class RecipeIngredientEntry

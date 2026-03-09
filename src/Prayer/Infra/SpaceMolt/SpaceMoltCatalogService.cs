@@ -17,9 +17,9 @@ internal sealed class SpaceMoltCatalogService
     private readonly Dictionary<string, SpaceMoltCatalogueCacheEntry> _catalogueCache
         = new(StringComparer.Ordinal);
 
-    private Dictionary<string, CatalogueEntry>? _itemCatalogByIdCache;
+    private Dictionary<string, ItemCatalogueEntry>? _itemCatalogByIdCache;
     private DateTime? _itemCatalogByIdFetchedAtUtc;
-    private Dictionary<string, CatalogueEntry>? _shipCatalogByIdCache;
+    private Dictionary<string, ShipCatalogueEntry>? _shipCatalogByIdCache;
     private DateTime? _shipCatalogByIdFetchedAtUtc;
     private Dictionary<string, CatalogueEntry>? _recipeCatalogByIdCache;
     private DateTime? _recipeCatalogByIdFetchedAtUtc;
@@ -45,7 +45,7 @@ internal sealed class SpaceMoltCatalogService
 
     public void PromoteCachedCatalogState()
     {
-        if (_cacheRepository.TryLoadCatalogByIdCacheFromDisk(
+        if (_cacheRepository.TryLoadCatalogByIdCacheFromDisk<ItemCatalogueEntry>(
             AppPaths.ItemCatalogByIdCacheFile,
             out var byId,
             out var fetchedAtUtc))
@@ -55,7 +55,7 @@ internal sealed class SpaceMoltCatalogService
             GalaxyStateHub.MergeItemCatalog(byId);
         }
 
-        if (_cacheRepository.TryLoadCatalogByIdCacheFromDisk(
+        if (_cacheRepository.TryLoadCatalogByIdCacheFromDisk<ShipCatalogueEntry>(
             AppPaths.ShipCatalogByIdCacheFile,
             out var shipById,
             out var shipFetchedAtUtc))
@@ -65,7 +65,7 @@ internal sealed class SpaceMoltCatalogService
             GalaxyStateHub.MergeShipCatalog(shipById);
         }
 
-        if (_cacheRepository.TryLoadCatalogByIdCacheFromDisk(
+        if (_cacheRepository.TryLoadCatalogByIdCacheFromDisk<CatalogueEntry>(
             AppPaths.RecipeCatalogByIdCacheFile,
             out var recipeById,
             out var recipeFetchedAtUtc))
@@ -80,11 +80,11 @@ internal sealed class SpaceMoltCatalogService
         return _catalogueCache.TryGetValue(fileKey, out entry!);
     }
 
-    public async Task EnsureFreshCataloguesAsync()
+    public async Task EnsureFreshCataloguesAsync(bool forceRefresh = false)
     {
         try
         {
-            await GetFullItemCatalogByIdAsync(forceRefresh: false);
+            await GetFullItemCatalogByIdAsync(forceRefresh: forceRefresh);
         }
         catch
         {
@@ -93,7 +93,7 @@ internal sealed class SpaceMoltCatalogService
 
         try
         {
-            await GetFullShipCatalogByIdAsync(forceRefresh: false);
+            await GetFullShipCatalogByIdAsync(forceRefresh: forceRefresh);
         }
         catch
         {
@@ -102,7 +102,7 @@ internal sealed class SpaceMoltCatalogService
 
         try
         {
-            await GetFullRecipeCatalogByIdAsync(forceRefresh: false);
+            await GetFullRecipeCatalogByIdAsync(forceRefresh: forceRefresh);
         }
         catch
         {
@@ -110,7 +110,7 @@ internal sealed class SpaceMoltCatalogService
         }
     }
 
-    public async Task<IReadOnlyDictionary<string, CatalogueEntry>> GetFullItemCatalogByIdAsync(
+    public async Task<IReadOnlyDictionary<string, ItemCatalogueEntry>> GetFullItemCatalogByIdAsync(
         bool forceRefresh = false)
     {
         if (!forceRefresh &&
@@ -127,7 +127,7 @@ internal sealed class SpaceMoltCatalogService
         }
 
         if (!forceRefresh &&
-            _cacheRepository.TryLoadCatalogByIdCacheFromDisk(
+            _cacheRepository.TryLoadCatalogByIdCacheFromDisk<ItemCatalogueEntry>(
                 AppPaths.ItemCatalogByIdCacheFile,
                 out var diskCached,
                 out var diskFetchedAtUtc))
@@ -147,7 +147,7 @@ internal sealed class SpaceMoltCatalogService
             fullCacheFileKey: FullItemCatalogueCacheFileKey,
             forceRefresh: forceRefresh);
 
-        var dictionary = BuildCatalogById(fullCatalogue.NormalizedEntries);
+        var dictionary = BuildItemCatalogById(fullCatalogue.NormalizedEntries);
         var fetchedAtUtc = DateTime.UtcNow;
         _cacheRepository.SaveCatalogByIdCacheToDisk(AppPaths.ItemCatalogByIdCacheFile, dictionary, fetchedAtUtc);
         _itemCatalogByIdCache = dictionary;
@@ -156,7 +156,7 @@ internal sealed class SpaceMoltCatalogService
         return dictionary;
     }
 
-    public async Task<IReadOnlyDictionary<string, CatalogueEntry>> GetFullShipCatalogByIdAsync(
+    public async Task<IReadOnlyDictionary<string, ShipCatalogueEntry>> GetFullShipCatalogByIdAsync(
         bool forceRefresh = false)
     {
         if (!forceRefresh &&
@@ -173,7 +173,7 @@ internal sealed class SpaceMoltCatalogService
         }
 
         if (!forceRefresh &&
-            _cacheRepository.TryLoadCatalogByIdCacheFromDisk(
+            _cacheRepository.TryLoadCatalogByIdCacheFromDisk<ShipCatalogueEntry>(
                 AppPaths.ShipCatalogByIdCacheFile,
                 out var diskCached,
                 out var diskFetchedAtUtc))
@@ -193,7 +193,7 @@ internal sealed class SpaceMoltCatalogService
             fullCacheFileKey: FullShipCatalogueCacheFileKey,
             forceRefresh: forceRefresh);
 
-        var dictionary = BuildCatalogById(fullCatalogue.NormalizedEntries);
+        var dictionary = BuildShipCatalogById(fullCatalogue.NormalizedEntries);
         var fetchedAtUtc = DateTime.UtcNow;
         _cacheRepository.SaveCatalogByIdCacheToDisk(AppPaths.ShipCatalogByIdCacheFile, dictionary, fetchedAtUtc);
         _shipCatalogByIdCache = dictionary;
@@ -217,7 +217,7 @@ internal sealed class SpaceMoltCatalogService
         }
 
         if (!forceRefresh &&
-            _cacheRepository.TryLoadCatalogByIdCacheFromDisk(
+            _cacheRepository.TryLoadCatalogByIdCacheFromDisk<CatalogueEntry>(
                 AppPaths.RecipeCatalogByIdCacheFile,
                 out var diskCached,
                 out var diskFetchedAtUtc))
@@ -370,6 +370,15 @@ internal sealed class SpaceMoltCatalogService
                 page = 1,
                 page_size = _catalogFetchPageSize
             });
+        await SpaceMoltHttpLogging.LogItemCatalogAsync(
+            type,
+            category: null,
+            id: null,
+            page: 1,
+            pageSize: _catalogFetchPageSize,
+            search: null,
+            source: "api_full_page",
+            rawPayload: firstResult.GetRawText());
 
         Catalogue firstPage = Catalogue.FromJson(firstResult);
         int totalPages = Math.Max(1, firstPage.TotalPages ?? 1);
@@ -387,6 +396,15 @@ internal sealed class SpaceMoltCatalogService
                     page,
                     page_size = pageSize
                 });
+            await SpaceMoltHttpLogging.LogItemCatalogAsync(
+                type,
+                category: null,
+                id: null,
+                page: page,
+                pageSize: pageSize,
+                search: null,
+                source: "api_full_page",
+                rawPayload: pageResult.GetRawText());
 
             Catalogue parsedPage = Catalogue.FromJson(pageResult);
             allEntries.AddRange(parsedPage.NormalizedEntries);
@@ -417,6 +435,34 @@ internal sealed class SpaceMoltCatalogService
                 continue;
 
             map[entry.Id] = entry;
+        }
+
+        return map;
+    }
+
+    private static Dictionary<string, ItemCatalogueEntry> BuildItemCatalogById(IEnumerable<CatalogueEntry> entries)
+    {
+        var map = new Dictionary<string, ItemCatalogueEntry>(StringComparer.Ordinal);
+        foreach (var entry in entries)
+        {
+            if (entry == null || string.IsNullOrWhiteSpace(entry.Id))
+                continue;
+
+            map[entry.Id] = ItemCatalogueEntry.From(entry);
+        }
+
+        return map;
+    }
+
+    private static Dictionary<string, ShipCatalogueEntry> BuildShipCatalogById(IEnumerable<CatalogueEntry> entries)
+    {
+        var map = new Dictionary<string, ShipCatalogueEntry>(StringComparer.Ordinal);
+        foreach (var entry in entries)
+        {
+            if (entry == null || string.IsNullOrWhiteSpace(entry.Id))
+                continue;
+
+            map[entry.Id] = ShipCatalogueEntry.From(entry);
         }
 
         return map;

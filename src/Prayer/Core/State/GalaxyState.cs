@@ -7,8 +7,8 @@ internal static class GalaxyStateHub
     private static readonly object Sync = new();
     private static GalaxyMapSnapshot _map = new();
     private static readonly Dictionary<string, MarketState> MarketsByStation = new(StringComparer.Ordinal);
-    private static readonly Dictionary<string, CatalogueEntry> ItemCatalogById = new(StringComparer.Ordinal);
-    private static readonly Dictionary<string, CatalogueEntry> ShipCatalogById = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, ItemCatalogueEntry> ItemCatalogById = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, ShipCatalogueEntry> ShipCatalogById = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, HashSet<string>> ResourceSystemsById = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, HashSet<string>> ResourcePoisById = new(StringComparer.Ordinal);
     private static GalaxyState _snapshot = new();
@@ -48,7 +48,7 @@ internal static class GalaxyStateHub
         }
     }
 
-    public static void MergeItemCatalog(IReadOnlyDictionary<string, CatalogueEntry>? byId)
+    public static void MergeItemCatalog(IReadOnlyDictionary<string, ItemCatalogueEntry>? byId)
     {
         if (byId == null || byId.Count == 0)
             return;
@@ -61,14 +61,14 @@ internal static class GalaxyStateHub
                 if (string.IsNullOrWhiteSpace(itemId) || entry == null)
                     continue;
 
-                ItemCatalogById[itemId] = CloneCatalogueEntry(entry);
+                ItemCatalogById[itemId] = CloneItemCatalogueEntry(entry);
             }
 
             RebuildSnapshotNoLock();
         }
     }
 
-    public static void MergeShipCatalog(IReadOnlyDictionary<string, CatalogueEntry>? byId)
+    public static void MergeShipCatalog(IReadOnlyDictionary<string, ShipCatalogueEntry>? byId)
     {
         if (byId == null || byId.Count == 0)
             return;
@@ -81,7 +81,7 @@ internal static class GalaxyStateHub
                 if (string.IsNullOrWhiteSpace(shipId) || entry == null)
                     continue;
 
-                ShipCatalogById[shipId] = CloneCatalogueEntry(entry);
+                ShipCatalogById[shipId] = CloneShipCatalogueEntry(entry);
             }
 
             RebuildSnapshotNoLock();
@@ -168,8 +168,8 @@ internal static class GalaxyStateHub
             },
             Catalog = new GalaxyCatalog
             {
-                ItemsById = CloneCatalogById(ItemCatalogById),
-                ShipsById = CloneCatalogById(ShipCatalogById)
+                ItemsById = CloneItemCatalogById(ItemCatalogById),
+                ShipsById = CloneShipCatalogById(ShipCatalogById)
             },
             Resources = new GalaxyResources
             {
@@ -192,16 +192,31 @@ internal static class GalaxyStateHub
             StringComparer.Ordinal);
     }
 
-    private static Dictionary<string, CatalogueEntry> CloneCatalogById(
-        IReadOnlyDictionary<string, CatalogueEntry> source)
+    private static Dictionary<string, ItemCatalogueEntry> CloneItemCatalogById(
+        IReadOnlyDictionary<string, ItemCatalogueEntry> source)
     {
-        var clone = new Dictionary<string, CatalogueEntry>(StringComparer.Ordinal);
+        var clone = new Dictionary<string, ItemCatalogueEntry>(StringComparer.Ordinal);
         foreach (var (id, entry) in source)
         {
             if (string.IsNullOrWhiteSpace(id) || entry == null)
                 continue;
 
-            clone[id] = CloneCatalogueEntry(entry);
+            clone[id] = CloneItemCatalogueEntry(entry);
+        }
+
+        return clone;
+    }
+
+    private static Dictionary<string, ShipCatalogueEntry> CloneShipCatalogById(
+        IReadOnlyDictionary<string, ShipCatalogueEntry> source)
+    {
+        var clone = new Dictionary<string, ShipCatalogueEntry>(StringComparer.Ordinal);
+        foreach (var (id, entry) in source)
+        {
+            if (string.IsNullOrWhiteSpace(id) || entry == null)
+                continue;
+
+            clone[id] = CloneShipCatalogueEntry(entry);
         }
 
         return clone;
@@ -374,8 +389,8 @@ internal static class GalaxyStateHub
             },
             Catalog = new GalaxyCatalog
             {
-                ItemsById = CloneCatalogById(source.Catalog.ItemsById),
-                ShipsById = CloneCatalogById(source.Catalog.ShipsById)
+                ItemsById = CloneItemCatalogById(source.Catalog.ItemsById),
+                ShipsById = CloneShipCatalogById(source.Catalog.ShipsById)
             },
             Resources = new GalaxyResources
             {
@@ -476,15 +491,40 @@ internal static class GalaxyStateHub
         };
     }
 
-    private static CatalogueEntry CloneCatalogueEntry(CatalogueEntry entry)
+    private static ItemCatalogueEntry CloneItemCatalogueEntry(ItemCatalogueEntry entry)
     {
-        return new CatalogueEntry
+        return new ItemCatalogueEntry
         {
             Id = entry.Id,
             Name = entry.Name,
             ClassId = entry.ClassId,
             Class = entry.Class,
             Category = entry.Category,
+            Type = entry.Type,
+            Tier = entry.Tier,
+            Scale = entry.Scale,
+            Hull = entry.Hull,
+            BaseHull = entry.BaseHull,
+            Shield = entry.Shield,
+            BaseShield = entry.BaseShield,
+            Cargo = entry.Cargo,
+            CargoCapacity = entry.CargoCapacity,
+            Speed = entry.Speed,
+            BaseSpeed = entry.BaseSpeed,
+            Price = entry.Price
+        };
+    }
+
+    private static ShipCatalogueEntry CloneShipCatalogueEntry(ShipCatalogueEntry entry)
+    {
+        return new ShipCatalogueEntry
+        {
+            Id = entry.Id,
+            Name = entry.Name,
+            ClassId = entry.ClassId,
+            Class = entry.Class,
+            Category = entry.Category,
+            Type = entry.Type,
             Tier = entry.Tier,
             Scale = entry.Scale,
             Hull = entry.Hull,

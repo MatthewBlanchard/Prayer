@@ -66,13 +66,13 @@ public sealed class SpaceMoltRuntimeTransportAdapter : IRuntimeTransport
         return MapRateLimitAsync(() => _client.GetMapSnapshotAsync(forceRefresh));
     }
 
-    public Task<IReadOnlyDictionary<string, CatalogueEntry>> GetFullItemCatalogByIdAsync(
+    public Task<IReadOnlyDictionary<string, ItemCatalogueEntry>> GetFullItemCatalogByIdAsync(
         bool forceRefresh = false)
     {
         return MapRateLimitAsync(() => _client.GetFullItemCatalogByIdAsync(forceRefresh));
     }
 
-    public Task<IReadOnlyDictionary<string, CatalogueEntry>> GetFullShipCatalogByIdAsync(
+    public Task<IReadOnlyDictionary<string, ShipCatalogueEntry>> GetFullShipCatalogByIdAsync(
         bool forceRefresh = false)
     {
         return MapRateLimitAsync(() => _client.GetFullShipCatalogByIdAsync(forceRefresh));

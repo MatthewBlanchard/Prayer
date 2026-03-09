@@ -21,10 +21,10 @@ public interface IRuntimeTransport
 
     Task<GalaxyMapSnapshot> GetMapSnapshotAsync(bool forceRefresh = false);
 
-    Task<IReadOnlyDictionary<string, CatalogueEntry>> GetFullItemCatalogByIdAsync(
+    Task<IReadOnlyDictionary<string, ItemCatalogueEntry>> GetFullItemCatalogByIdAsync(
         bool forceRefresh = false);
 
-    Task<IReadOnlyDictionary<string, CatalogueEntry>> GetFullShipCatalogByIdAsync(
+    Task<IReadOnlyDictionary<string, ShipCatalogueEntry>> GetFullShipCatalogByIdAsync(
         bool forceRefresh = false);
 
     GameState GetLatestState();

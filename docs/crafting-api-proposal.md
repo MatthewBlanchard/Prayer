@@ -130,33 +130,6 @@ public CatalogueEntry[] AvailableRecipes { get; set; } = Array.Empty<CatalogueEn
 
 Extend `ApplyDockedStationState` signature to accept `CatalogueEntry[] availableRecipes` and assign it to state. Keeps all docked data flowing through one method.
 
-### 3.5 `GameStateRendering` — Crafting LLM Context
-
-**File:** `src/Prayer/Core/State/GameStateRendering.cs`
-
-Add `RenderCraftingLlmMarkdown()`:
-
-```
-Active Context: `CraftingState`
-Current Station: `<poi_id>`
-Credits: <n>
-Cargo: <used>/<capacity>
-
-### Available Recipes
-- `module_shield_basic`: Basic Shield Module | Crafting | T1 | Materials: iron_ore x5, ...
-- `module_engine_boost`: Engine Boost Module | Crafting | T2 | ...
-
-### Cargo
-<cargo items>
-
-### Storage Items
-<storage items>
-```
-
-This mirrors the existing `RenderTradeLlmMarkdown` / `RenderShipyardLlmMarkdown` pattern and is used when the LLM agent is executing within a crafting-focused script block.
-
----
-
 ## 4. Crowbar — Proposed Changes
 
 Crowbar is the HTMX UI shell (`examples/Crowbar/`) that consumes Prayer's HTTP API and renders live state. It mirrors the same `GameState` structure through `AppUiStateBuilder`.

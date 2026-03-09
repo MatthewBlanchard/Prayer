@@ -15,6 +15,7 @@ public enum LogKind
     ScriptWriterContext,
     PromptGenerationPairs,
     AstWalker,
+    RuntimeHost,
     GoArgValidation,
     GoArgValidationMapDump,
     UiHttpError,

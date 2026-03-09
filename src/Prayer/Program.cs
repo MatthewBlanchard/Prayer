@@ -579,7 +579,14 @@ internal sealed class PrayerRuntimeSession : IDisposable
             line =>
             {
                 if (!string.IsNullOrWhiteSpace(line))
+                {
                     _logger.LogWarning("RuntimeHost: {Line}", line);
+                    LogSink.Instance.Enqueue(new LogEvent(
+                        DateTime.UtcNow,
+                        LogKind.RuntimeHost,
+                        $"[{DateTime.UtcNow:O}] {line}{Environment.NewLine}",
+                        AppPaths.RuntimeHostLogFile));
+                }
             },
             reason =>
             {
@@ -636,10 +643,10 @@ internal sealed class PrayerRuntimeSession : IDisposable
     public DateTime LastHaltedSnapshotAt { get; private set; } = DateTime.MinValue;
     public long StateVersion => Interlocked.Read(ref _stateVersion);
 
-    public Channel<string> ControlInputQueue { get; } = Channel.CreateUnbounded<string>();
+    public Channel<RuntimeControlInputRequest> ControlInputQueue { get; } = Channel.CreateUnbounded<RuntimeControlInputRequest>();
     public Channel<string> GenerateScriptQueue { get; } = Channel.CreateUnbounded<string>();
     public Channel<bool> SaveExampleQueue { get; } = Channel.CreateUnbounded<bool>();
-    public Channel<bool> HaltNowQueue { get; } = Channel.CreateUnbounded<bool>();
+    public Channel<RuntimeHaltRequest> HaltNowQueue { get; } = Channel.CreateUnbounded<RuntimeHaltRequest>();
     public CancellationTokenSource WorkerCts { get; } = new();
     public Task WorkerTask { get; }
 
@@ -785,10 +792,10 @@ internal sealed class PrayerRuntimeSession : IDisposable
                     (success, responseMessage) = (false, "script cannot be empty");
                 else
                 {
-                    RuntimeHost.RequestHaltNow();
+                    RuntimeHost.RequestHaltNow("set_script_command");
                     DrainPendingControlInputs();
                     _latestRequestedScript = argument;
-                    ControlInputQueue.Writer.TryWrite(argument);
+                    ControlInputQueue.Writer.TryWrite(new RuntimeControlInputRequest(argument, "set_script"));
                     AppendStatus($"[{Label}] Script update requested");
                     (success, responseMessage) = (true, "script queued");
                 }
@@ -807,10 +814,10 @@ internal sealed class PrayerRuntimeSession : IDisposable
                     (success, responseMessage) = (false, "no script loaded");
                 else
                 {
-                    HaltNowQueue.Writer.TryWrite(true);
-                    RuntimeHost.RequestHaltNow();
+                    HaltNowQueue.Writer.TryWrite(new RuntimeHaltRequest(RuntimeHaltRequestKind.ScriptRestart));
+                    RuntimeHost.RequestHaltNow("execute_script_command");
                     DrainPendingControlInputs();
-                    ControlInputQueue.Writer.TryWrite(script);
+                    ControlInputQueue.Writer.TryWrite(new RuntimeControlInputRequest(script, "execute_script"));
                     AppendStatus($"[{Label}] Script restart requested");
                     (success, responseMessage) = (true, "script execution restarted");
                 }
@@ -818,8 +825,8 @@ internal sealed class PrayerRuntimeSession : IDisposable
                 break;
             }
             case PrayerRuntimeCommandNames.Halt:
-                HaltNowQueue.Writer.TryWrite(true);
-                RuntimeHost.RequestHaltNow();
+                HaltNowQueue.Writer.TryWrite(new RuntimeHaltRequest(RuntimeHaltRequestKind.UserHalt));
+                RuntimeHost.RequestHaltNow("halt_command");
                 AppendStatus($"[{Label}] Halt requested");
                 (success, responseMessage) = (true, "halt requested");
                 break;

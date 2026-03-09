@@ -13,7 +13,7 @@ public interface IRuntimeHost
 
     void Halt(string reason = "Halted");
 
-    void RequestHaltNow();
+    void RequestHaltNow(string reason = "unspecified");
 
     RuntimeHostSnapshot GetSnapshot();
 

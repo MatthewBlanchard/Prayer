@@ -89,8 +89,12 @@ public sealed class CommandExecutionEngine
     {
         EnsureActiveCommandInvariant();
         if (!HasActiveCommand)
+        {
+            _logger.LogAstWalker("interrupt_ignored", $"reason={reason}");
             return false;
+        }
 
+        _logger.LogAstWalker("interrupt_active_command", $"reason={reason}");
         ClearActiveCommand();
         _setStatus(reason);
         PersistCheckpoint();
@@ -100,6 +104,7 @@ public sealed class CommandExecutionEngine
     public void Halt(string reason = "Halted")
     {
         EnsureActiveCommandInvariant();
+        _logger.LogAstWalker("halt", $"reason={reason}");
         ClearActiveCommand();
         _isHalted = true;
         _currentScriptLine = null;
@@ -110,6 +115,7 @@ public sealed class CommandExecutionEngine
     public void ResumeFromHalt(string reason = "Resumed")
     {
         EnsureActiveCommandInvariant();
+        _logger.LogAstWalker("resume_from_halt", $"reason={reason}");
         _isHalted = false;
         _setStatus(reason);
         PersistCheckpoint();

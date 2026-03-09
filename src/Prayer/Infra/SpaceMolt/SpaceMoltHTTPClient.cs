@@ -142,7 +142,7 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
     public SpaceMoltHttpClient()
     {
         _http = new HttpClient();
-        _http.Timeout = TimeSpan.FromSeconds(30);
+        _http.Timeout = TimeSpan.FromSeconds(70);
 
         _transport = new SpaceMoltApiTransport(_http, BaseUrl);
         _sessionService = new SpaceMoltSessionService(_http, BaseUrl);

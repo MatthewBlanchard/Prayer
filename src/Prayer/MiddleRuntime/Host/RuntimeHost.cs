@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -11,10 +12,10 @@ public sealed class RuntimeHost : IRuntimeHost
     private readonly SpaceMoltAgent _agent;
     private readonly IRuntimeTransport _transport;
     private readonly IRuntimeStateProvider _stateProvider;
-    private readonly ChannelReader<string> _controlInputReader;
+    private readonly ChannelReader<RuntimeControlInputRequest> _controlInputReader;
     private readonly ChannelReader<string> _generateScriptReader;
     private readonly ChannelReader<bool> _saveExampleReader;
-    private readonly ChannelReader<bool> _haltNowReader;
+    private readonly ChannelReader<RuntimeHaltRequest> _haltNowReader;
     private readonly Func<GameState?> _getLatestState;
     private readonly Action<GameState> _setLatestState;
     private readonly Func<DateTime> _getLastHaltedSnapshotAt;
@@ -31,10 +32,10 @@ public sealed class RuntimeHost : IRuntimeHost
         SpaceMoltAgent agent,
         IRuntimeTransport transport,
         IRuntimeStateProvider stateProvider,
-        ChannelReader<string> controlInputReader,
+        ChannelReader<RuntimeControlInputRequest> controlInputReader,
         ChannelReader<string> generateScriptReader,
         ChannelReader<bool> saveExampleReader,
-        ChannelReader<bool> haltNowReader,
+        ChannelReader<RuntimeHaltRequest> haltNowReader,
         Func<GameState?> getLatestState,
         Action<GameState> setLatestState,
         Func<DateTime> getLastHaltedSnapshotAt,
@@ -66,11 +67,13 @@ public sealed class RuntimeHost : IRuntimeHost
 
     public void SetScript(string script, bool preserveAssociatedPrompt = true)
     {
+        _log($"bot_worker | {_label} | set_script | interrupt_active_command");
         _agent.InterruptActiveCommand("Interrupted by direct set script");
         var state = _getLatestState();
         _agent.SetScript(script ?? string.Empty, state, preserveAssociatedPrompt);
         _agent.ActivateScriptControl();
         _publishStatus($"[{_label}] Script loaded and activated");
+        _log($"bot_worker | {_label} | set_script | loaded_and_activated");
 
         if (state != null)
             _publishSnapshot(state);
@@ -114,6 +117,7 @@ public sealed class RuntimeHost : IRuntimeHost
         catch (OperationCanceledException)
         {
             _publishStatus($"[{_label}] Script generation canceled");
+            _log($"bot_worker | {_label} | script_generation_canceled | direct_request");
             return null;
         }
 
@@ -124,16 +128,20 @@ public sealed class RuntimeHost : IRuntimeHost
 
     public bool Interrupt(string reason = "Interrupted")
     {
-        return _agent.InterruptActiveCommand(reason);
+        var interrupted = _agent.InterruptActiveCommand(reason);
+        _log($"bot_worker | {_label} | interrupt | reason={reason} | interrupted={interrupted}");
+        return interrupted;
     }
 
     public void Halt(string reason = "Halted")
     {
+        _log($"bot_worker | {_label} | halt | reason={reason}");
         _agent.Halt(reason);
     }
 
-    public void RequestHaltNow()
+    public void RequestHaltNow(string reason = "unspecified")
     {
+        _log($"bot_worker | {_label} | request_halt_now | reason={reason}");
         CancelActiveOperation();
     }
 
@@ -164,14 +172,16 @@ public sealed class RuntimeHost : IRuntimeHost
                     if (await HandlePendingHaltsAsync(token))
                         continue;
 
-                    if (_controlInputReader.TryRead(out var newInput))
+                    if (_controlInputReader.TryRead(out var controlInput))
                     {
+                        var newInput = controlInput.Script;
                         if (string.IsNullOrWhiteSpace(newInput))
                         {
                             // Skip empty updates quickly so halt can be serviced in the next loop pass.
                         }
                         else
                         {
+                            LogControlInputRequest(controlInput);
                             _agent.InterruptActiveCommand("Interrupted by control input update");
                             var scriptState = _getLatestState() ?? await _stateProvider.GetLatestStateAsync();
                             _setLatestState(scriptState);
@@ -209,6 +219,7 @@ public sealed class RuntimeHost : IRuntimeHost
                             }
                             else
                             {
+                                _log($"bot_worker | {_label} | script_generation_requested | interrupt_active_command");
                                 _agent.InterruptActiveCommand("Interrupted by script generation request");
                                 _publishStatus($"[{_label}] Generating script");
 
@@ -235,6 +246,7 @@ public sealed class RuntimeHost : IRuntimeHost
                                 catch (OperationCanceledException)
                                 {
                                     _publishStatus($"[{_label}] Script generation canceled");
+                                    _log($"bot_worker | {_label} | script_generation_canceled | queued_request");
                                 }
                                 catch (Exception ex)
                                 {
@@ -299,6 +311,7 @@ public sealed class RuntimeHost : IRuntimeHost
                         catch (OperationCanceledException)
                         {
                             _publishStatus($"[{_label}] Command canceled by halt");
+                            _log($"bot_worker | {_label} | command_canceled_by_halt | command={FormatCommand(result)}");
                             _publishSnapshot(currentState);
                             continue;
                         }
@@ -356,6 +369,7 @@ public sealed class RuntimeHost : IRuntimeHost
                 catch (OperationCanceledException)
                 {
                     _publishStatus($"[{_label}] In-flight operation canceled");
+                    _log($"bot_worker | {_label} | in_flight_operation_canceled");
                     await Task.Delay(50, token);
                     continue;
                 }
@@ -377,6 +391,7 @@ public sealed class RuntimeHost : IRuntimeHost
         catch (OperationCanceledException)
         {
             // Normal shutdown.
+            _log($"bot_worker | {_label} | run_loop_canceled | normal_shutdown");
         }
         catch (Exception ex)
         {
@@ -543,17 +558,31 @@ public sealed class RuntimeHost : IRuntimeHost
     private async Task<bool> HandlePendingHaltsAsync(CancellationToken token)
     {
         bool handled = false;
-        while (_haltNowReader.TryRead(out _))
+        while (_haltNowReader.TryRead(out var request))
         {
             handled = true;
+            _log($"bot_worker | {_label} | halt_now_received | kind={request.Kind}");
             CancelActiveOperation();
-            _agent.InterruptActiveCommand("Interrupted by user halt");
+            var interruptReason = request.Kind == RuntimeHaltRequestKind.UserHalt
+                ? "Interrupted by user halt"
+                : "Interrupted by script restart";
+            _agent.InterruptActiveCommand(interruptReason);
 
             var haltState = _getLatestState() ?? await _stateProvider.GetLatestStateAsync();
             _setLatestState(haltState);
 
-            _agent.Halt("Halted by user");
-            _publishStatus($"[{_label}] Halted by user");
+            if (request.Kind == RuntimeHaltRequestKind.UserHalt)
+            {
+                _agent.Halt("Halted by user");
+                _publishStatus($"[{_label}] Halted by user");
+                _log($"bot_worker | {_label} | halted_by_user");
+            }
+            else
+            {
+                _publishStatus($"[{_label}] Restarting script");
+                _log($"bot_worker | {_label} | restarting_script");
+            }
+
             _publishSnapshot(haltState);
             token.ThrowIfCancellationRequested();
         }
@@ -574,12 +603,33 @@ public sealed class RuntimeHost : IRuntimeHost
 
         try
         {
+            _log($"bot_worker | {_label} | cancel_active_operation");
             active.Cancel();
         }
         catch
         {
             // Best effort only.
         }
+    }
+
+    private void LogControlInputRequest(RuntimeControlInputRequest request)
+    {
+        var source = string.IsNullOrWhiteSpace(request.Source)
+            ? "unknown"
+            : request.Source.Trim();
+        var script = request.Script ?? string.Empty;
+        var normalized = script.Replace("\r\n", "\n");
+
+        int lines = 0;
+        if (normalized.Length > 0)
+            lines = 1 + normalized.Count(ch => ch == '\n');
+
+        var preview = normalized.Replace("\n", "\\n");
+        if (preview.Length > 200)
+            preview = preview.Substring(0, 200) + "...";
+
+        _log($"bot_worker | {_label} | script_update_requested | source={source} | chars={normalized.Length} | lines={lines} | interrupt_active_command | preview={preview}");
+        _log($"bot_worker | {_label} | script_update_body | source={source}{Environment.NewLine}---SCRIPT---{Environment.NewLine}{normalized}{Environment.NewLine}---END_SCRIPT---");
     }
 
     private async Task<T> RunWithCancellableOperationAsync<T>(

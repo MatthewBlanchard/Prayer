@@ -29,9 +29,6 @@ internal static class ShipyardTabRenderer
         AppendStatCard(sb, "Hull", model.Hull);
         AppendStatCard(sb, "Shield", model.Shield);
         AppendStatCard(sb, "Cargo", model.Cargo);
-        AppendStatCard(sb, "Catalog Source", model.CatalogPage);
-        if (model.TotalShips.HasValue)
-            AppendStatCard(sb, "Total Ships", model.TotalShips.Value.ToString());
         sb.AppendLine("</div>");
 
         sb.AppendLine("<section class='space-panel'>");

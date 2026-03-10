@@ -160,7 +160,8 @@ class Program
                             hops,
                             activeRoute.TotalJumps,
                             activeRoute.EstimatedFuel,
-                            activeRoute.FuelAvailable);
+                            activeRoute.FuelAvailable,
+                            session.LastPrayerState?.State?.Ship?.Speed);
                     })
                     .Where(route => route != null)
                     .Cast<BotRouteOverlay>()

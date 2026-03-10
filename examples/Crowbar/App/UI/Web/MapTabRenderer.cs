@@ -94,7 +94,8 @@ internal static class MapTabRenderer
                     isActive = string.Equals(r.BotId, activeBotId, StringComparison.Ordinal),
                     currentSystemId = r.CurrentSystemId,
                     targetSystemId = r.TargetSystemId,
-                    hops = r.Hops
+                    hops = r.Hops,
+                    shipSpeed = r.ShipSpeed
                 })
         });
 

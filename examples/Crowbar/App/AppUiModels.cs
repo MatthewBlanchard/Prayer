@@ -160,4 +160,5 @@ public sealed record BotRouteOverlay(
     IReadOnlyList<string> Hops,
     int? TotalJumps,
     int? EstimatedFuel,
-    int? FuelAvailable);
+    int? FuelAvailable,
+    int? ShipSpeed = null);

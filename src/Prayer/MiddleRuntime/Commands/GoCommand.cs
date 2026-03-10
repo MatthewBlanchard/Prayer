@@ -189,7 +189,8 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar, IActiveRouteSour
                 _plannedHops = null;
                 return (true, new CommandExecutionResult
                 {
-                    ResultMessage = $"No route found from {state.System} to {target} (resolved system: {systemTarget}). Connected systems from here: {connected}."
+                    ResultMessage = $"No route found to {target}!",
+                    HaltScript = true
                 });
             }
         }

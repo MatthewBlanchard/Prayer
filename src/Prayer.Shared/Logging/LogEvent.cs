@@ -19,7 +19,8 @@ public enum LogKind
     GoArgValidation,
     GoArgValidationMapDump,
     UiHttpError,
-    UiHttpTrace
+    UiHttpTrace,
+    ScriptCommandFailure
 }
 
 public sealed record LogEvent(DateTime TimestampUtc, LogKind Kind, string Message, string FilePath);

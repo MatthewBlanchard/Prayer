@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 public class CommandExecutionResult
 {
     public string? ResultMessage { get; set; }
+    public bool HaltScript { get; set; }
 }
 
 public interface ICommand

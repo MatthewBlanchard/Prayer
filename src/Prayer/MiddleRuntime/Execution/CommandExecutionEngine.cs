@@ -174,6 +174,7 @@ public sealed class CommandExecutionEngine
         EnsureActiveCommandInvariant();
         string? message = null;
         bool shouldAddMemory = false;
+        bool haltScript = false;
 
         if (HasActiveCommand)
         {
@@ -206,12 +207,20 @@ public sealed class CommandExecutionEngine
             {
                 message = response?.ResultMessage;
                 shouldAddMemory = true;
+                haltScript = response?.HaltScript == true;
                 AddMemory(_activeCommandResult!, message);
                 ClearActiveCommand();
                 _setStatus("Waiting");
             }
 
             PersistCheckpoint();
+
+            if (haltScript)
+            {
+                _logger.LogScriptCommandFailure(activeCommandText, message ?? "Unknown failure");
+                Halt(message ?? "Script halted by command failure");
+            }
+
             EnsureActiveCommandInvariant();
 
             await _logger.LogCommandExecutionAsync(
@@ -260,6 +269,7 @@ public sealed class CommandExecutionEngine
                 {
                     message = startResult.response?.ResultMessage;
                     shouldAddMemory = true;
+                    haltScript = startResult.response?.HaltScript == true;
                     ClearActiveCommand();
                     _setStatus("Waiting");
                 }
@@ -270,6 +280,7 @@ public sealed class CommandExecutionEngine
                 var response = await singleTurnCommand.ExecuteAsync(client, result, state);
                 message = response?.ResultMessage;
                 shouldAddMemory = true;
+                haltScript = response?.HaltScript == true;
                 _setStatus("Waiting");
             }
         }
@@ -277,6 +288,13 @@ public sealed class CommandExecutionEngine
         if (shouldAddMemory)
             AddMemory(result, message);
         PersistCheckpoint();
+
+        if (haltScript)
+        {
+            _logger.LogScriptCommandFailure(FormatCommand(result), message ?? "Unknown failure");
+            Halt(message ?? "Script halted by command failure");
+        }
+
         EnsureActiveCommandInvariant();
 
         await _logger.LogCommandExecutionAsync(

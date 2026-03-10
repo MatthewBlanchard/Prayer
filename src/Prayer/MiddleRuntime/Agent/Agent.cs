@@ -164,7 +164,7 @@ public class SpaceMoltAgent
         return _uiStateBuilder.BuildUiState(state);
     }
 
-    public Task ExecuteAsync(
+    public Task<string?> ExecuteAsync(
         IRuntimeTransport client,
         CommandResult result,
         GameState state)

@@ -300,16 +300,26 @@ public sealed class RuntimeHost : IRuntimeHost
                     if (result != null)
                     {
                         string stepKey = BuildScriptStepKey(result);
-                        _publishStatus($"[{_label}] Executing {FormatCommand(result)}");
+                        bool wasActive = _agent.HasActiveCommand;
+                        string? resultMessage;
                         try
                         {
-                            await RunWithCancellableOperationAsync(
+                            resultMessage = await RunWithCancellableOperationAsync(
                                 _ => _agent.ExecuteAsync(_transport, result, currentState),
                                 token);
                             scriptStepFailureCounts.Remove(stepKey);
                             // Publish immediately after execution so the active route (if any)
                             // is visible before the post-action state refresh moves the ship.
                             _publishSnapshot(currentState);
+
+                            bool nowActive = _agent.HasActiveCommand;
+                            if (!wasActive && nowActive)
+                                _publishStatus($"[{_label}] Executing {FormatCommand(result)}");
+                            else if (!nowActive)
+                            {
+                                string suffix = string.IsNullOrWhiteSpace(resultMessage) ? "done" : resultMessage;
+                                _publishStatus($"[{_label}] {FormatCommand(result)} - {suffix}");
+                            }
                         }
                         catch (OperationCanceledException)
                         {
@@ -690,14 +700,4 @@ public sealed class RuntimeHost : IRuntimeHost
         }
     }
 
-    private async Task RunWithCancellableOperationAsync(
-        Func<CancellationToken, Task> action,
-        CancellationToken runtimeToken)
-    {
-        _ = await RunWithCancellableOperationAsync(async opToken =>
-        {
-            await action(opToken);
-            return true;
-        }, runtimeToken);
-    }
 }

@@ -166,7 +166,7 @@ public sealed class CommandExecutionEngine
         return actions;
     }
 
-    public async Task ExecuteAsync(
+    public async Task<string?> ExecuteAsync(
         IRuntimeTransport client,
         CommandResult result,
         GameState state)
@@ -230,7 +230,7 @@ public sealed class CommandExecutionEngine
                 phase: "continue-end",
                 details: message ?? (finished ? "completed" : "in-progress"));
 
-            return;
+            return message;
         }
 
         await _logger.LogCommandExecutionAsync(
@@ -303,6 +303,8 @@ public sealed class CommandExecutionEngine
             state,
             phase: "end",
             details: message ?? "(no result message)");
+
+        return message;
     }
 
     public Task<CommandResult?> DecideAsync(GameState state)

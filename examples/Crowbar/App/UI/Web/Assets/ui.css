@@ -24,6 +24,16 @@ form[hx-post='api/execute'] button.run-active { border-color:#5ac977; background
 .icon-btn { width:auto; min-width:34px; padding:6px 10px; font-weight:700; line-height:1; }
 .panel-layer { position:absolute; inset:0; background:rgba(8,10,14,0.86); display:none; align-items:flex-start; justify-content:center; padding:10px; box-sizing:border-box; z-index:10; }
 .panel-layer.open { display:flex; }
+.confirm-layer { position:fixed; inset:0; background:rgba(8,10,14,0.86); display:none; align-items:center; justify-content:center; z-index:200; }
+.confirm-layer.open { display:flex; }
+.confirm-card { background:#171a21; border:1px solid #7f3036; border-radius:8px; padding:24px; max-width:340px; width:100%; }
+.confirm-card-title { font-size:1.1em; font-weight:700; color:#ffd7da; margin:0 0 8px 0; }
+.confirm-card-body { color:#d7dae0; margin:0 0 20px 0; font-size:14px; line-height:1.5; }
+.confirm-card-actions { display:flex; gap:10px; justify-content:flex-end; }
+.confirm-btn-danger { border:1px solid #7f3036; border-radius:4px; background:#30171a; color:#ffd7da; padding:6px 16px; font-size:13px; cursor:pointer; }
+.confirm-btn-danger:hover { background:#4a2025; border-color:#bb4951; }
+.confirm-btn-cancel { border:1px solid #335279; border-radius:4px; background:#172339; color:#c3dcff; padding:6px 16px; font-size:13px; cursor:pointer; }
+.confirm-btn-cancel:hover { background:#203150; border-color:#4b76ad; }
 .panel-card { width:100%; max-height:100%; overflow-y:auto; border:1px solid #2a2e38; background:#171a21; border-radius:8px; padding:10px; box-sizing:border-box; }
 .panel-card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:8px; }
 .panel-card-header h4 { margin:0; }

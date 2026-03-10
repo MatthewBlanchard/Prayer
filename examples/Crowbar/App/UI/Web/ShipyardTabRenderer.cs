@@ -30,6 +30,9 @@ internal static class ShipyardTabRenderer
         AppendStatCard(sb, "Shield", model.Shield);
         AppendStatCard(sb, "Cargo", model.Cargo);
         sb.AppendLine("</div>");
+        sb.AppendLine("<div class='mission-actions' style='margin-bottom:8px;'>");
+        sb.AppendLine("<button type='button' class='space-chip mission-chip-danger' onclick='window.confirmSelfDestruct()'>Self Destruct</button>");
+        sb.AppendLine("</div>");
 
         sb.AppendLine("<section class='space-panel'>");
         sb.Append("<div class='space-panel-title'>Installed Modules (")

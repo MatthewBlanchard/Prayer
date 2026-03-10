@@ -72,6 +72,7 @@ public sealed partial class HtmxBotWindow
         AppendStateShellHtml(sb, defaultBotId);
         AppendScriptShellHtml(sb, currentScript);
 
+        sb.AppendLine("<div id='self-destruct-confirm' class='confirm-layer'><div class='confirm-card'><div class='confirm-card-title'>Self Destruct</div><div class='confirm-card-body'>Are you sure? This will destroy your ship and cannot be undone.</div><div class='confirm-card-actions'><button class='confirm-btn-cancel' onclick='window.closeSelfDestructConfirm()'>Cancel</button><button class='confirm-btn-danger' onclick='window.executeSelfDestruct()'>Self Destruct</button></div></div></div>");
         sb.AppendLine("<script>");
         sb.Append("window._activeBotId = ").Append(defaultBotId != null ? $"'{E(defaultBotId)}'" : "null").AppendLine(";");
         sb.AppendLine(UiJsAsset.Value);

@@ -14,7 +14,26 @@ internal sealed class SpaceMoltGameStateAssembler
         _stateBuilder = new RuntimeStateBuilder();
     }
 
+    private static void LogAssembler(string message)
+    {
+        var line = $"[{DateTime.UtcNow:O}] state_assembler | {message}{Environment.NewLine}";
+        LogSink.Instance.Enqueue(new LogEvent(DateTime.UtcNow, LogKind.RuntimeHost, line, AppPaths.RuntimeHostLogFile));
+    }
+
     public async Task<GameState> BuildAsync(JsonElement status)
+    {
+        try
+        {
+            return await BuildAsyncCore(status);
+        }
+        catch (Exception ex)
+        {
+            LogAssembler($"build_failed | {ex.GetType().Name}: {ex.Message}");
+            throw;
+        }
+    }
+
+    private async Task<GameState> BuildAsyncCore(JsonElement status)
     {
         try
         {
@@ -22,9 +41,10 @@ internal sealed class SpaceMoltGameStateAssembler
             // can resolve global targets before any `go` step executes.
             await _owner.GetMapSnapshotAsync(forceRefresh: false);
         }
-        catch
+        catch (Exception ex)
         {
             // Best-effort: map hydration failures should not block state assembly.
+            LogAssembler($"map_hydration_failed | {ex.GetType().Name}: {ex.Message}");
         }
 
         var player = SpaceMoltApiTransport.RequireObjectProperty(status, "player", "get_status");
@@ -36,36 +56,53 @@ internal sealed class SpaceMoltGameStateAssembler
             "get_status.player");
 
         var systemResult = await _owner.ExecuteAsync("get_system");
-        SpaceMoltApiTransport.EnsureCommandSucceeded("get_system", systemResult);
-        var systemObj = SpaceMoltApiTransport.RequireObjectProperty(systemResult, "system", "get_system");
-        var connections = SpaceMoltApiTransport.RequireArrayProperty(systemObj, "connections", "get_system.system");
 
-        var jumpTargets = connections
-            .EnumerateArray()
-            .Select(c => c.GetProperty("system_id").GetString()!)
-            .ToArray();
+        string[] jumpTargets;
+        POIInfo currentPOI;
+        POIInfo[] pois;
 
-        var currentPoiObj = SpaceMoltApiTransport.RequireObjectProperty(systemResult, "poi", "get_system");
+        if (SpaceMoltApiTransport.TryExtractApiError(systemResult, out var errorCode, out _, out _) &&
+            string.Equals(errorCode, "no_system", StringComparison.OrdinalIgnoreCase))
+        {
+            // Character is mid-jump and has no current system context yet.
+            // Use empty defaults so session creation succeeds; state will refresh on landing.
+            jumpTargets = Array.Empty<string>();
+            currentPOI = new POIInfo { Id = "", SystemId = currentSystem };
+            pois = Array.Empty<POIInfo>();
+        }
+        else
+        {
+            SpaceMoltApiTransport.EnsureCommandSucceeded("get_system", systemResult);
+            var systemObj = SpaceMoltApiTransport.RequireObjectProperty(systemResult, "system", "get_system");
+            var connections = SpaceMoltApiTransport.RequireArrayProperty(systemObj, "connections", "get_system.system");
 
-        var currentPOI = ParsePoiInfo(currentPoiObj, currentSystem);
-
-        var pois = systemObj.TryGetProperty("pois", out var poisArray) &&
-                   poisArray.ValueKind == JsonValueKind.Array
-            ? poisArray
+            jumpTargets = connections
                 .EnumerateArray()
-                .Select(p => ParsePoiInfo(p, currentSystem))
-                .Where(p => !string.Equals(p.Id, currentPOI.Id, StringComparison.Ordinal))
-                .ToArray()
-            : Array.Empty<POIInfo>();
+                .Select(c => c.GetProperty("system_id").GetString()!)
+                .ToArray();
 
-        await EnrichCurrentPoiFromGetPoiAsync(currentPOI);
+            var currentPoiObj = SpaceMoltApiTransport.RequireObjectProperty(systemResult, "poi", "get_system");
 
-        await _owner.ObserveSeenPoisAsync(
-            currentSystem,
-            new[] { currentPOI }.Concat(pois));
-        GalaxyStateHub.MergeResourceLocations(
-            currentSystem,
-            new[] { currentPOI }.Concat(pois));
+            currentPOI = ParsePoiInfo(currentPoiObj, currentSystem);
+
+            pois = systemObj.TryGetProperty("pois", out var poisArray) &&
+                       poisArray.ValueKind == JsonValueKind.Array
+                ? poisArray
+                    .EnumerateArray()
+                    .Select(p => ParsePoiInfo(p, currentSystem))
+                    .Where(p => !string.Equals(p.Id, currentPOI.Id, StringComparison.Ordinal))
+                    .ToArray()
+                : Array.Empty<POIInfo>();
+
+            await EnrichCurrentPoiFromGetPoiAsync(currentPOI);
+
+            await _owner.ObserveSeenPoisAsync(
+                currentSystem,
+                new[] { currentPOI }.Concat(pois));
+            GalaxyStateHub.MergeResourceLocations(
+                currentSystem,
+                new[] { currentPOI }.Concat(pois));
+        }
 
         var cargo = new Dictionary<string, ItemStack>();
         if (ship.TryGetProperty("cargo", out var cargoArray))
@@ -199,9 +236,10 @@ internal sealed class SpaceMoltGameStateAssembler
                 var recipeCatalog = await _owner.GetFullRecipeCatalogByIdAsync(forceRefresh: false);
                 state.AvailableRecipes = recipeCatalog.Values.ToArray();
             }
-            catch
+            catch (Exception ex)
             {
                 // Best-effort: recipe catalog failure should not block state assembly.
+                LogAssembler($"recipe_catalog_failed | {ex.GetType().Name}: {ex.Message}");
             }
         }
         else
@@ -334,9 +372,10 @@ internal sealed class SpaceMoltGameStateAssembler
                 currentPOI.Resources = ParseResourcesArray(nestedResources);
             }
         }
-        catch
+        catch (Exception ex)
         {
             // Optional enrichment: keep get_system snapshot even if get_poi fails.
+            LogAssembler($"get_poi_enrich_failed | {ex.GetType().Name}: {ex.Message}");
         }
     }
 

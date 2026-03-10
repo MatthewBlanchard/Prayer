@@ -131,7 +131,8 @@ public sealed record ShipyardUiModel(
     int? TotalShips,
     IReadOnlyList<ShipyardUiEntry> Showroom,
     IReadOnlyList<ShipyardUiEntry> PlayerListings,
-    IReadOnlyList<ShipyardUiEntry> CatalogShips);
+    IReadOnlyList<ShipyardUiEntry> CatalogShips,
+    bool Docked = false);
 
 public sealed record BotStateEntry(
     string BotId,

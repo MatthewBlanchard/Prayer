@@ -14,9 +14,7 @@ public static class AppUiStateBuilder
     {
         var spaceModel = BuildSpaceModel(state);
         var tradeModel = BuildTradeModel(state);
-        var shipyardModel = state.Docked && string.Equals(state.CurrentPOI?.Type, "station", StringComparison.Ordinal)
-            ? BuildShipyardModel(state)
-            : null;
+        var shipyardModel = BuildShipyardModel(state);
         var catalog = BuildCatalogModel(state);
         var crafting = BuildCraftingModel(state);
         return (spaceModel, tradeModel, shipyardModel, catalog, crafting);
@@ -276,6 +274,7 @@ public static class AppUiStateBuilder
 
     private static ShipyardUiModel BuildShipyardModel(GameState state)
     {
+        var dockedAtStation = state.Docked && string.Equals(state.CurrentPOI?.Type, "station", StringComparison.Ordinal);
         var showroom = (state.ShipyardShowroom ?? Array.Empty<ShipyardShowroomEntry>())
             .Where(v => !string.IsNullOrWhiteSpace(v.ShipClassId))
             .Select(v =>
@@ -351,7 +350,8 @@ public static class AppUiStateBuilder
             totalShips,
             showroom,
             listings,
-            catalogShips);
+            catalogShips,
+            dockedAtStation);
     }
 
     private static CatalogUiModel BuildCatalogModel(GameState state)

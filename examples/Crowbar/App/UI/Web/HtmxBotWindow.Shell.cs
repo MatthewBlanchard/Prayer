@@ -20,7 +20,7 @@ public sealed partial class HtmxBotWindow
     private static readonly IReadOnlyList<StateTabDefinition> StateTabs = new[]
     {
         new StateTabDefinition("map", "Map", "load, every 1000ms", ActiveOnLoad: true),
-        new StateTabDefinition("shipyard", "Ship", "load, every 1000ms", RequiresDocked: true),
+        new StateTabDefinition("shipyard", "Ship", "load, every 1000ms"),
         new StateTabDefinition("missions", "Missions", "load, every 1000ms"),
         new StateTabDefinition("trade", "Trade", "load, every 1000ms"),
         new StateTabDefinition("crafting", "Crafting", "load, every 1000ms", RequiresDocked: true),

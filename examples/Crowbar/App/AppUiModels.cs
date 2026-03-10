@@ -17,6 +17,7 @@ public sealed record SpaceUiSystemNode(
     double? Y,
     string Empire,
     bool IsStronghold,
+    bool HasStation,
     bool IsCurrent,
     IReadOnlyList<string> Connections);
 

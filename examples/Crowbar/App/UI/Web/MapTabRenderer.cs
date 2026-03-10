@@ -51,6 +51,7 @@ internal static class MapTabRenderer
                 y = s.Y,
                 empire = s.Empire,
                 isStronghold = s.IsStronghold,
+                hasStation = s.HasStation,
                 connections = s.Connections ?? Array.Empty<string>()
             }),
             pois = pois

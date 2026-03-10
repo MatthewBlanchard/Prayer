@@ -148,6 +148,7 @@
     var ctx = state.ctx;
     var cssWidth = state.cssWidth;
     var cssHeight = state.cssHeight;
+    var driftT = (state.driftT || 0);
 
     function drawMapHud(title, modeLabel) {
       if (!title) return;
@@ -199,7 +200,6 @@
     ctx.fillRect(0, 0, cssWidth, cssHeight);
 
     if (state.layout.stars && state.layout.stars.length > 0) {
-      var driftT = (state.driftT || 0);
       state.layout.stars.forEach(function (star) {
         // wrap drifted position so stars re-enter from the opposite edge
         var sx = ((star.x + star.driftX * driftT) % cssWidth + cssWidth) % cssWidth;
@@ -371,6 +371,38 @@
           ctx.beginPath();
           ctx.arc(sx, sy, r, 0, Math.PI * 2);
           ctx.fill();
+
+          if (s.hasStation) {
+            var orbitRadius = Math.max(6.2, r + 3.7);
+            var basePhase = ((s.point.x * 0.0413) + (s.point.y * 0.0637)) % (Math.PI * 2);
+            if (basePhase < 0) basePhase += Math.PI * 2;
+            ctx.save();
+            ctx.strokeStyle = 'rgba(255, 223, 140, 0.72)';
+            ctx.lineWidth = Math.max(1.0, 0.74 * zoom);
+            ctx.setLineDash([1.8, 2.6]);
+            ctx.lineDashOffset = 0;
+            ctx.beginPath();
+            ctx.arc(sx, sy, orbitRadius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            var orbitSpeed = 0.95;
+            var satelliteSize = Math.max(1.8, r * 0.45);
+            var phase = basePhase + (driftT * orbitSpeed);
+            var ox = Math.cos(phase) * orbitRadius;
+            var oy = Math.sin(phase) * orbitRadius;
+            var mx = sx + ox;
+            var my = sy - oy;
+            ctx.fillStyle = 'rgba(255, 229, 161, 0.96)';
+            ctx.beginPath();
+            ctx.moveTo(mx, my - satelliteSize);
+            ctx.lineTo(mx + satelliteSize, my);
+            ctx.lineTo(mx, my + satelliteSize);
+            ctx.lineTo(mx - satelliteSize, my);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+          }
 
           var markers = Array.isArray(s.botMarkers) ? s.botMarkers : [];
           if (markers.length > 0) {
@@ -725,6 +757,7 @@
             id: id,
             empire: ((s.Empire || s.empire) || '').toString(),
             isStronghold: !!(s.IsStronghold || s.isStronghold || s.is_stronghold),
+            hasStation: !!(s.HasStation || s.hasStation || s.has_station),
             point: { x: px, y: py },
             isCurrent: id === currentId,
             connections: ((s.Connections || s.connections) || [])

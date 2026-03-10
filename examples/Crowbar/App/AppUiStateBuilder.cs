@@ -26,6 +26,26 @@ public static class AppUiStateBuilder
     {
         var currentSystem = (state.System ?? string.Empty).Trim();
         var currentPoiId = (state.CurrentPOI?.Id ?? string.Empty).Trim();
+        var knownStationSystems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var knownPoi in state.Galaxy?.Map?.KnownPois ?? new List<GalaxyKnownPoiInfo>())
+        {
+            if (knownPoi == null || string.IsNullOrWhiteSpace(knownPoi.SystemId))
+                continue;
+
+            var type = (knownPoi.Type ?? string.Empty).Trim();
+            if (knownPoi.HasBase || string.Equals(type, "station", StringComparison.OrdinalIgnoreCase))
+                knownStationSystems.Add(knownPoi.SystemId.Trim());
+        }
+        if (!string.IsNullOrWhiteSpace(currentSystem))
+        {
+            var currentPoiType = (state.CurrentPOI?.Type ?? string.Empty).Trim();
+            if (state.CurrentPOI?.HasBase == true ||
+                string.Equals(currentPoiType, "station", StringComparison.OrdinalIgnoreCase))
+            {
+                knownStationSystems.Add(currentSystem);
+            }
+        }
 
         var mapBySystemId = (state.Galaxy?.Map?.Systems ?? new List<GalaxySystemInfo>())
             .Where(s => s != null && !string.IsNullOrWhiteSpace(s.Id))
@@ -43,6 +63,7 @@ public static class AppUiStateBuilder
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(c => c, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
+                var hasStation = knownStationSystems.Contains(id);
 
                 return new SpaceUiSystemNode(
                     id,
@@ -50,6 +71,7 @@ public static class AppUiStateBuilder
                     systemEntry.Y,
                     systemEntry.Empire ?? string.Empty,
                     systemEntry.IsStronghold,
+                    hasStation,
                     string.Equals(id, currentSystem, StringComparison.OrdinalIgnoreCase),
                     connections);
             })

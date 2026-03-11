@@ -43,9 +43,8 @@ public sealed record ActiveGoRouteDto(
     string Target,
     IReadOnlyList<string> Hops,
     int TotalJumps,
-    int FuelPerJump,
-    int EstimatedFuel,
-    int FuelAvailable);
+    int EstimatedFuelUse,
+    DateTimeOffset? ArrivalTime);
 
 public sealed record RuntimeStateResponse(
     RuntimeGameStateDto? State,
@@ -107,3 +106,7 @@ public sealed record UpdateDefaultLlmPreferenceRequest(
 public sealed record SpaceMoltPassthroughRequest(string Command, JsonElement? Payload = null);
 
 public sealed record SpaceMoltPassthroughResponse(bool Succeeded, JsonElement Result, string? Error = null);
+
+public sealed record GenerateRequest(string Prompt, int MaxTokens = 512, float Temperature = 0.7f);
+
+public sealed record GenerateResponse(string Text);

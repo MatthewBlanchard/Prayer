@@ -215,17 +215,16 @@ app.MapGet("/api/runtime/sessions/{id}/route", (string id, RuntimeSessionStore s
     if (!store.TryGet(id, out var session))
         return Results.NotFound();
 
-    var route = session.Agent.ActiveRoute;
+    var route = session.RuntimeTransport.GetActiveRoute();
     if (route == null)
         return Results.NoContent();
 
     return Results.Ok(new Contracts.ActiveGoRouteDto(
         route.Target,
         route.Hops,
-        route.TotalJumps,
-        route.FuelPerJump,
-        route.EstimatedFuel,
-        route.FuelAvailable));
+        route.Hops.Count,
+        route.EstimatedFuelUse,
+        route.ArrivalTime));
 });
 
 app.MapGet("/api/runtime/sessions/{id}/spacemolt/stats", (string id, RuntimeSessionStore store) =>
@@ -289,6 +288,33 @@ app.MapPost("/api/runtime/sessions/{id}/script/generate", async (string id, Cont
     {
         logger.LogWarning(ex, "Script generation failed for session {SessionId}", id);
         return Results.BadRequest($"script generation failed: {ex.Message}");
+    }
+});
+
+app.MapPost("/api/runtime/sessions/{id}/generate", async (string id, Contracts.GenerateRequest request, RuntimeSessionStore store, CancellationToken cancellationToken) =>
+{
+    if (!store.TryGet(id, out var session))
+        return Results.NotFound();
+
+    if (string.IsNullOrWhiteSpace(request.Prompt))
+        return Results.BadRequest("prompt is required");
+
+    try
+    {
+        var maxTokens = Math.Clamp(request.MaxTokens, 1, 2048);
+        var temperature = Math.Clamp(request.Temperature, 0f, 2f);
+        var text = await session.PlannerLlm.CompleteAsync(
+            request.Prompt,
+            maxTokens,
+            temperature,
+            topP: 0.9f,
+            cancellationToken: cancellationToken);
+        return Results.Ok(new Contracts.GenerateResponse(text ?? string.Empty));
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Generate failed for session {SessionId}", id);
+        return Results.BadRequest($"generate failed: {ex.Message}");
     }
 });
 
@@ -681,14 +707,13 @@ internal sealed class PrayerRuntimeSession : IDisposable
             : RuntimeStateContractMapper.Map(LatestState);
         var telemetry = Client.GetRuntimeTelemetrySnapshot();
 
-        var route = Agent.ActiveRoute;
+        var route = RuntimeTransport.GetActiveRoute();
         Contracts.ActiveGoRouteDto? routeDto = route == null ? null : new(
             route.Target,
             route.Hops,
-            route.TotalJumps,
-            route.FuelPerJump,
-            route.EstimatedFuel,
-            route.FuelAvailable);
+            route.Hops.Count,
+            route.EstimatedFuelUse,
+            route.ArrivalTime);
 
         return new Contracts.RuntimeStateResponse(
             state,

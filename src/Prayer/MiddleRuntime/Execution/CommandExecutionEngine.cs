@@ -46,7 +46,6 @@ public sealed class CommandExecutionEngine
     public bool HasActiveCommand => _activeCommandState == ActiveCommandState.MultiTurn;
     public int? CurrentScriptLine => _currentScriptLine;
     public string? CurrentScript => string.IsNullOrWhiteSpace(_script) ? null : _script;
-    public ActiveGoRoute? ActiveRoute => _activeCommand is IActiveRouteSource src ? src.GetActiveRoute() : null;
 
     public string SetScript(string script, GameState? state = null)
     {

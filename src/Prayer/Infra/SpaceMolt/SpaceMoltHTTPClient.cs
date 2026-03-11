@@ -22,6 +22,7 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
     private readonly SpaceMoltSessionCache _sessionCache;
     private readonly ConcurrentDictionary<string, ApiCommandPerfCounter> _apiCommandPerf =
         new(StringComparer.OrdinalIgnoreCase);
+    private RouteInfo? _activeRoute;
 
     private string? _sessionId;
     private DateTimeOffset? _sessionExpiresAt;
@@ -309,26 +310,6 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
         return await _catalogService.GetFullRecipeCatalogByIdAsync(forceRefresh);
     }
 
-    public async Task<JsonElement> FindRouteAsync(
-        string targetSystem,
-        CancellationToken cancellationToken = default)
-    {
-        cancellationToken = ResolveCancellationToken(cancellationToken);
-        JsonElement routeResult = await ExecuteAsync(
-            "find_route",
-            new { target_system = targetSystem },
-            cancellationToken);
-
-        await SpaceMoltHttpLogging.LogPathfindAsync(targetSystem, routeResult);
-        return routeResult;
-    }
-
-    async Task<RuntimeCommandResult> IRuntimeTransport.FindRouteAsync(string targetSystem)
-    {
-        JsonElement response = await FindRouteAsync(targetSystem);
-        return ToRuntimeCommandResult(response);
-    }
-
     public async Task<Catalogue> GetCatalogueAsync(
         string type,
         string? category = null,
@@ -361,6 +342,21 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
     GameState IRuntimeTransport.GetLatestState()
     {
         return GetGameState();
+    }
+
+    public RouteInfo? FindPath(GameState state, string targetSystem)
+    {
+        return new SpaceMoltRuntimeTransportAdapter(this).FindPath(state, targetSystem);
+    }
+
+    public void SetActiveRoute(RouteInfo? route)
+    {
+        _activeRoute = route;
+    }
+
+    public RouteInfo? GetActiveRoute()
+    {
+        return _activeRoute;
     }
 
     private async Task<GameState> BuildGameStateFromStatusAsync(JsonElement status)

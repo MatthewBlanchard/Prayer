@@ -8,7 +8,6 @@ public sealed class ExplorationStateSnapshot
     // Galaxy-level exploration memory. This is intentionally shared and not keyed by player.
     public HashSet<string> ExploredSystems { get; set; } = new(StringComparer.Ordinal);
     public HashSet<string> ExploredPois { get; set; } = new(StringComparer.Ordinal);
-    public HashSet<string> UnreachableSystems { get; set; } = new(StringComparer.Ordinal);
     public HashSet<string> SurveyedSystems { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, HashSet<string>> MiningCheckedPoisByResource { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);

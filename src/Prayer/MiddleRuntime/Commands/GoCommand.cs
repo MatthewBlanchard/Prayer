@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class GoCommand : IMultiTurnCommand, IDslCommandGrammar, IActiveRouteSource
+public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
 {
     public string Name => "go";
     public DslCommandSyntax GetDslSyntax() => new(
@@ -24,12 +24,6 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar, IActiveRouteSour
     private string? _resolvedSystemTarget;
     private string? _resolvedPoiTarget;
     private bool _didMoveToTarget;
-
-    private List<string>? _plannedHops;
-    private int _plannedTotalJumps;
-    private int _fuelPerJump;
-    private int _estimatedFuel;
-    private int _fuelAvailable;
 
     public bool IsAvailable(GameState state)
     {
@@ -54,7 +48,7 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar, IActiveRouteSour
         _resolvedSystemTarget = null;
         _resolvedPoiTarget = null;
         _didMoveToTarget = false;
-        _plannedHops = null;
+        client.SetActiveRoute(null);
 
         if (string.IsNullOrWhiteSpace(_target))
         {
@@ -114,9 +108,7 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar, IActiveRouteSour
         if (targetIsCurrentPoi)
         {
             _target = null;
-            _resolvedSystemTarget = null;
-            _resolvedPoiTarget = null;
-            _plannedHops = null;
+            client.SetActiveRoute(null);
             return (true, new CommandExecutionResult
             {
                 ResultMessage = $"Invalid go target: {target} is the current POI."
@@ -126,9 +118,7 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar, IActiveRouteSour
         if (targetIsCurrentSystem && string.IsNullOrWhiteSpace(poiTarget))
         {
             _target = null;
-            _resolvedSystemTarget = null;
-            _resolvedPoiTarget = null;
-            _plannedHops = null;
+            client.SetActiveRoute(null);
             return (true, new CommandExecutionResult
             {
                 ResultMessage = _didMoveToTarget
@@ -150,9 +140,7 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar, IActiveRouteSour
                 new { target_poi = poiTarget })).Payload;
 
             _target = null;
-            _resolvedSystemTarget = null;
-            _resolvedPoiTarget = null;
-            _plannedHops = null;
+            client.SetActiveRoute(null);
             _didMoveToTarget = true;
             return (true, new CommandExecutionResult
             {
@@ -167,32 +155,19 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar, IActiveRouteSour
             return (false, null);
         }
 
-        JsonElement routeResult = (await client.FindRouteAsync(systemTarget)).Payload;
-        StoreRouteInfo(routeResult, state.System);
-        string? nextHop = TryGetNextHop(routeResult, state.System, systemTarget);
+        RouteInfo? routeInfo = client.FindPath(state, systemTarget);
+        client.SetActiveRoute(routeInfo);
+        string? nextHop = routeInfo is { Hops.Count: > 0 } ? routeInfo.Hops[0] : null;
 
         if (string.IsNullOrWhiteSpace(nextHop))
         {
-            if (state.Systems.Contains(systemTarget))
+            _target = null;
+            client.SetActiveRoute(null);
+            return (true, new CommandExecutionResult
             {
-                nextHop = systemTarget;
-            }
-            else
-            {
-                string connected = state.Systems.Length > 0
-                    ? string.Join(", ", state.Systems)
-                    : "none";
-
-                _target = null;
-                _resolvedSystemTarget = null;
-                _resolvedPoiTarget = null;
-                _plannedHops = null;
-                return (true, new CommandExecutionResult
-                {
-                    ResultMessage = $"No route found to {target}!",
-                    HaltScript = true
-                });
-            }
+                ResultMessage = $"No route found to {target}!",
+                HaltScript = true
+            });
         }
 
         await client.ExecuteCommandAsync(
@@ -201,63 +176,6 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar, IActiveRouteSour
         _didMoveToTarget = true;
 
         return (false, null);
-    }
-
-    public ActiveGoRoute? GetActiveRoute()
-    {
-        if (_target == null || _plannedHops == null)
-            return null;
-
-        return new ActiveGoRoute(
-            _resolvedSystemTarget ?? _target,
-            _plannedHops,
-            _plannedTotalJumps,
-            _fuelPerJump,
-            _estimatedFuel,
-            _fuelAvailable);
-    }
-
-    private void StoreRouteInfo(JsonElement routeResult, string currentSystem)
-    {
-        if (routeResult.ValueKind != JsonValueKind.Object)
-        {
-            _plannedHops = null;
-            return;
-        }
-
-        var hops = ExtractFullRoute(routeResult, currentSystem);
-        if (hops == null)
-        {
-            _plannedHops = null;
-            return;
-        }
-
-        _plannedHops = hops;
-        _plannedTotalJumps = routeResult.TryGetProperty("total_jumps", out var tj) && tj.ValueKind == JsonValueKind.Number
-            ? tj.GetInt32() : 0;
-        _fuelPerJump = routeResult.TryGetProperty("fuel_per_jump", out var fpj) && fpj.ValueKind == JsonValueKind.Number
-            ? fpj.GetInt32() : 0;
-        _estimatedFuel = routeResult.TryGetProperty("estimated_fuel", out var ef) && ef.ValueKind == JsonValueKind.Number
-            ? ef.GetInt32() : 0;
-        _fuelAvailable = routeResult.TryGetProperty("fuel_available", out var fa) && fa.ValueKind == JsonValueKind.Number
-            ? fa.GetInt32() : 0;
-    }
-
-    private static List<string>? ExtractFullRoute(JsonElement routeResult, string currentSystem)
-    {
-        foreach (var candidate in ExtractStringRoutes(routeResult))
-        {
-            var route = candidate.Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
-            if (route.Count == 0)
-                continue;
-
-            while (route.Count > 0 && string.Equals(route[0], currentSystem, StringComparison.Ordinal))
-                route.RemoveAt(0);
-
-            return route.Count > 0 ? route : null;
-        }
-
-        return null;
     }
 
     private static async Task<(bool found, string? systemId, string? poiId)> ResolveTargetAsync(
@@ -301,104 +219,6 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar, IActiveRouteSour
         }
 
         return (false, null, null);
-    }
-
-    private static string? TryGetNextHop(JsonElement routeResult, string currentSystem, string targetSystem)
-    {
-        foreach (var candidate in ExtractStringRoutes(routeResult))
-        {
-            if (candidate.Count == 0)
-                continue;
-
-            var route = candidate
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .ToList();
-
-            if (route.Count == 0)
-                continue;
-
-            while (route.Count > 0 && string.Equals(route[0], currentSystem, StringComparison.Ordinal))
-                route.RemoveAt(0);
-
-            if (route.Count == 0)
-                continue;
-
-            return route[0];
-        }
-
-        return null;
-    }
-
-    private static IEnumerable<List<string>> ExtractStringRoutes(JsonElement root)
-    {
-        if (root.ValueKind == JsonValueKind.Array)
-        {
-            var arr = ConvertRouteArrayToSystems(root);
-
-            if (arr.Count > 0)
-                yield return arr;
-        }
-
-        if (root.ValueKind != JsonValueKind.Object)
-            yield break;
-
-        // Common API shape: { found: true, route: [ { system_id: "..." }, ... ] }
-        if (root.TryGetProperty("route", out var route) &&
-            route.ValueKind == JsonValueKind.Array)
-        {
-            var arr = ConvertRouteArrayToSystems(route);
-            if (arr.Count > 0)
-                yield return arr;
-        }
-
-        foreach (var prop in root.EnumerateObject())
-        {
-            if (prop.Value.ValueKind != JsonValueKind.Array)
-                continue;
-
-            var arr = ConvertRouteArrayToSystems(prop.Value);
-
-            if (arr.Count > 0)
-                yield return arr;
-        }
-    }
-
-    private static List<string> ConvertRouteArrayToSystems(JsonElement routeArray)
-    {
-        var systems = new List<string>();
-
-        foreach (var entry in routeArray.EnumerateArray())
-        {
-            if (entry.ValueKind == JsonValueKind.String)
-            {
-                var id = entry.GetString();
-                if (!string.IsNullOrWhiteSpace(id))
-                    systems.Add(id);
-                continue;
-            }
-
-            if (entry.ValueKind != JsonValueKind.Object)
-                continue;
-
-            if (entry.TryGetProperty("system_id", out var systemIdProp) &&
-                systemIdProp.ValueKind == JsonValueKind.String)
-            {
-                var id = systemIdProp.GetString();
-                if (!string.IsNullOrWhiteSpace(id))
-                    systems.Add(id);
-                continue;
-            }
-
-            if (entry.TryGetProperty("id", out var idProp) &&
-                idProp.ValueKind == JsonValueKind.String)
-            {
-                var id = idProp.GetString();
-                if (!string.IsNullOrWhiteSpace(id))
-                    systems.Add(id);
-            }
-        }
-
-        return systems;
     }
 }
 

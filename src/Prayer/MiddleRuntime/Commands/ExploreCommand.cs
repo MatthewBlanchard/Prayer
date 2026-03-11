@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class ExploreCommand : IMultiTurnCommand, IActiveRouteSource
+public class ExploreCommand : IMultiTurnCommand
 {
     public string Name => "explore";
     public DslCommandSyntax GetDslSyntax() => new();
@@ -14,12 +14,6 @@ public class ExploreCommand : IMultiTurnCommand, IActiveRouteSource
     private bool _completed;
     private string? _completionMessage;
     private bool _haltOnFinish;
-
-    private List<string>? _plannedHops;
-    private int _plannedTotalJumps;
-    private int _fuelPerJump;
-    private int _estimatedFuel;
-    private int _fuelAvailable;
 
     public bool IsAvailable(GameState state)
         => !string.IsNullOrWhiteSpace(state.System);
@@ -32,7 +26,7 @@ public class ExploreCommand : IMultiTurnCommand, IActiveRouteSource
         CommandResult cmd,
         GameState state)
     {
-        ResetRuntimeState();
+        ResetRuntimeState(client);
         _snapshot = LoadSnapshot();
 
         if (!string.IsNullOrWhiteSpace(state.CurrentPOI?.Id))
@@ -115,17 +109,16 @@ public class ExploreCommand : IMultiTurnCommand, IActiveRouteSource
 
         if (!string.Equals(state.System, _targetSystemId, StringComparison.Ordinal))
         {
-            string? nextHop = await ResolveNextHopAsync(client, state, _targetSystemId);
+            string? nextHop = ResolveNextHop(client, state, _targetSystemId);
             if (string.IsNullOrWhiteSpace(nextHop))
             {
-                _plannedHops = null;
-                MarkSystemUnreachable(_targetSystemId);
+                client.SetActiveRoute(null);
                 _targetSystemId = SelectNearestUnexploredSystem(state);
                 if (string.IsNullOrWhiteSpace(_targetSystemId))
                 {
                     _completed = true;
                     _haltOnFinish = true;
-                    _completionMessage = "All unexplored systems are unreachable!";
+                    _completionMessage = "No path found to any unexplored system.";
                 }
 
                 return;
@@ -135,7 +128,7 @@ public class ExploreCommand : IMultiTurnCommand, IActiveRouteSource
             return;
         }
 
-        _plannedHops = null;
+        client.SetActiveRoute(null);
 
         if (!_snapshot.SurveyedSystems.Contains(state.System))
         {
@@ -153,34 +146,19 @@ public class ExploreCommand : IMultiTurnCommand, IActiveRouteSource
             return;
         }
 
-        _plannedHops = null;
         MarkSystemExplored(state.System);
         _completed = true;
         _completionMessage = $"Exploration complete: `{state.System}` explored.";
     }
 
-    public ActiveGoRoute? GetActiveRoute()
-    {
-        if (_plannedHops == null || _targetSystemId == null)
-            return null;
-
-        return new ActiveGoRoute(
-            _targetSystemId,
-            _plannedHops,
-            _plannedTotalJumps,
-            _fuelPerJump,
-            _estimatedFuel,
-            _fuelAvailable);
-    }
-
-    private void ResetRuntimeState()
+    private void ResetRuntimeState(IRuntimeTransport client)
     {
         _snapshot = new ExplorationStateSnapshot();
         _targetSystemId = null;
         _completed = false;
         _completionMessage = null;
         _haltOnFinish = false;
-        _plannedHops = null;
+        client.SetActiveRoute(null);
     }
 
     private string? SelectNearestUnexploredSystem(GameState state)
@@ -196,9 +174,6 @@ public class ExploreCommand : IMultiTurnCommand, IActiveRouteSource
 
         foreach (var systemId in systems)
         {
-            if (_snapshot.UnreachableSystems.Contains(systemId))
-                continue;
-
             if (IsSystemUnexplored(state, systemId))
                 return systemId;
         }
@@ -206,44 +181,16 @@ public class ExploreCommand : IMultiTurnCommand, IActiveRouteSource
         return null;
     }
 
-    private bool IsSystemUnexplored(GameState state, string systemId)
+    private static bool IsSystemUnexplored(GameState state, string systemId)
     {
         if (string.IsNullOrWhiteSpace(systemId))
             return false;
 
-        return !_snapshot.ExploredSystems.Contains(systemId);
-    }
+        var knownPois = state.Galaxy?.Map?.KnownPois;
+        if (knownPois == null || knownPois.Count == 0)
+            return true;
 
-    private Dictionary<string, string> GetKnownPoiIdsBySystem(GameState state)
-    {
-        var byPoi = new Dictionary<string, string>(StringComparer.Ordinal);
-
-        void Add(string? poiId, string? systemId)
-        {
-            if (string.IsNullOrWhiteSpace(poiId) || string.IsNullOrWhiteSpace(systemId))
-                return;
-
-            byPoi[poiId] = systemId;
-        }
-
-        Add(state.CurrentPOI?.Id, state.System);
-
-        foreach (var poi in state.POIs ?? Array.Empty<POIInfo>())
-            Add(poi.Id, string.IsNullOrWhiteSpace(poi.SystemId) ? state.System : poi.SystemId);
-
-        foreach (var system in state.Galaxy?.Map?.Systems ?? new List<GalaxySystemInfo>())
-        {
-            if (string.IsNullOrWhiteSpace(system?.Id))
-                continue;
-
-            foreach (var poi in system.Pois ?? new List<GalaxyPoiInfo>())
-                Add(poi?.Id, system.Id);
-        }
-
-        foreach (var known in state.Galaxy?.Map?.KnownPois ?? new List<GalaxyKnownPoiInfo>())
-            Add(known.Id, known.SystemId);
-
-        return byPoi;
+        return !knownPois.Any(p => string.Equals(p.SystemId, systemId, StringComparison.Ordinal));
     }
 
     private Dictionary<string, int> BuildSystemDistanceIndex(GameState state)
@@ -323,124 +270,11 @@ public class ExploreCommand : IMultiTurnCommand, IActiveRouteSource
         return adjacency;
     }
 
-    private async Task<string?> ResolveNextHopAsync(
-        IRuntimeTransport client,
-        GameState state,
-        string targetSystem)
+    private static string? ResolveNextHop(IRuntimeTransport client, GameState state, string targetSystem)
     {
-        JsonElement routeResult = (await client.FindRouteAsync(targetSystem)).Payload;
-        StoreRouteInfo(routeResult, state.System);
-        string? nextHop = TryGetNextHop(routeResult, state.System);
-        if (!string.IsNullOrWhiteSpace(nextHop))
-            return nextHop;
-
-        return state.Systems.Contains(targetSystem, StringComparer.Ordinal)
-            ? targetSystem
-            : null;
-    }
-
-    private void StoreRouteInfo(JsonElement routeResult, string currentSystem)
-    {
-        if (routeResult.ValueKind != JsonValueKind.Object)
-        {
-            _plannedHops = null;
-            return;
-        }
-
-        var hops = ExtractFullRoute(routeResult, currentSystem);
-        if (hops == null)
-        {
-            _plannedHops = null;
-            return;
-        }
-
-        _plannedHops = hops;
-        _plannedTotalJumps = routeResult.TryGetProperty("total_jumps", out var tj) && tj.ValueKind == JsonValueKind.Number
-            ? tj.GetInt32() : 0;
-        _fuelPerJump = routeResult.TryGetProperty("fuel_per_jump", out var fpj) && fpj.ValueKind == JsonValueKind.Number
-            ? fpj.GetInt32() : 0;
-        _estimatedFuel = routeResult.TryGetProperty("estimated_fuel", out var ef) && ef.ValueKind == JsonValueKind.Number
-            ? ef.GetInt32() : 0;
-        _fuelAvailable = routeResult.TryGetProperty("fuel_available", out var fa) && fa.ValueKind == JsonValueKind.Number
-            ? fa.GetInt32() : 0;
-    }
-
-    private static List<string>? ExtractFullRoute(JsonElement routeResult, string currentSystem)
-    {
-        foreach (var candidate in ExtractStringRoutes(routeResult))
-        {
-            var route = candidate.Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
-            if (route.Count == 0)
-                continue;
-
-            while (route.Count > 0 && string.Equals(route[0], currentSystem, StringComparison.Ordinal))
-                route.RemoveAt(0);
-
-            return route.Count > 0 ? route : null;
-        }
-
-        return null;
-    }
-
-    private static string? TryGetNextHop(JsonElement routeResult, string currentSystem)
-    {
-        foreach (var candidate in ExtractStringRoutes(routeResult))
-        {
-            if (candidate.Count == 0)
-                continue;
-
-            var route = candidate
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .ToList();
-
-            while (route.Count > 0 && string.Equals(route[0], currentSystem, StringComparison.Ordinal))
-                route.RemoveAt(0);
-
-            if (route.Count > 0)
-                return route[0];
-        }
-
-        return null;
-    }
-
-    private static IEnumerable<List<string>> ExtractStringRoutes(JsonElement root)
-    {
-        if (root.ValueKind != JsonValueKind.Object)
-            yield break;
-
-        if (!root.TryGetProperty("route", out var routeElement))
-            yield break;
-
-        foreach (var route in ReadStringRouteCandidates(routeElement))
-            yield return route;
-    }
-
-    private static IEnumerable<List<string>> ReadStringRouteCandidates(JsonElement node)
-    {
-        if (node.ValueKind != JsonValueKind.Array)
-            yield break;
-
-        var directRoute = new List<string>();
-        bool hasNested = false;
-
-        foreach (var part in node.EnumerateArray())
-        {
-            if (part.ValueKind == JsonValueKind.String)
-            {
-                directRoute.Add(part.GetString() ?? "");
-                continue;
-            }
-
-            if (part.ValueKind == JsonValueKind.Array)
-            {
-                hasNested = true;
-                foreach (var nested in ReadStringRouteCandidates(part))
-                    yield return nested;
-            }
-        }
-
-        if (!hasNested && directRoute.Count > 0)
-            yield return directRoute;
+        RouteInfo? route = client.FindPath(state, targetSystem);
+        client.SetActiveRoute(route);
+        return route is { Hops.Count: > 0 } ? route.Hops[0] : null;
     }
 
     private void MarkPoiExplored(string poiId)
@@ -458,15 +292,6 @@ public class ExploreCommand : IMultiTurnCommand, IActiveRouteSource
             return;
 
         if (_snapshot.ExploredSystems.Add(systemId))
-            SaveSnapshot();
-    }
-
-    private void MarkSystemUnreachable(string systemId)
-    {
-        if (string.IsNullOrWhiteSpace(systemId))
-            return;
-
-        if (_snapshot.UnreachableSystems.Add(systemId))
             SaveSnapshot();
     }
 

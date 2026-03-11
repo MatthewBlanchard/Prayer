@@ -75,15 +75,8 @@ public interface IMultiTurnCommand : ICommand
         GameState state);
 }
 
-public sealed record ActiveGoRoute(
+public sealed record RouteInfo(
     string Target,
     IReadOnlyList<string> Hops,
-    int TotalJumps,
-    int FuelPerJump,
-    int EstimatedFuel,
-    int FuelAvailable);
-
-public interface IActiveRouteSource
-{
-    ActiveGoRoute? GetActiveRoute();
-}
+    int EstimatedFuelUse,
+    DateTimeOffset? ArrivalTime);

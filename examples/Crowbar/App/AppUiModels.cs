@@ -96,13 +96,22 @@ public sealed record CraftingUiEntry(
     string Name,
     string Category,
     int? Tier,
+    bool MeetsSkillRequirements,
     string IngredientsSummary,
+    string OutputsSummary,
     string DisplayText);
 
 public sealed record CraftingUiModel(
     bool HasCrafting,
     string StationId,
     IReadOnlyList<CraftingUiEntry> Recipes);
+
+public sealed record SkillUiEntry(
+    string SkillId,
+    int Level);
+
+public sealed record SkillsUiModel(
+    IReadOnlyList<SkillUiEntry> Skills);
 
 public sealed record ShipyardUiEntry(
     string Id,
@@ -119,6 +128,14 @@ public sealed record ShipyardUiEntry(
     int? Speed = null,
     decimal? Price = null);
 
+public sealed record OwnedShipUiEntry(
+    string ShipId,
+    string ClassId,
+    string Location,
+    bool IsActive,
+    bool CanSwitchHere,
+    string DisplayText);
+
 public sealed record ShipyardUiModel(
     string StationId,
     string ShipName,
@@ -132,6 +149,7 @@ public sealed record ShipyardUiModel(
     int? TotalShips,
     IReadOnlyList<ShipyardUiEntry> Showroom,
     IReadOnlyList<ShipyardUiEntry> PlayerListings,
+    IReadOnlyList<OwnedShipUiEntry> OwnedShips,
     IReadOnlyList<ShipyardUiEntry> CatalogShips,
     bool Docked = false);
 
@@ -152,7 +170,8 @@ public sealed record BotStateEntry(
     int? CurrentTick,
     DateTime? LastSpaceMoltPostUtc,
     Prayer.Contracts.ActiveGoRouteDto? ActiveRoute,
-    CraftingUiModel? CraftingModel);
+    CraftingUiModel? CraftingModel,
+    SkillsUiModel? SkillsModel);
 
 public sealed record BotRouteOverlay(
     string BotId,

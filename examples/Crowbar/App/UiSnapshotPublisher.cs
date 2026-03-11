@@ -88,7 +88,8 @@ public sealed class UiSnapshotPublisher
                 CurrentTick: prayerState?.CurrentTick,
                 LastSpaceMoltPostUtc: prayerState?.LastSpaceMoltPostUtc,
                 ActiveRoute: prayerState?.ActiveRoute,
-                CraftingModel: null);
+                CraftingModel: null,
+                SkillsModel: null);
         }
 
         var uiState = AppUiStateBuilder.BuildUiState(prayerState.State);
@@ -110,6 +111,7 @@ public sealed class UiSnapshotPublisher
             CurrentTick: prayerState.CurrentTick,
             LastSpaceMoltPostUtc: prayerState.LastSpaceMoltPostUtc,
             ActiveRoute: prayerState.ActiveRoute,
-            CraftingModel: uiState.CraftingModel);
+            CraftingModel: uiState.CraftingModel,
+            SkillsModel: uiState.SkillsModel);
     }
 }

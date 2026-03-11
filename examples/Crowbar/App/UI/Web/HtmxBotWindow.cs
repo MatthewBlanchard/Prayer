@@ -632,6 +632,9 @@ public sealed partial class HtmxBotWindow : IAppUi
             case "crafting":
                 sb.Append(CraftingTabRenderer.Build(botState?.CraftingModel));
                 break;
+            case "skills":
+                sb.Append(SkillsTabRenderer.Build(botState?.SkillsModel));
+                break;
             case "missions":
                 sb.Append(MissionsTabRenderer.Build(
                     botState?.ActiveMissionPrompts ?? Array.Empty<MissionPromptOption>(),

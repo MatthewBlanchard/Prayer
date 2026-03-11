@@ -59,6 +59,45 @@ internal static class ShipyardTabRenderer
         }
         sb.AppendLine("</section>");
 
+        sb.AppendLine("<section class='space-panel'>");
+        sb.Append("<div class='space-panel-title'>Owned Ships (")
+            .Append(model.OwnedShips.Count)
+            .AppendLine(")</div>");
+        if (model.OwnedShips.Count == 0)
+        {
+            sb.AppendLine("<div class='small'>(none)</div>");
+        }
+        else
+        {
+            foreach (var ship in model.OwnedShips)
+            {
+                sb.Append("<div class='mission-item shipyard-card'><div class='mission-title'>")
+                    .Append(E(ship.DisplayText))
+                    .AppendLine("</div>");
+
+                if (ship.IsActive)
+                {
+                    sb.AppendLine("<div class='small'>Current active ship</div>");
+                }
+                else if (ship.CanSwitchHere)
+                {
+                    sb.AppendLine("<div class='mission-actions'>");
+                    AppendScriptChip(sb, $"switch_ship {ship.ShipId};", "Switch");
+                    sb.AppendLine("</div>");
+                }
+                else
+                {
+                    sb.Append("<div class='small'>")
+                        .Append(E(model.Docked
+                            ? "Switch unavailable at this station"
+                            : "Dock at the ship's station to switch"))
+                        .AppendLine("</div>");
+                }
+                sb.AppendLine("</div>");
+            }
+        }
+        sb.AppendLine("</section>");
+
         if (model.Docked)
         {
             sb.AppendLine("<div class='space-grid'>");

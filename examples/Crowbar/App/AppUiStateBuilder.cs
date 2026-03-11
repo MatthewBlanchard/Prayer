@@ -9,7 +9,8 @@ public static class AppUiStateBuilder
         TradeUiModel? TradeModel,
         ShipyardUiModel? ShipyardModel,
         CatalogUiModel? CatalogModel,
-        CraftingUiModel? CraftingModel)
+        CraftingUiModel? CraftingModel,
+        SkillsUiModel? SkillsModel)
         BuildUiState(GameState state)
     {
         var spaceModel = BuildSpaceModel(state);
@@ -17,7 +18,8 @@ public static class AppUiStateBuilder
         var shipyardModel = BuildShipyardModel(state);
         var catalog = BuildCatalogModel(state);
         var crafting = BuildCraftingModel(state);
-        return (spaceModel, tradeModel, shipyardModel, catalog, crafting);
+        var skills = BuildSkillsModel(state);
+        return (spaceModel, tradeModel, shipyardModel, catalog, crafting, skills);
     }
 
     private static SpaceUiModel BuildSpaceModel(GameState state)
@@ -337,10 +339,34 @@ public static class AppUiStateBuilder
                 Price: e.Price))
             .ToArray();
 
+        var stationId = (state.CurrentPOI?.Id ?? string.Empty).Trim();
+        var ownedShips = (state.OwnedShips ?? Array.Empty<OwnedShipInfo>())
+            .Where(s => s != null && !string.IsNullOrWhiteSpace(s.ShipId))
+            .OrderByDescending(s => s.IsActive)
+            .ThenBy(s => s.ClassId ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(s => s.ShipId ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .Select(s =>
+            {
+                var location = string.IsNullOrWhiteSpace(s.Location) ? "(unknown)" : s.Location.Trim();
+                var classId = string.IsNullOrWhiteSpace(s.ClassId) ? "(unknown class)" : s.ClassId.Trim();
+                var canSwitchHere = dockedAtStation &&
+                                    !s.IsActive &&
+                                    IsShipAtStation(location, stationId);
+                var display = $"`{s.ShipId}` ({classId}) | {location}" + (s.IsActive ? " | ACTIVE" : string.Empty);
+                return new OwnedShipUiEntry(
+                    s.ShipId,
+                    classId,
+                    location,
+                    s.IsActive,
+                    canSwitchHere,
+                    display);
+            })
+            .ToArray();
+
         int totalShips = catalogShips.Length;
 
         return new ShipyardUiModel(
-            state.CurrentPOI?.Id ?? "(unknown)",
+            string.IsNullOrWhiteSpace(stationId) ? "(unknown)" : stationId,
             string.IsNullOrWhiteSpace(state.Ship.Name) ? "(unnamed ship)" : state.Ship.Name,
             string.IsNullOrWhiteSpace(state.Ship.ClassId) ? "(unknown class)" : state.Ship.ClassId,
             $"{state.Ship.Fuel}/{state.Ship.MaxFuel}",
@@ -355,8 +381,20 @@ public static class AppUiStateBuilder
             totalShips,
             showroom,
             listings,
+            ownedShips,
             catalogShips,
             dockedAtStation);
+    }
+
+    private static bool IsShipAtStation(string location, string stationId)
+    {
+        if (string.IsNullOrWhiteSpace(location) || string.IsNullOrWhiteSpace(stationId))
+            return false;
+
+        var normalizedLocation = location.Trim();
+        var normalizedStation = stationId.Trim();
+        return string.Equals(normalizedLocation, normalizedStation, StringComparison.OrdinalIgnoreCase) ||
+               normalizedLocation.Contains(normalizedStation, StringComparison.OrdinalIgnoreCase);
     }
 
     private static CatalogUiModel BuildCatalogModel(GameState state)
@@ -404,7 +442,9 @@ public static class AppUiStateBuilder
                 string.IsNullOrWhiteSpace(e.Name) ? e.Id : e.Name,
                 ResolveCatalogCategory(e),
                 e.Tier,
+                MeetsSkillRequirements(state, e),
                 BuildRecipeIngredientsSummary(state, e),
+                BuildRecipeOutputsSummary(state, e),
                 string.IsNullOrWhiteSpace(e.Name) ? e.Id : $"`{e.Id}`: {e.Name}"))
             .ToArray();
 
@@ -412,6 +452,41 @@ public static class AppUiStateBuilder
             state.Docked && recipes.Length > 0,
             state.CurrentPOI?.Id ?? "(unknown)",
             recipes);
+    }
+
+    private static SkillsUiModel BuildSkillsModel(GameState state)
+    {
+        var entries = (state.Skills ?? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase))
+            .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Key))
+            .OrderByDescending(kvp => kvp.Value)
+            .ThenBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(kvp => new SkillUiEntry(kvp.Key, kvp.Value))
+            .ToArray();
+
+        return new SkillsUiModel(entries);
+    }
+
+    private static bool MeetsSkillRequirements(GameState state, CatalogueEntry recipe)
+    {
+        var requiredSkills = recipe.RequiredSkills;
+        if (requiredSkills == null || requiredSkills.Count == 0)
+            return true;
+
+        var playerSkills = state.Skills ?? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var requirement in requiredSkills)
+        {
+            if (string.IsNullOrWhiteSpace(requirement.Key))
+                continue;
+
+            var requiredLevel = requirement.Value;
+            if (requiredLevel <= 0)
+                continue;
+
+            if (!playerSkills.TryGetValue(requirement.Key, out var currentLevel) || currentLevel < requiredLevel)
+                return false;
+        }
+
+        return true;
     }
 
     private static string BuildRecipeIngredientsSummary(GameState state, CatalogueEntry recipe)
@@ -455,6 +530,26 @@ public static class AppUiStateBuilder
             return "Ingredients: (unknown)";
 
         return "Ingredients: " + string.Join(", ", parts.Distinct(StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static string BuildRecipeOutputsSummary(GameState state, CatalogueEntry recipe)
+    {
+        var parts = new List<string>();
+
+        if (recipe.Outputs != null && recipe.Outputs.Length > 0)
+        {
+            foreach (var output in recipe.Outputs)
+            {
+                var token = FormatIngredientToken(state, output);
+                if (!string.IsNullOrWhiteSpace(token))
+                    parts.Add(token);
+            }
+        }
+
+        if (parts.Count == 0)
+            return "Outputs: (unknown)";
+
+        return "Outputs: " + string.Join(", ", parts.Distinct(StringComparer.OrdinalIgnoreCase));
     }
 
     private static string FormatIngredientToken(GameState state, RecipeIngredientEntry ingredient)

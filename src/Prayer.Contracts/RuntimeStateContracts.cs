@@ -24,6 +24,7 @@ public sealed class RuntimeGameStateDto
     public RuntimeCatalogueDto ShipCatalogue { get; set; } = new();
     public RuntimeOwnedShipInfoDto[] OwnedShips { get; set; } = Array.Empty<RuntimeOwnedShipInfoDto>();
     public RuntimeCatalogueEntryDto[] AvailableRecipes { get; set; } = Array.Empty<RuntimeCatalogueEntryDto>();
+    public Dictionary<string, int> Skills { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public RuntimeMissionInfoDto[] ActiveMissions { get; set; } = Array.Empty<RuntimeMissionInfoDto>();
     public RuntimeMissionInfoDto[] AvailableMissions { get; set; } = Array.Empty<RuntimeMissionInfoDto>();
     public RuntimeGameNotificationDto[] Notifications { get; set; } = Array.Empty<RuntimeGameNotificationDto>();
@@ -368,6 +369,12 @@ public class RuntimeCatalogueEntryDto
 
     [JsonPropertyName("inputs")]
     public RuntimeRecipeIngredientEntryDto[] Inputs { get; set; } = Array.Empty<RuntimeRecipeIngredientEntryDto>();
+
+    [JsonPropertyName("outputs")]
+    public RuntimeRecipeIngredientEntryDto[] Outputs { get; set; } = Array.Empty<RuntimeRecipeIngredientEntryDto>();
+
+    [JsonPropertyName("required_skills")]
+    public Dictionary<string, int>? RequiredSkills { get; set; }
 }
 
 public sealed class RuntimeItemCatalogueEntryDto : RuntimeCatalogueEntryDto

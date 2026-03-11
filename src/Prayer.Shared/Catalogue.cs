@@ -126,6 +126,12 @@ public class CatalogueEntry
 
     [JsonPropertyName("inputs")]
     public RecipeIngredientEntry[] Inputs { get; set; } = Array.Empty<RecipeIngredientEntry>();
+
+    [JsonPropertyName("outputs")]
+    public RecipeIngredientEntry[] Outputs { get; set; } = Array.Empty<RecipeIngredientEntry>();
+
+    [JsonPropertyName("required_skills")]
+    public Dictionary<string, int>? RequiredSkills { get; set; }
 }
 
 public sealed class ItemCatalogueEntry : CatalogueEntry
@@ -159,7 +165,13 @@ public sealed class ItemCatalogueEntry : CatalogueEntry
                 : (RecipeIngredientEntry[])source.Ingredients.Clone(),
             Inputs = source.Inputs == null
                 ? Array.Empty<RecipeIngredientEntry>()
-                : (RecipeIngredientEntry[])source.Inputs.Clone()
+                : (RecipeIngredientEntry[])source.Inputs.Clone(),
+            Outputs = source.Outputs == null
+                ? Array.Empty<RecipeIngredientEntry>()
+                : (RecipeIngredientEntry[])source.Outputs.Clone(),
+            RequiredSkills = source.RequiredSkills == null
+                ? null
+                : new Dictionary<string, int>(source.RequiredSkills, StringComparer.Ordinal)
         };
     }
 }
@@ -195,7 +207,13 @@ public sealed class ShipCatalogueEntry : CatalogueEntry
                 : (RecipeIngredientEntry[])source.Ingredients.Clone(),
             Inputs = source.Inputs == null
                 ? Array.Empty<RecipeIngredientEntry>()
-                : (RecipeIngredientEntry[])source.Inputs.Clone()
+                : (RecipeIngredientEntry[])source.Inputs.Clone(),
+            Outputs = source.Outputs == null
+                ? Array.Empty<RecipeIngredientEntry>()
+                : (RecipeIngredientEntry[])source.Outputs.Clone(),
+            RequiredSkills = source.RequiredSkills == null
+                ? null
+                : new Dictionary<string, int>(source.RequiredSkills, StringComparer.Ordinal)
         };
     }
 }

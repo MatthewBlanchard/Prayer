@@ -161,6 +161,22 @@ internal sealed class SpaceMoltGameStateAssembler
             ship,
             docked);
 
+        try
+        {
+            // OpenAPI explicitly defines /get_skills for skill progress; hydrate from it to
+            // avoid relying on get_status variants that may omit or reshape player.skills.
+            var skillsResult = await _owner.ExecuteAsync("get_skills");
+            if (SpaceMoltResponseParsers.TryParseSkills(skillsResult, out var parsedSkills) &&
+                parsedSkills.Count > 0)
+            {
+                state.Skills = parsedSkills;
+            }
+        }
+        catch (Exception ex)
+        {
+            LogAssembler($"skills_fetch_failed | {ex.GetType().Name}: {ex.Message}");
+        }
+
         var stationCache = _owner.StationCache;
 
         if (state.Docked && state.CurrentPOI.IsStation)

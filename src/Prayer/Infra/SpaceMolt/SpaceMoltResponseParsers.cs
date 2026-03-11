@@ -4,6 +4,102 @@ using System.Text.Json;
 
 internal static class SpaceMoltResponseParsers
 {
+    public static bool TryParseSkills(JsonElement response, out Dictionary<string, int> skills)
+    {
+        skills = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (response.ValueKind != JsonValueKind.Object)
+            return false;
+
+        JsonElement root = response;
+        if (response.TryGetProperty("result", out var wrappedResult) &&
+            wrappedResult.ValueKind == JsonValueKind.Object)
+        {
+            root = wrappedResult;
+        }
+
+        JsonElement skillContainer = default;
+        if (root.TryGetProperty("skills", out var directSkills))
+        {
+            skillContainer = directSkills;
+        }
+        else if (root.TryGetProperty("player", out var playerObj) &&
+                 playerObj.ValueKind == JsonValueKind.Object &&
+                 playerObj.TryGetProperty("skills", out var playerSkills))
+        {
+            skillContainer = playerSkills;
+        }
+        else
+        {
+            return false;
+        }
+
+        ParseSkillsInto(skillContainer, skills);
+        return true;
+    }
+
+    private static void ParseSkillsInto(JsonElement source, Dictionary<string, int> destination)
+    {
+        if (source.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in source.EnumerateObject())
+            {
+                if (string.IsNullOrWhiteSpace(property.Name))
+                    continue;
+
+                if (TryReadSkillLevel(property.Value, out var level))
+                    destination[property.Name] = level;
+            }
+            return;
+        }
+
+        if (source.ValueKind != JsonValueKind.Array)
+            return;
+
+        foreach (var entry in source.EnumerateArray())
+        {
+            if (entry.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var skillId =
+                SpaceMoltJson.TryGetString(entry, "skill_id") ??
+                SpaceMoltJson.TryGetString(entry, "id") ??
+                SpaceMoltJson.TryGetString(entry, "name");
+            if (string.IsNullOrWhiteSpace(skillId))
+                continue;
+
+            if (!TryReadSkillLevel(entry, out var level))
+                continue;
+
+            destination[skillId] = level;
+        }
+    }
+
+    private static bool TryReadSkillLevel(JsonElement value, out int level)
+    {
+        level = 0;
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number))
+        {
+            level = number;
+            return true;
+        }
+
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            int? objectLevel =
+                SpaceMoltJson.TryGetInt(value, "level") ??
+                SpaceMoltJson.TryGetInt(value, "skill_level") ??
+                SpaceMoltJson.TryGetInt(value, "current_level");
+            if (objectLevel.HasValue)
+            {
+                level = objectLevel.Value;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static ShipyardShowroomEntry[] ParseShipyardShowroom(JsonElement response)
     {
         if (response.ValueKind != JsonValueKind.Object)

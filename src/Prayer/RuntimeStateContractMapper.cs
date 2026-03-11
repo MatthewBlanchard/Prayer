@@ -27,6 +27,7 @@ internal static class RuntimeStateContractMapper
             ShipCatalogue = Map(source.ShipCatalogue),
             OwnedShips = source.OwnedShips.Select(Map).ToArray(),
             AvailableRecipes = source.AvailableRecipes.Select(Map).ToArray(),
+            Skills = new Dictionary<string, int>(source.Skills ?? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase),
             ActiveMissions = source.ActiveMissions.Select(Map).ToArray(),
             AvailableMissions = source.AvailableMissions.Select(Map).ToArray(),
             Notifications = source.Notifications.Select(Map).ToArray(),
@@ -180,7 +181,13 @@ internal static class RuntimeStateContractMapper
                 .ToArray(),
             Inputs = (source.Inputs ?? Array.Empty<RecipeIngredientEntry>())
                 .Select(Map)
-                .ToArray()
+                .ToArray(),
+            Outputs = (source.Outputs ?? Array.Empty<RecipeIngredientEntry>())
+                .Select(Map)
+                .ToArray(),
+            RequiredSkills = source.RequiredSkills == null
+                ? null
+                : new Dictionary<string, int>(source.RequiredSkills, StringComparer.Ordinal)
         };
     }
 
@@ -213,7 +220,13 @@ internal static class RuntimeStateContractMapper
                 .ToArray(),
             Inputs = (source.Inputs ?? Array.Empty<RecipeIngredientEntry>())
                 .Select(Map)
-                .ToArray()
+                .ToArray(),
+            Outputs = (source.Outputs ?? Array.Empty<RecipeIngredientEntry>())
+                .Select(Map)
+                .ToArray(),
+            RequiredSkills = source.RequiredSkills == null
+                ? null
+                : new Dictionary<string, int>(source.RequiredSkills, StringComparer.Ordinal)
         };
     }
 
@@ -506,7 +519,13 @@ internal static class RuntimeStateContractMapper
                 .ToArray(),
             Inputs = (source.Inputs ?? Array.Empty<RecipeIngredientEntry>())
                 .Select(Map)
-                .ToArray()
+                .ToArray(),
+            Outputs = (source.Outputs ?? Array.Empty<RecipeIngredientEntry>())
+                .Select(Map)
+                .ToArray(),
+            RequiredSkills = source.RequiredSkills == null
+                ? null
+                : new Dictionary<string, int>(source.RequiredSkills, StringComparer.Ordinal)
         };
     }
 

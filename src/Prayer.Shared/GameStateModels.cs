@@ -28,6 +28,7 @@ public partial class GameState
     public Catalogue ShipCatalogue { get; set; } = new();
     public OwnedShipInfo[] OwnedShips { get; set; } = Array.Empty<OwnedShipInfo>();
     public CatalogueEntry[] AvailableRecipes { get; set; } = [];
+    public Dictionary<string, int> Skills { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public MissionInfo[] ActiveMissions { get; set; } = Array.Empty<MissionInfo>();
     public MissionInfo[] AvailableMissions { get; set; } = Array.Empty<MissionInfo>();

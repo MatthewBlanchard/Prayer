@@ -52,6 +52,7 @@ internal static class MapTabRenderer
                 empire = s.Empire,
                 isStronghold = s.IsStronghold,
                 hasStation = s.HasStation,
+                hasKnownPois = s.HasKnownPois,
                 connections = s.Connections ?? Array.Empty<string>()
             }),
             pois = pois
@@ -96,7 +97,8 @@ internal static class MapTabRenderer
                     currentSystemId = r.CurrentSystemId,
                     targetSystemId = r.TargetSystemId,
                     hops = r.Hops,
-                    shipSpeed = r.ShipSpeed
+                    shipSpeed = r.ShipSpeed,
+                    arrivalTime = r.ArrivalTime?.ToString("O")
                 })
         });
 

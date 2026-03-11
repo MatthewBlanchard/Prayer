@@ -20,4 +20,7 @@ public sealed class BotSession
     public AppPrayerRuntimeState? LastPrayerState { get; set; }
     public long PrayerStateVersion { get; set; }
     public Prayer.Contracts.ActiveGoRouteDto? LastActiveRoute { get; set; }
+    public List<string> RoleplayToolTraceLines { get; } = new();
+    public AutonomousDriver? Driver { get; set; }
+    public string? RoleplayPersona { get; set; }
 }

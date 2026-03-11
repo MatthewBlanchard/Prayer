@@ -79,6 +79,48 @@
     if (focusAfter) tabBtn.focus();
   }
 
+  function activateRightTab(tabBtn, focusAfter) {
+    if (!tabBtn) return;
+    var tab = (tabBtn.getAttribute('data-right-tab') || '').trim().toLowerCase();
+    if (!tab) return;
+
+    var tabList = tabBtn.closest("[role='tablist']");
+    if (!tabList) return;
+    var panel = tabList.parentElement;
+    if (!panel) return;
+
+    tabList.querySelectorAll("[role='tab'].tab-btn[data-right-tab]").forEach(function (b) {
+      var selected = (b === tabBtn);
+      b.setAttribute('aria-selected', selected ? 'true' : 'false');
+      b.setAttribute('tabindex', selected ? '0' : '-1');
+      b.classList.toggle('active', selected);
+    });
+
+    panel.querySelectorAll(".tab-pane[id^='right-pane-']").forEach(function (p) {
+      p.classList.remove('active');
+      p.setAttribute('hidden', '');
+    });
+
+    var target = document.getElementById('right-pane-' + tab);
+    if (target) {
+      target.classList.add('active');
+      target.removeAttribute('hidden');
+    }
+
+    if (focusAfter) tabBtn.focus();
+  }
+
+  function activateTabButton(tabBtn, focusAfter) {
+    if (!tabBtn) return;
+    if (tabBtn.hasAttribute('data-tab')) {
+      activateStateTab(tabBtn, focusAfter);
+      return;
+    }
+    if (tabBtn.hasAttribute('data-right-tab')) {
+      activateRightTab(tabBtn, focusAfter);
+    }
+  }
+
   window.openStateTab = function (tabId) {
     var panel = document.getElementById('state-panel');
     if (!panel) return;
@@ -91,7 +133,7 @@
 
   document.addEventListener('click', function (e) {
     var btn = e.target.closest("[role='tab'].tab-btn");
-    if (btn) { activateStateTab(btn, false); return; }
+    if (btn) { activateTabButton(btn, false); return; }
 
     var mapTabBtn = e.target.closest('.map-subtab-btn');
     if (mapTabBtn) {
@@ -168,7 +210,7 @@
     else if (e.key === 'End') nextIndex = tabs.length - 1;
 
     e.preventDefault();
-    activateStateTab(tabs[nextIndex], true);
+    activateTabButton(tabs[nextIndex], true);
   });
 
   // Expose activateStateTab for use in ui-state.js (htmx:afterSwap handler).

@@ -74,6 +74,24 @@ public sealed class PrayerApiClient
         await EnsureSuccessWithDetailsAsync(response);
     }
 
+    public async Task<string> GenerateAsync(
+        string sessionId,
+        string prompt,
+        int maxTokens = 512,
+        float temperature = 0.7f,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _http.PostAsJsonAsync(
+            $"api/runtime/sessions/{sessionId}/generate",
+            new Contracts.GenerateRequest(prompt, maxTokens, temperature),
+            cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response);
+
+        var payload = await response.Content.ReadFromJsonAsync<Contracts.GenerateResponse>(
+            cancellationToken: cancellationToken);
+        return payload?.Text ?? string.Empty;
+    }
+
     public async Task<string> GenerateScriptAsync(string sessionId, string prompt)
     {
         var response = await _http.PostAsJsonAsync(
@@ -129,6 +147,23 @@ public sealed class PrayerApiClient
             throw new InvalidOperationException("Prayer did not return a runtime state snapshot.");
 
         return new AppPrayerRuntimeStatePollResult(DeserializeState(snapshot), stateVersion, true);
+    }
+
+    public async Task<Contracts.RuntimeSnapshotResponse> GetRuntimeSnapshotAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _http.GetAsync(
+            $"api/runtime/sessions/{sessionId}/snapshot",
+            cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response);
+
+        var snapshot = await response.Content.ReadFromJsonAsync<Contracts.RuntimeSnapshotResponse>(
+            cancellationToken: cancellationToken);
+        if (snapshot == null)
+            throw new InvalidOperationException("Prayer did not return a runtime host snapshot.");
+
+        return snapshot;
     }
 
     public async Task<Contracts.SpaceMoltPassthroughResponse> ExecuteSpaceMoltPassthroughAsync(

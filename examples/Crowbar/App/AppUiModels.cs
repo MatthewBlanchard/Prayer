@@ -19,7 +19,8 @@ public sealed record SpaceUiSystemNode(
     bool IsStronghold,
     bool HasStation,
     bool IsCurrent,
-    IReadOnlyList<string> Connections);
+    IReadOnlyList<string> Connections,
+    bool HasKnownPois = false);
 
 public sealed record SpaceUiCargoItem(
     string ItemId,
@@ -161,6 +162,6 @@ public sealed record BotRouteOverlay(
     string? TargetSystemId,
     IReadOnlyList<string> Hops,
     int? TotalJumps,
-    int? EstimatedFuel,
-    int? FuelAvailable,
+    int? EstimatedFuelUse,
+    DateTimeOffset? ArrivalTime,
     int? ShipSpeed = null);

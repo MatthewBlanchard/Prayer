@@ -182,7 +182,16 @@ public sealed partial class HtmxBotWindow
 
     private void AppendScriptShellHtml(StringBuilder sb, string currentScript)
     {
-        sb.AppendLine("<div class='card script-column'><h3 class='column-title'>Script</h3>");
+        sb.AppendLine("<div class='card script-column'>");
+
+        // Tab bar: Script | Roleplay
+        sb.AppendLine("<div class='tabs' role='tablist' aria-label='Right Column'>");
+        sb.AppendLine("<button id='right-tab-script' type='button' class='tab-btn' role='tab' data-right-tab='script' aria-selected='true' aria-controls='right-pane-script' tabindex='0'>Script</button>");
+        sb.AppendLine("<button id='right-tab-roleplay' type='button' class='tab-btn' role='tab' data-right-tab='roleplay' aria-selected='false' aria-controls='right-pane-roleplay' tabindex='-1'>Roleplay</button>");
+        sb.AppendLine("</div>");
+
+        // Script pane
+        sb.AppendLine("<div id='right-pane-script' class='tab-pane active' role='tabpanel' aria-labelledby='right-tab-script'>");
         sb.AppendLine("<section class='space-panel script-block'><div class='space-panel-title'>Current Script</div><div id='live-script-editor'><textarea id='current-script-input' rows='5' readonly>")
             .Append(E(currentScript))
             .AppendLine("</textarea></div></section>");
@@ -194,6 +203,14 @@ public sealed partial class HtmxBotWindow
             "<div class='row script-actions'><form hx-post='api/execute' hx-swap='none'><button id='execute-btn' class='execute-btn' type='submit' title='Execute'>▶️</button></form><form hx-post='api/halt' hx-swap='none'><button type='submit' title='Halt'>⏹️</button></form><form hx-post='api/save-example' hx-swap='none'><button type='submit' title='Thumbs Up'>👍</button></form></div></section>");
         sb.AppendLine("<section class='space-panel script-block'><div class='space-panel-title'>Prompt</div><form id='prompt-form' hx-post='api/prompt' hx-swap='none' hx-on::after-request='window.handlePromptAfterRequest(event)' class='list'><textarea name='prompt' rows='4' placeholder='prompt for script generation'></textarea><button type='submit'>Generate Script</button></form>");
         sb.AppendLine("</section>");
-        sb.AppendLine("<div id='right-panel' class='space-page' hx-get='partial/right' hx-trigger='load, every 1000ms' hx-swap='innerHTML'></div></div>");
+        sb.AppendLine("<div id='right-panel' class='space-page' hx-get='partial/right' hx-trigger='load, every 1000ms' hx-swap='innerHTML'></div>");
+        sb.AppendLine("</div>"); // end right-pane-script
+
+        // Roleplay pane
+        sb.AppendLine("<div id='right-pane-roleplay' class='tab-pane' role='tabpanel' aria-labelledby='right-tab-roleplay' hidden>");
+        sb.AppendLine("<div hx-get='partial/roleplay' hx-trigger='load' hx-swap='innerHTML'></div>");
+        sb.AppendLine("</div>"); // end right-pane-roleplay
+
+        sb.AppendLine("</div>"); // end script-column
     }
 }

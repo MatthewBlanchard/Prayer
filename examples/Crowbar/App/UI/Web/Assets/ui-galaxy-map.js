@@ -236,13 +236,13 @@
       function zy(y) { return cy - ((y - cy) * zoom); }
 
       if (state.layout.lines && state.layout.lines.length > 0) {
-        ctx.strokeStyle = 'rgba(122, 176, 248, 0.28)';
         ctx.lineWidth = 1;
         state.layout.lines.forEach(function (line) {
           var ax = zx(line.a.x) + panX;
           var ay = zy(line.a.y) + panY;
           var bx = zx(line.b.x) + panX;
           var by = zy(line.b.y) + panY;
+          ctx.strokeStyle = line.unexplored ? 'rgba(122, 176, 248, 0.10)' : 'rgba(122, 176, 248, 0.28)';
           ctx.beginPath();
           ctx.moveTo(ax, ay);
           ctx.lineTo(bx, by);
@@ -301,16 +301,6 @@
               ctx.beginPath();
               ctx.arc(px, py, radius, 0, Math.PI * 2);
               ctx.fill();
-              if (marker.isEnd && route.label) {
-                ctx.fillStyle = 'rgba(235, 245, 255, 0.95)';
-                ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
-                ctx.fillText(route.label, px + 6, py - 6);
-                if (route.eta) {
-                  ctx.fillStyle = 'rgba(180, 220, 255, 0.85)';
-                  ctx.font = '9px ui-monospace, SFMono-Regular, Menlo, monospace';
-                  ctx.fillText(route.eta, px + 6, py + 5);
-                }
-              }
             });
           }
           ctx.restore();
@@ -357,8 +347,10 @@
           var sy = zy(s.point.y) + panY;
           var tint = colorForSystem(s);
           var isLandmark = landmarkSystems.indexOf((s.id || '').trim().toLowerCase()) !== -1;
+          var isUnexplored = !s.isCurrent && !s.hasKnownPois;
           var r = (s.isCurrent ? 4.6 : isLandmark ? 5.2 : 3.3) * Math.max(0.7, Math.min(1.8, zoom));
           var glowR = (s.isCurrent ? 15 : isLandmark ? 18 : 10) * Math.max(0.7, Math.min(1.8, zoom));
+          if (isUnexplored) ctx.globalAlpha = 0.35;
           var glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, glowR);
           glow.addColorStop(0, 'rgba(' + tint.glow + ',' + (s.isCurrent ? '0.40' : '0.26') + ')');
           glow.addColorStop(1, 'rgba(' + tint.glow + ',0)');
@@ -371,6 +363,7 @@
           ctx.beginPath();
           ctx.arc(sx, sy, r, 0, Math.PI * 2);
           ctx.fill();
+          if (isUnexplored) ctx.globalAlpha = 1.0;
 
           if (s.hasStation) {
             var orbitRadius = Math.max(6.2, r + 3.7);
@@ -417,6 +410,42 @@
               ctx.stroke();
               ctx.restore();
             });
+
+            // Render bot nametags at the bot's current system, stacked when multiple bots share it.
+            var visibleMarkers = markers
+              .filter(function (marker) { return !!marker && !!marker.label; })
+              .slice(0, 8);
+            if (visibleMarkers.length > 0) {
+              var baseY = sy - (r + 11);
+              var tagGap = 4;
+              var tagHeight = 15;
+              var totalH = (visibleMarkers.length * tagHeight) + ((visibleMarkers.length - 1) * tagGap);
+              var startY = baseY - totalH;
+              visibleMarkers.forEach(function (marker, idx) {
+                var labelText = marker.label;
+                if (marker.routeEta) labelText += ' ' + marker.routeEta;
+
+                ctx.save();
+                ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, monospace';
+                var textW = ctx.measureText(labelText).width;
+                var padX = 6;
+                var tagW = Math.max(42, textW + (padX * 2));
+                var tagX = sx - (tagW * 0.5);
+                var tagY = startY + (idx * (tagHeight + tagGap));
+
+                ctx.fillStyle = 'rgba(8, 17, 24, 0.84)';
+                ctx.strokeStyle = marker.color || '#7ee69e';
+                ctx.lineWidth = marker.isActive ? 1.4 : 1.1;
+                ctx.beginPath();
+                ctx.roundRect(tagX, tagY, tagW, tagHeight, 4);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = 'rgba(230, 244, 255, 0.96)';
+                ctx.fillText(labelText, tagX + padX, tagY + 11);
+                ctx.restore();
+              });
+            }
           }
         });
       }
@@ -599,6 +628,7 @@
   };
 
   window.renderGalaxyMapCanvases = function () {
+    var _hasArrivalRoutes = false;
     var canvases = document.querySelectorAll('.galaxy-map-canvas');
     canvases.forEach(function (canvas) {
       window.initGalaxyMapCanvas(canvas);
@@ -758,6 +788,7 @@
             empire: ((s.Empire || s.empire) || '').toString(),
             isStronghold: !!(s.IsStronghold || s.isStronghold || s.is_stronghold),
             hasStation: !!(s.HasStation || s.hasStation || s.has_station),
+            hasKnownPois: !!(s.HasKnownPois || s.hasKnownPois),
             point: { x: px, y: py },
             isCurrent: id === currentId,
             connections: ((s.Connections || s.connections) || [])
@@ -782,6 +813,7 @@
         });
 
         var routeOverlays = [];
+        var routeMetaByBotId = {};
         botRoutes.forEach(function (route) {
           var routeBotId = ((route.BotId || route.botId) || '').toString().trim();
           var routeLabel = ((route.Label || route.label) || routeBotId || 'bot').toString().trim();
@@ -792,8 +824,6 @@
           var routeHops = Array.isArray(routeHopsRaw)
             ? routeHopsRaw.map(function (h) { return (h || '').toString().trim(); }).filter(function (h) { return h.length > 0; })
             : [];
-          var routeShipSpeedRaw = route.shipSpeed !== undefined ? route.shipSpeed : route.ShipSpeed;
-          var routeShipSpeed = typeof routeShipSpeedRaw === 'number' ? routeShipSpeedRaw : null;
           if (!routeCurrentSystem || routeHops.length === 0) return;
 
           var routeSystems = [routeCurrentSystem];
@@ -822,13 +852,14 @@
           if (routeSegments.length === 0) return;
 
           var routeEta = null;
-          if (routeShipSpeed !== null && compactRoute.length > 1) {
-            var jumpsRemaining = compactRoute.length - 1;
-            var secsPerJump = (7 - routeShipSpeed) * 10;
-            var totalSecs = Math.max(0, secsPerJump) * jumpsRemaining;
-            var etaMins = Math.floor(totalSecs / 60);
-            var etaSecs = totalSecs % 60;
-            routeEta = (etaMins > 0 ? etaMins + 'm ' : '') + etaSecs + 's';
+          var routeArrivalIso = ((route.ArrivalTime || route.arrivalTime) || '').toString().trim();
+          if (routeArrivalIso) {
+            var arrivalMs = new Date(routeArrivalIso).getTime();
+            var secsLeft = Math.max(0, Math.ceil((arrivalMs - Date.now()) / 1000));
+            var etaMins = Math.floor(secsLeft / 60);
+            var etaSecs = secsLeft % 60;
+            routeEta = secsLeft <= 0 ? 'arriving...' : (etaMins > 0 ? etaMins + 'm ' : '') + etaSecs + 's';
+            _hasArrivalRoutes = true;
           }
 
           routeOverlays.push({
@@ -841,6 +872,9 @@
             segments: routeSegments,
             markers: routeMarkers
           });
+          if (routeBotId) {
+            routeMetaByBotId[routeBotId.toLowerCase()] = { eta: routeEta };
+          }
         });
 
         botMarkers.forEach(function (m) {
@@ -853,7 +887,13 @@
             botId: ((m.BotId || m.botId) || '').toString().trim(),
             label: ((m.Label || m.label) || '').toString().trim(),
             color: ((m.Color || m.color) || '#7ee69e').toString().trim(),
-            isActive: !!(m.IsActive || m.isActive)
+            isActive: !!(m.IsActive || m.isActive),
+            routeEta: (function () {
+              var markerBotId = ((m.BotId || m.botId) || '').toString().trim().toLowerCase();
+              if (!markerBotId) return null;
+              var meta = routeMetaByBotId[markerBotId];
+              return meta && meta.eta ? ('(' + meta.eta + ')') : null;
+            })()
           });
         });
         layoutSystems.forEach(function (s) {
@@ -873,7 +913,7 @@
             var key = s.id < cid ? (s.id + '|' + cid) : (cid + '|' + s.id);
             if (seen[key]) return;
             seen[key] = true;
-            lines.push({ a: s.point, b: t.point });
+            lines.push({ a: s.point, b: t.point, unexplored: !s.hasKnownPois || !t.hasKnownPois });
           });
         });
 
@@ -1046,6 +1086,17 @@
 
       window.drawGalaxyMapCanvas(canvas);
     });
+
+    if (_hasArrivalRoutes) {
+      if (!window._routeCountdownTimer) {
+        window._routeCountdownTimer = setInterval(window.renderGalaxyMapCanvases, 1000);
+      }
+    } else {
+      if (window._routeCountdownTimer) {
+        clearInterval(window._routeCountdownTimer);
+        window._routeCountdownTimer = null;
+      }
+    }
   };
 
   window.pollGalaxyMapData = function () {

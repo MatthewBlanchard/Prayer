@@ -541,6 +541,11 @@ button:hover {
   font-size: 14px;
 }
 
+.roleplay-persona-input {
+  min-height: 170px;
+  resize: vertical;
+}
+
 #right-panel {
   display: flex;
   flex-direction: column;

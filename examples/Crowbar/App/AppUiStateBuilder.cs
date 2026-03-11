@@ -25,11 +25,14 @@ public static class AppUiStateBuilder
         var currentSystem = (state.System ?? string.Empty).Trim();
         var currentPoiId = (state.CurrentPOI?.Id ?? string.Empty).Trim();
         var knownStationSystems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var knownPoiSystems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var knownPoi in state.Galaxy?.Map?.KnownPois ?? new List<GalaxyKnownPoiInfo>())
         {
             if (knownPoi == null || string.IsNullOrWhiteSpace(knownPoi.SystemId))
                 continue;
+
+            knownPoiSystems.Add(knownPoi.SystemId.Trim());
 
             var type = (knownPoi.Type ?? string.Empty).Trim();
             if (knownPoi.HasBase || string.Equals(type, "station", StringComparison.OrdinalIgnoreCase))
@@ -62,6 +65,7 @@ public static class AppUiStateBuilder
                     .OrderBy(c => c, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
                 var hasStation = knownStationSystems.Contains(id);
+                var hasKnownPois = knownPoiSystems.Contains(id);
 
                 return new SpaceUiSystemNode(
                     id,
@@ -71,7 +75,8 @@ public static class AppUiStateBuilder
                     systemEntry.IsStronghold,
                     hasStation,
                     string.Equals(id, currentSystem, StringComparison.OrdinalIgnoreCase),
-                    connections);
+                    connections,
+                    hasKnownPois);
             })
             .OrderByDescending(s => s.IsCurrent)
             .ThenBy(s => s.Id, StringComparer.OrdinalIgnoreCase)

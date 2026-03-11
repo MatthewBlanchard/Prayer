@@ -32,6 +32,10 @@ public sealed partial class HtmxBotWindow : IAppUi
     private ChannelWriter<AddBotRequest>? _addBotWriter;
     private ChannelWriter<LlmProviderSelection>? _llmSelectionWriter;
     private Func<string, string, Task<string>>? _generateScriptHandler;
+    private Func<string, string, bool>? _roleplayStartHandler;  // botId, persona → isRunning
+    private Action<string>? _roleplayStopHandler;               // botId
+    private Func<string, (bool IsRunning, string? Status, string? Persona)>? _roleplayStatusHandler;
+    private Func<string, IReadOnlyList<string>>? _roleplayTraceHandler;
 
     private string _selectedProvider = "llamacpp";
     private string _selectedModel = "model";
@@ -57,6 +61,10 @@ public sealed partial class HtmxBotWindow : IAppUi
     public void SetAddBotWriter(ChannelWriter<AddBotRequest> writer) => _addBotWriter = writer;
     public void SetLlmSelectionWriter(ChannelWriter<LlmProviderSelection> writer) => _llmSelectionWriter = writer;
     public void SetGenerateScriptHandler(Func<string, string, Task<string>> handler) => _generateScriptHandler = handler;
+    public void SetRoleplayStartHandler(Func<string, string, bool> handler) => _roleplayStartHandler = handler;
+    public void SetRoleplayStopHandler(Action<string> handler) => _roleplayStopHandler = handler;
+    public void SetRoleplayStatusHandler(Func<string, (bool IsRunning, string? Status, string? Persona)> handler) => _roleplayStatusHandler = handler;
+    public void SetRoleplayTraceHandler(Func<string, IReadOnlyList<string>> handler) => _roleplayTraceHandler = handler;
 
     public void ConfigureInitialLlmSelection(string provider, string model)
     {
@@ -522,6 +530,55 @@ public sealed partial class HtmxBotWindow : IAppUi
             return;
         }
 
+        if (req.HttpMethod == "GET" && path == "/partial/roleplay")
+        {
+            var botId = req.QueryString["bot_id"];
+            WriteText(ctx.Response, BuildRoleplayPaneHtml(botId), "text/html; charset=utf-8");
+            return;
+        }
+
+        if (req.HttpMethod == "GET" && path == "/partial/roleplay-status")
+        {
+            var botId = req.QueryString["bot_id"];
+            WriteText(ctx.Response, BuildRoleplayStatusHtml(botId), "text/html; charset=utf-8");
+            return;
+        }
+
+        if (req.HttpMethod == "POST" && path == "/api/roleplay-start")
+        {
+            var form = ReadForm(req);
+            var botId = GetValue(form, "bot_id");
+            var persona = GetValue(form, "persona");
+            if (string.IsNullOrWhiteSpace(botId))
+            {
+                WriteText(ctx.Response, "No active bot selected.", "text/plain; charset=utf-8", 400);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(persona))
+            {
+                WriteText(ctx.Response, "Persona is required.", "text/plain; charset=utf-8", 400);
+                return;
+            }
+            if (_roleplayStartHandler == null)
+            {
+                WriteText(ctx.Response, "Roleplay is not configured.", "text/plain; charset=utf-8", 500);
+                return;
+            }
+            _roleplayStartHandler(botId!, persona!);
+            WriteNoContent(ctx.Response);
+            return;
+        }
+
+        if (req.HttpMethod == "POST" && path == "/api/roleplay-stop")
+        {
+            var form = ReadForm(req);
+            var botId = GetValue(form, "bot_id");
+            if (!string.IsNullOrWhiteSpace(botId))
+                _roleplayStopHandler?.Invoke(botId!);
+            WriteNoContent(ctx.Response);
+            return;
+        }
+
         WriteText(ctx.Response, "Not found", "text/plain", 404);
     }
 
@@ -616,6 +673,49 @@ public sealed partial class HtmxBotWindow : IAppUi
             sb.Append(E(line)).AppendLine();
         sb.AppendLine("</pre></section>");
         return sb.ToString();
+    }
+
+    private string BuildRoleplayPaneHtml(string? botId)
+    {
+        UiSnapshot snapshot;
+        lock (_lock) snapshot = _snapshot;
+        var id = botId ?? snapshot.DefaultBotId;
+        var botState = GetBotState(snapshot, botId);
+
+        bool isRunning = false;
+        string? status = null;
+        string? persona = null;
+        IReadOnlyList<string> toolTrace = Array.Empty<string>();
+
+        if (id != null && _roleplayStatusHandler != null)
+            (isRunning, status, persona) = _roleplayStatusHandler(id);
+        if (id != null && _roleplayTraceHandler != null)
+            toolTrace = _roleplayTraceHandler(id);
+        else if (botState?.ExecutionStatusLines != null)
+            toolTrace = botState.ExecutionStatusLines;
+
+        return RoleplayTabRenderer.Build(isRunning, status ?? "", persona ?? "", toolTrace);
+    }
+
+    private string BuildRoleplayStatusHtml(string? botId)
+    {
+        UiSnapshot snapshot;
+        lock (_lock) snapshot = _snapshot;
+        var id = botId ?? snapshot.DefaultBotId;
+        var botState = GetBotState(snapshot, botId);
+
+        bool isRunning = false;
+        string? status = null;
+        IReadOnlyList<string> toolTrace = Array.Empty<string>();
+
+        if (id != null && _roleplayStatusHandler != null)
+            (isRunning, status, _) = _roleplayStatusHandler(id);
+        if (id != null && _roleplayTraceHandler != null)
+            toolTrace = _roleplayTraceHandler(id);
+        else if (botState?.ExecutionStatusLines != null)
+            toolTrace = botState.ExecutionStatusLines;
+
+        return RoleplayTabRenderer.BuildStatusInner(isRunning, status, toolTrace);
     }
 
     private string BuildTickStatusHtml(string? botId)

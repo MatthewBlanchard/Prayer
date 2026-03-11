@@ -16,6 +16,7 @@ public enum LogKind
     PromptGenerationPairs,
     AstWalker,
     RuntimeHost,
+    AutonomousGeneration,
     GoArgValidation,
     GoArgValidationMapDump,
     UiHttpError,

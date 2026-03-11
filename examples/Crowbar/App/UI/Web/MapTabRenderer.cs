@@ -30,6 +30,7 @@ internal static class MapTabRenderer
         var localSystems = (vm.LocalSystems ?? Array.Empty<SpaceUiSystemNode>())
             .Where(s => !string.IsNullOrWhiteSpace(s.Id))
             .ToList();
+
         var pois = (vm.Pois ?? Array.Empty<SpaceUiPoi>())
             .Where(p => !string.IsNullOrWhiteSpace(p.Target))
             .ToList();

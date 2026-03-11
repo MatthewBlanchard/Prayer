@@ -121,8 +121,9 @@ internal sealed class SpaceMoltMapService
 
             var knownList = knownByPoiId.Values.ToList();
             GalaxyMapSnapshotFile.MergeKnownPois(_cachedMap, knownList);
-            GalaxyKnownPoiSnapshotFile.Save(_knownPoisFile, knownList);
+            GalaxyStateHub.MergeKnownPois(knownList);
             GalaxyStateHub.MergeMap(_cachedMap);
+            GalaxyKnownPoiSnapshotFile.Save(_knownPoisFile, GalaxyStateHub.GetKnownPois());
         }
         finally
         {

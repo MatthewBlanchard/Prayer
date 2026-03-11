@@ -6,6 +6,7 @@ internal static class GalaxyStateHub
 {
     private static readonly object Sync = new();
     private static GalaxyMapSnapshot _map = new();
+    private static readonly Dictionary<string, GalaxyKnownPoiInfo> KnownPoisById = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, MarketState> MarketsByStation = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, ItemCatalogueEntry> ItemCatalogById = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, ShipCatalogueEntry> ShipCatalogById = new(StringComparer.Ordinal);
@@ -21,7 +22,38 @@ internal static class GalaxyStateHub
         lock (Sync)
         {
             _map = CloneMap(map);
+            MergeKnownPoisNoLock(map.KnownPois);
             RebuildSnapshotNoLock();
+        }
+    }
+
+    public static void MergeKnownPois(IEnumerable<GalaxyKnownPoiInfo>? pois)
+    {
+        if (pois == null)
+            return;
+
+        lock (Sync)
+        {
+            MergeKnownPoisNoLock(pois);
+            RebuildSnapshotNoLock();
+        }
+    }
+
+    private static void MergeKnownPoisNoLock(IEnumerable<GalaxyKnownPoiInfo>? pois)
+    {
+        if (pois == null)
+            return;
+
+        foreach (var poi in pois)
+        {
+            if (poi == null || string.IsNullOrWhiteSpace(poi.Id))
+                continue;
+
+            if (!KnownPoisById.TryGetValue(poi.Id, out var existing) ||
+                poi.LastSeenUtc >= existing.LastSeenUtc)
+            {
+                KnownPoisById[poi.Id] = poi;
+            }
         }
     }
 
@@ -149,6 +181,26 @@ internal static class GalaxyStateHub
             return CloneGalaxyState(_snapshot);
     }
 
+    public static List<GalaxyKnownPoiInfo> GetKnownPois()
+    {
+        lock (Sync)
+            return KnownPoisById.Values
+                .Select(poi => new GalaxyKnownPoiInfo
+                {
+                    Id = poi.Id,
+                    SystemId = poi.SystemId,
+                    Name = poi.Name,
+                    Type = poi.Type,
+                    X = poi.X,
+                    Y = poi.Y,
+                    HasBase = poi.HasBase,
+                    BaseId = poi.BaseId,
+                    BaseName = poi.BaseName,
+                    LastSeenUtc = poi.LastSeenUtc
+                })
+                .ToList();
+    }
+
     private static void RebuildSnapshotNoLock()
     {
         var marketsClone = MarketsByStation.ToDictionary(
@@ -156,9 +208,26 @@ internal static class GalaxyStateHub
             kvp => CloneMarket(kvp.Value),
             StringComparer.Ordinal);
 
+        var mapWithKnownPois = CloneMap(_map);
+        mapWithKnownPois.KnownPois = KnownPoisById.Values
+            .Select(poi => new GalaxyKnownPoiInfo
+            {
+                Id = poi.Id,
+                SystemId = poi.SystemId,
+                Name = poi.Name,
+                Type = poi.Type,
+                X = poi.X,
+                Y = poi.Y,
+                HasBase = poi.HasBase,
+                BaseId = poi.BaseId,
+                BaseName = poi.BaseName,
+                LastSeenUtc = poi.LastSeenUtc
+            })
+            .ToList();
+
         _snapshot = new GalaxyState
         {
-            Map = CloneMap(_map),
+            Map = mapWithKnownPois,
             Market = new GalaxyMarket
             {
                 MarketsByStation = marketsClone,

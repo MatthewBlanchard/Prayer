@@ -336,7 +336,8 @@ public static class AppUiStateBuilder
                 Shield: e.Shield ?? e.BaseShield,
                 Cargo: e.Cargo ?? e.CargoCapacity,
                 Speed: e.Speed ?? e.BaseSpeed,
-                Price: e.Price))
+                Price: e.Price,
+                MaterialsSummary: BuildShipMaterialsSummary(state, e)))
             .ToArray();
 
         var stationId = (state.CurrentPOI?.Id ?? string.Empty).Trim();
@@ -395,6 +396,30 @@ public static class AppUiStateBuilder
         var normalizedStation = stationId.Trim();
         return string.Equals(normalizedLocation, normalizedStation, StringComparison.OrdinalIgnoreCase) ||
                normalizedLocation.Contains(normalizedStation, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildShipMaterialsSummary(GameState state, CatalogueEntry ship)
+    {
+        var materials = ship.MaterialsById;
+        if (materials == null || materials.Count == 0)
+            return "Materials: (not listed)";
+
+        var parts = materials
+            .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Key) && kvp.Value > 0)
+            .OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(kvp =>
+            {
+                var itemName = ResolveCatalogItemName(state, kvp.Key);
+                return string.IsNullOrWhiteSpace(itemName)
+                    ? $"{kvp.Key} x{kvp.Value}"
+                    : $"{itemName} x{kvp.Value}";
+            })
+            .ToArray();
+
+        if (parts.Length == 0)
+            return "Materials: (not listed)";
+
+        return "Materials: " + string.Join(", ", parts);
     }
 
     private static CatalogUiModel BuildCatalogModel(GameState state)

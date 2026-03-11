@@ -126,7 +126,8 @@ public sealed record ShipyardUiEntry(
     int? Shield = null,
     int? Cargo = null,
     int? Speed = null,
-    decimal? Price = null);
+    decimal? Price = null,
+    string? MaterialsSummary = null);
 
 public sealed record OwnedShipUiEntry(
     string ShipId,

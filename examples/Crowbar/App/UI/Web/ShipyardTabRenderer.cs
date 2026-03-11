@@ -202,6 +202,7 @@ internal static class ShipyardTabRenderer
                         AppendShipStat(sb, "Cargo", entry.Cargo);
                         AppendShipStat(sb, "Speed", entry.Speed);
                         AppendShipStat(sb, "Price", entry.Price.HasValue ? entry.Price.Value.ToString("0.##") : null);
+                        AppendShipStat(sb, "Materials", entry.MaterialsSummary);
                         sb.AppendLine("</div>");
 
                         if (!string.IsNullOrWhiteSpace(entry.Id))

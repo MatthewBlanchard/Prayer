@@ -222,16 +222,14 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         if (string.IsNullOrWhiteSpace(_resourceId))
             return GetKnownMineablePoiIds(state);
 
-        var resourceIndex = state.Galaxy?.Resources?.PoisByResource;
-        if (resourceIndex == null || resourceIndex.Count == 0)
-            return Enumerable.Empty<string>();
-
-        string? key = resourceIndex.Keys.FirstOrDefault(k =>
-            string.Equals(k, _resourceId, StringComparison.OrdinalIgnoreCase));
-        if (string.IsNullOrWhiteSpace(key))
-            return Enumerable.Empty<string>();
-
-        return resourceIndex[key];
+        return (state.Galaxy?.Knowledge?.PoisById ?? new Dictionary<string, GalaxyPoiKnowledge>(StringComparer.Ordinal))
+            .Where(kvp =>
+                kvp.Value != null &&
+                kvp.Value.Resources != null &&
+                kvp.Value.Resources.Any(r =>
+                    !string.IsNullOrWhiteSpace(r.ResourceId) &&
+                    string.Equals(r.ResourceId, _resourceId, StringComparison.OrdinalIgnoreCase)))
+            .Select(kvp => kvp.Key);
     }
 
     private static IEnumerable<string> GetKnownMineablePoiIds(GameState state)
@@ -250,6 +248,15 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         foreach (var known in state.Galaxy?.Map?.KnownPois ?? new List<GalaxyKnownPoiInfo>())
         {
             if (string.IsNullOrWhiteSpace(known.Id) || string.IsNullOrWhiteSpace(known.Type))
+                continue;
+
+            if (MineablePoiTypes.Contains(known.Type))
+                ids.Add(known.Id);
+        }
+
+        foreach (var known in state.Galaxy?.Knowledge?.PoisById?.Values ?? Enumerable.Empty<GalaxyPoiKnowledge>())
+        {
+            if (known == null || string.IsNullOrWhiteSpace(known.Id) || string.IsNullOrWhiteSpace(known.Type))
                 continue;
 
             if (MineablePoiTypes.Contains(known.Type))
@@ -279,6 +286,14 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         foreach (var known in state.Galaxy?.Map?.KnownPois ?? new List<GalaxyKnownPoiInfo>())
         {
             if (string.IsNullOrWhiteSpace(known.Id) || string.IsNullOrWhiteSpace(known.SystemId))
+                continue;
+
+            lookup[known.Id] = known.SystemId;
+        }
+
+        foreach (var known in state.Galaxy?.Knowledge?.PoisById?.Values ?? Enumerable.Empty<GalaxyPoiKnowledge>())
+        {
+            if (known == null || string.IsNullOrWhiteSpace(known.Id) || string.IsNullOrWhiteSpace(known.SystemId))
                 continue;
 
             lookup[known.Id] = known.SystemId;

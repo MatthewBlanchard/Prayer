@@ -59,6 +59,7 @@ public sealed class RuntimeGalaxyStateDto
     public RuntimeGalaxyMarketDto Market { get; set; } = new();
     public RuntimeGalaxyCatalogDto Catalog { get; set; } = new();
     public RuntimeGalaxyResourcesDto Resources { get; set; } = new();
+    public RuntimeGalaxyExplorationDto Exploration { get; set; } = new();
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -80,6 +81,15 @@ public sealed class RuntimeGalaxyCatalogDto
 {
     public Dictionary<string, RuntimeItemCatalogueEntryDto> ItemsById { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, RuntimeShipCatalogueEntryDto> ShipsById { get; set; } = new(StringComparer.Ordinal);
+}
+
+public sealed class RuntimeGalaxyExplorationDto
+{
+    public string[] ExploredSystems { get; set; } = Array.Empty<string>();
+    public string[] VisitedPois { get; set; } = Array.Empty<string>();
+    public string[] SurveyedSystems { get; set; } = Array.Empty<string>();
+    public Dictionary<string, string[]> MiningCheckedPoisByResource { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string[]> MiningExploredSystemsByResource { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed class RuntimeGalaxyMapSnapshotDto

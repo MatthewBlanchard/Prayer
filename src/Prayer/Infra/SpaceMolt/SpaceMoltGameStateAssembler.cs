@@ -112,6 +112,16 @@ internal sealed class SpaceMoltGameStateAssembler
                 : Array.Empty<POIInfo>();
 
             await EnrichCurrentPoiFromGetPoiAsync(currentPOI);
+            GalaxyStateHub.MarkPoiVisited(
+                currentPOI.Id,
+                currentSystem,
+                currentPOI.Name,
+                currentPOI.Type,
+                currentPOI.X,
+                currentPOI.Y,
+                currentPOI.HasBase,
+                currentPOI.BaseId,
+                currentPOI.BaseName);
 
             await _owner.ObserveSeenPoisAsync(
                 currentSystem,
@@ -174,6 +184,7 @@ internal sealed class SpaceMoltGameStateAssembler
             {
                 stationInfo.StorageCredits = credits;
                 stationInfo.StorageItems = storageItems;
+                _owner.StorageCacheByPoi[storageStationId] = SpaceMoltMarketAnalytics.CloneItems(storageItems);
             }
 
             var marketResult = await _owner.ExecuteAsync("view_market");
@@ -311,6 +322,12 @@ internal sealed class SpaceMoltGameStateAssembler
                 _owner.DrainPendingNotifications(maxCount: 10),
                 _owner.SnapshotChatMessages(maxCount: 5));
         }
+
+        state.StorageCacheByPoi = _owner.StorageCacheByPoi
+            .ToDictionary(
+                kvp => kvp.Key,
+                kvp => SpaceMoltMarketAnalytics.CloneItems(kvp.Value),
+                StringComparer.Ordinal);
 
         return state;
     }

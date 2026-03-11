@@ -29,6 +29,7 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
     private string? _username;
     private string? _password;
     private readonly Dictionary<string, StationInfo> _stationCache = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<string, ItemStack>> _storageCacheByPoi = new(StringComparer.Ordinal);
     private int _currentTick;
     private int _shipCatalogPage = 1;
     private long _requestSequence;
@@ -168,6 +169,7 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
     }
 
     internal Dictionary<string, StationInfo> StationCache => _stationCache;
+    internal Dictionary<string, Dictionary<string, ItemStack>> StorageCacheByPoi => _storageCacheByPoi;
     internal TimeSpan CatalogueCacheTtlValue => CatalogueCacheTtl;
     internal int ShipCatalogPageSize => ShipCatalogPageSizeConst;
 

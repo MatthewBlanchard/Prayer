@@ -10,9 +10,20 @@ internal static class GalaxyStateHub
     private static readonly Dictionary<string, MarketState> MarketsByStation = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, ItemCatalogueEntry> ItemCatalogById = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, ShipCatalogueEntry> ShipCatalogById = new(StringComparer.Ordinal);
-    private static readonly Dictionary<string, HashSet<string>> ResourceSystemsById = new(StringComparer.Ordinal);
-    private static readonly Dictionary<string, HashSet<string>> ResourcePoisById = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, GalaxyPoiKnowledge> PoiKnowledgeById = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, GalaxySystemKnowledge> SystemKnowledgeById = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, HashSet<string>> MiningCheckedPoisByResource = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, HashSet<string>> MiningExploredSystemsByResource = new(StringComparer.OrdinalIgnoreCase);
     private static GalaxyState _snapshot = new();
+
+    static GalaxyStateHub()
+    {
+        lock (Sync)
+        {
+            HydrateExplorationStateNoLock();
+            RebuildSnapshotNoLock();
+        }
+    }
 
     public static void MergeMap(GalaxyMapSnapshot? map)
     {
@@ -54,6 +65,20 @@ internal static class GalaxyStateHub
             {
                 KnownPoisById[poi.Id] = poi;
             }
+
+            UpsertPoiKnowledgeNoLock(
+                poi.Id,
+                poi.SystemId,
+                poi.Name,
+                poi.Type,
+                poi.X,
+                poi.Y,
+                poi.HasBase,
+                poi.BaseId,
+                poi.BaseName,
+                resources: null,
+                markVisited: false,
+                lastSeenUtc: poi.LastSeenUtc == default ? DateTime.UtcNow : poi.LastSeenUtc);
         }
     }
 
@@ -76,7 +101,10 @@ internal static class GalaxyStateHub
             }
 
             if (changed)
+            {
+                PersistExplorationStateNoLock();
                 RebuildSnapshotNoLock();
+            }
         }
     }
 
@@ -136,37 +164,27 @@ internal static class GalaxyStateHub
                 if (poi == null || string.IsNullOrWhiteSpace(poi.Id))
                     continue;
 
-                if (poi.Resources == null || poi.Resources.Length == 0)
-                    continue;
-
                 string systemId = !string.IsNullOrWhiteSpace(poi.SystemId)
                     ? poi.SystemId
                     : defaultSystemId;
                 if (string.IsNullOrWhiteSpace(systemId))
                     continue;
 
-                foreach (var resource in poi.Resources)
+                if (UpsertPoiKnowledgeNoLock(
+                        poi.Id,
+                        systemId,
+                        poi.Name,
+                        poi.Type,
+                        poi.X,
+                        poi.Y,
+                        poi.HasBase,
+                        poi.BaseId,
+                        poi.BaseName,
+                        poi.Resources,
+                        markVisited: poi.Resources != null && poi.Resources.Length > 0,
+                        lastSeenUtc: DateTime.UtcNow))
                 {
-                    string resourceId = resource?.ResourceId ?? "";
-                    if (string.IsNullOrWhiteSpace(resourceId))
-                        continue;
-
-                    if (!ResourceSystemsById.TryGetValue(resourceId, out var systemSet))
-                    {
-                        systemSet = new HashSet<string>(StringComparer.Ordinal);
-                        ResourceSystemsById[resourceId] = systemSet;
-                    }
-
-                    if (!ResourcePoisById.TryGetValue(resourceId, out var poiSet))
-                    {
-                        poiSet = new HashSet<string>(StringComparer.Ordinal);
-                        ResourcePoisById[resourceId] = poiSet;
-                    }
-
-                    if (systemSet.Add(systemId))
-                        changed = true;
-                    if (poiSet.Add(poi.Id))
-                        changed = true;
+                    changed = true;
                 }
             }
 
@@ -179,6 +197,120 @@ internal static class GalaxyStateHub
     {
         lock (Sync)
             return CloneGalaxyState(_snapshot);
+    }
+
+    public static bool MarkPoiVisited(
+        string poiId,
+        string? systemId = null,
+        string? poiName = null,
+        string? poiType = null,
+        double? x = null,
+        double? y = null,
+        bool hasBase = false,
+        string? baseId = null,
+        string? baseName = null)
+    {
+        if (string.IsNullOrWhiteSpace(poiId))
+            return false;
+
+        lock (Sync)
+        {
+            bool changed = UpsertPoiKnowledgeNoLock(
+                poiId,
+                systemId,
+                poiName,
+                poiType,
+                x,
+                y,
+                hasBase,
+                baseId,
+                baseName,
+                resources: null,
+                markVisited: true,
+                lastSeenUtc: DateTime.UtcNow);
+
+            if (!changed)
+                return false;
+
+            PersistExplorationStateNoLock();
+            RebuildSnapshotNoLock();
+            return true;
+        }
+    }
+
+    public static bool MarkSystemSurveyed(string systemId)
+    {
+        if (string.IsNullOrWhiteSpace(systemId))
+            return false;
+
+        lock (Sync)
+        {
+            if (!SystemKnowledgeById.TryGetValue(systemId, out var system))
+            {
+                system = new GalaxySystemKnowledge
+                {
+                    Id = systemId,
+                    Surveyed = true
+                };
+                SystemKnowledgeById[systemId] = system;
+            }
+            else if (!system.Surveyed)
+            {
+                system.Surveyed = true;
+            }
+            else
+            {
+                return false;
+            }
+
+            PersistExplorationStateNoLock();
+            RebuildSnapshotNoLock();
+            return true;
+        }
+    }
+
+    public static bool MarkMiningPoiChecked(string resourceId, string poiId)
+    {
+        if (string.IsNullOrWhiteSpace(resourceId) || string.IsNullOrWhiteSpace(poiId))
+            return false;
+
+        lock (Sync)
+        {
+            if (!MiningCheckedPoisByResource.TryGetValue(resourceId, out var poiIds))
+            {
+                poiIds = new HashSet<string>(StringComparer.Ordinal);
+                MiningCheckedPoisByResource[resourceId] = poiIds;
+            }
+
+            if (!poiIds.Add(poiId))
+                return false;
+
+            PersistExplorationStateNoLock();
+            RebuildSnapshotNoLock();
+            return true;
+        }
+    }
+
+    public static bool MarkMiningSystemExplored(string resourceId, string systemId)
+    {
+        if (string.IsNullOrWhiteSpace(resourceId) || string.IsNullOrWhiteSpace(systemId))
+            return false;
+
+        lock (Sync)
+        {
+            if (!MiningExploredSystemsByResource.TryGetValue(resourceId, out var systemIds))
+            {
+                systemIds = new HashSet<string>(StringComparer.Ordinal);
+                MiningExploredSystemsByResource[resourceId] = systemIds;
+            }
+
+            if (!systemIds.Add(systemId))
+                return false;
+
+            PersistExplorationStateNoLock();
+            RebuildSnapshotNoLock();
+            return true;
+        }
     }
 
     public static List<GalaxyKnownPoiInfo> GetKnownPois()
@@ -225,6 +357,41 @@ internal static class GalaxyStateHub
             })
             .ToList();
 
+        var resourceSystemsById = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var resourcePoisById = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+
+        foreach (var poi in PoiKnowledgeById.Values)
+        {
+            if (poi == null || string.IsNullOrWhiteSpace(poi.Id))
+                continue;
+            if (poi.Resources == null || poi.Resources.Length == 0)
+                continue;
+            if (string.IsNullOrWhiteSpace(poi.SystemId))
+                continue;
+
+            foreach (var resource in poi.Resources)
+            {
+                string resourceId = resource?.ResourceId ?? "";
+                if (string.IsNullOrWhiteSpace(resourceId))
+                    continue;
+
+                if (!resourceSystemsById.TryGetValue(resourceId, out var systemSet))
+                {
+                    systemSet = new HashSet<string>(StringComparer.Ordinal);
+                    resourceSystemsById[resourceId] = systemSet;
+                }
+
+                if (!resourcePoisById.TryGetValue(resourceId, out var poiSet))
+                {
+                    poiSet = new HashSet<string>(StringComparer.Ordinal);
+                    resourcePoisById[resourceId] = poiSet;
+                }
+
+                systemSet.Add(poi.SystemId);
+                poiSet.Add(poi.Id);
+            }
+        }
+
         _snapshot = new GalaxyState
         {
             Map = mapWithKnownPois,
@@ -242,10 +409,289 @@ internal static class GalaxyStateHub
             },
             Resources = new GalaxyResources
             {
-                SystemsByResource = BuildResourceIndexSnapshot(ResourceSystemsById),
-                PoisByResource = BuildResourceIndexSnapshot(ResourcePoisById)
+                SystemsByResource = BuildResourceIndexSnapshot(resourceSystemsById),
+                PoisByResource = BuildResourceIndexSnapshot(resourcePoisById)
             },
+            Exploration = BuildExplorationSnapshotNoLock(),
+            Knowledge = BuildKnowledgeSnapshotNoLock(),
             UpdatedAtUtc = DateTime.UtcNow
+        };
+    }
+
+    private static GalaxyExplorationState BuildExplorationSnapshotNoLock()
+    {
+        var visitedPois = PoiKnowledgeById.Values
+            .Where(p => p != null && p.Visited && !string.IsNullOrWhiteSpace(p.Id))
+            .Select(p => p.Id)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var poisBySystem = PoiKnowledgeById.Values
+            .Where(p => p != null && !string.IsNullOrWhiteSpace(p.SystemId) && !string.IsNullOrWhiteSpace(p.Id))
+            .GroupBy(p => p.SystemId, StringComparer.Ordinal);
+
+        var exploredSystems = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var group in poisBySystem)
+        {
+            if (group.All(p => p.Visited))
+                exploredSystems.Add(group.Key);
+        }
+
+        var surveyedSystems = SystemKnowledgeById.Values
+            .Where(s => s != null && s.Surveyed && !string.IsNullOrWhiteSpace(s.Id))
+            .Select(s => s.Id)
+            .ToHashSet(StringComparer.Ordinal);
+
+        return new GalaxyExplorationState
+        {
+            ExploredSystems = exploredSystems,
+            VisitedPois = visitedPois,
+            SurveyedSystems = surveyedSystems,
+            MiningCheckedPoisByResource = BuildResourceIndexSnapshot(MiningCheckedPoisByResource),
+            MiningExploredSystemsByResource = BuildResourceIndexSnapshot(MiningExploredSystemsByResource)
+        };
+    }
+
+    private static GalaxyKnowledgeState BuildKnowledgeSnapshotNoLock()
+    {
+        return new GalaxyKnowledgeState
+        {
+            PoisById = PoiKnowledgeById.ToDictionary(
+                kvp => kvp.Key,
+                kvp => ClonePoiKnowledge(kvp.Value),
+                StringComparer.Ordinal),
+            SystemsById = SystemKnowledgeById.ToDictionary(
+                kvp => kvp.Key,
+                kvp => new GalaxySystemKnowledge
+                {
+                    Id = kvp.Value.Id,
+                    Surveyed = kvp.Value.Surveyed
+                },
+                StringComparer.Ordinal)
+        };
+    }
+
+    private static void HydrateExplorationStateNoLock()
+    {
+        var legacy = ExplorationStateStore.Load();
+        PoiKnowledgeById.Clear();
+        SystemKnowledgeById.Clear();
+        MiningCheckedPoisByResource.Clear();
+        MiningExploredSystemsByResource.Clear();
+
+        foreach (var poiId in legacy.ExploredPois ?? new HashSet<string>(StringComparer.Ordinal))
+        {
+            if (!string.IsNullOrWhiteSpace(poiId))
+            {
+                PoiKnowledgeById[poiId] = new GalaxyPoiKnowledge
+                {
+                    Id = poiId,
+                    Visited = true,
+                    LastSeenUtc = legacy.UpdatedAtUtc == default ? DateTime.UtcNow : legacy.UpdatedAtUtc
+                };
+            }
+        }
+
+        foreach (var systemId in legacy.SurveyedSystems ?? new HashSet<string>(StringComparer.Ordinal))
+        {
+            if (!string.IsNullOrWhiteSpace(systemId))
+            {
+                SystemKnowledgeById[systemId] = new GalaxySystemKnowledge
+                {
+                    Id = systemId,
+                    Surveyed = true
+                };
+            }
+        }
+
+        MergeResourceIndexNoLock(legacy.MiningCheckedPoisByResource, MiningCheckedPoisByResource);
+        MergeResourceIndexNoLock(legacy.MiningExploredSystemsByResource, MiningExploredSystemsByResource);
+    }
+
+    private static void PersistExplorationStateNoLock()
+    {
+        var exploration = BuildExplorationSnapshotNoLock();
+        var snapshot = new ExplorationStateSnapshot
+        {
+            ExploredSystems = new HashSet<string>(exploration.ExploredSystems, StringComparer.Ordinal),
+            ExploredPois = new HashSet<string>(exploration.VisitedPois, StringComparer.Ordinal),
+            SurveyedSystems = new HashSet<string>(exploration.SurveyedSystems, StringComparer.Ordinal),
+            MiningCheckedPoisByResource = CloneResourceIndexToSets(MiningCheckedPoisByResource),
+            MiningExploredSystemsByResource = CloneResourceIndexToSets(MiningExploredSystemsByResource)
+        };
+        ExplorationStateStore.Save(snapshot);
+    }
+
+    private static void MergeResourceIndexNoLock(
+        IDictionary<string, HashSet<string>>? source,
+        IDictionary<string, HashSet<string>> target)
+    {
+        if (source == null || source.Count == 0)
+            return;
+
+        foreach (var (resourceId, ids) in source)
+        {
+            if (string.IsNullOrWhiteSpace(resourceId))
+                continue;
+
+            if (!target.TryGetValue(resourceId, out var existing))
+            {
+                existing = new HashSet<string>(StringComparer.Ordinal);
+                target[resourceId] = existing;
+            }
+
+            foreach (var id in ids ?? new HashSet<string>(StringComparer.Ordinal))
+            {
+                if (!string.IsNullOrWhiteSpace(id))
+                    existing.Add(id);
+            }
+        }
+    }
+
+    private static Dictionary<string, HashSet<string>> CloneResourceIndexToSets(
+        Dictionary<string, HashSet<string>> source)
+    {
+        var clone = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (resourceId, ids) in source)
+        {
+            if (string.IsNullOrWhiteSpace(resourceId))
+                continue;
+
+            clone[resourceId] = new HashSet<string>(
+                (ids ?? new HashSet<string>(StringComparer.Ordinal))
+                .Where(v => !string.IsNullOrWhiteSpace(v)),
+                StringComparer.Ordinal);
+        }
+
+        return clone;
+    }
+
+    private static bool UpsertPoiKnowledgeNoLock(
+        string poiId,
+        string? systemId,
+        string? poiName,
+        string? poiType,
+        double? x,
+        double? y,
+        bool hasBase,
+        string? baseId,
+        string? baseName,
+        PoiResourceInfo[]? resources,
+        bool markVisited,
+        DateTime lastSeenUtc)
+    {
+        if (string.IsNullOrWhiteSpace(poiId))
+            return false;
+
+        bool changed = false;
+        if (!PoiKnowledgeById.TryGetValue(poiId, out var knowledge))
+        {
+            knowledge = new GalaxyPoiKnowledge { Id = poiId };
+            PoiKnowledgeById[poiId] = knowledge;
+            changed = true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(systemId) && !string.Equals(knowledge.SystemId, systemId, StringComparison.Ordinal))
+        {
+            knowledge.SystemId = systemId;
+            changed = true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(poiName) && !string.Equals(knowledge.Name, poiName, StringComparison.Ordinal))
+        {
+            knowledge.Name = poiName;
+            changed = true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(poiType) && !string.Equals(knowledge.Type, poiType, StringComparison.Ordinal))
+        {
+            knowledge.Type = poiType;
+            changed = true;
+        }
+
+        if (!knowledge.X.HasValue && x.HasValue)
+        {
+            knowledge.X = x;
+            changed = true;
+        }
+
+        if (!knowledge.Y.HasValue && y.HasValue)
+        {
+            knowledge.Y = y;
+            changed = true;
+        }
+
+        if (hasBase && !knowledge.HasBase)
+        {
+            knowledge.HasBase = true;
+            changed = true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(baseId) && !string.Equals(knowledge.BaseId, baseId, StringComparison.Ordinal))
+        {
+            knowledge.BaseId = baseId;
+            changed = true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(baseName) && !string.Equals(knowledge.BaseName, baseName, StringComparison.Ordinal))
+        {
+            knowledge.BaseName = baseName;
+            changed = true;
+        }
+
+        if (markVisited && !knowledge.Visited)
+        {
+            knowledge.Visited = true;
+            changed = true;
+        }
+
+        if (resources != null && resources.Length > 0 && !HasSameResources(knowledge.Resources, resources))
+        {
+            knowledge.Resources = resources
+                .Where(r => r != null && !string.IsNullOrWhiteSpace(r.ResourceId))
+                .Select(ClonePoiResource)
+                .ToArray();
+            changed = true;
+        }
+
+        if (lastSeenUtc != default && lastSeenUtc >= knowledge.LastSeenUtc)
+        {
+            if (knowledge.LastSeenUtc != lastSeenUtc)
+            {
+                knowledge.LastSeenUtc = lastSeenUtc;
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    private static bool HasSameResources(PoiResourceInfo[]? left, PoiResourceInfo[]? right)
+    {
+        var leftIds = (left ?? Array.Empty<PoiResourceInfo>())
+            .Where(r => r != null && !string.IsNullOrWhiteSpace(r.ResourceId))
+            .Select(r => r.ResourceId)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
+
+        var rightIds = (right ?? Array.Empty<PoiResourceInfo>())
+            .Where(r => r != null && !string.IsNullOrWhiteSpace(r.ResourceId))
+            .Select(r => r.ResourceId)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
+
+        return leftIds.SequenceEqual(rightIds, StringComparer.Ordinal);
+    }
+
+    private static PoiResourceInfo ClonePoiResource(PoiResourceInfo source)
+    {
+        return new PoiResourceInfo
+        {
+            ResourceId = source.ResourceId,
+            Name = source.Name,
+            RichnessText = source.RichnessText,
+            Richness = source.Richness,
+            Remaining = source.Remaining,
+            RemainingDisplay = source.RemainingDisplay
         };
     }
 
@@ -468,19 +914,89 @@ internal static class GalaxyStateHub
                 PoisByResource = CloneResourceIndex(
                     source.Resources?.PoisByResource ?? new Dictionary<string, string[]>(StringComparer.Ordinal))
             },
+            Exploration = CloneExploration(source.Exploration ?? new GalaxyExplorationState()),
+            Knowledge = CloneKnowledge(source.Knowledge ?? new GalaxyKnowledgeState()),
             UpdatedAtUtc = source.UpdatedAtUtc
         };
     }
 
+    private static GalaxyExplorationState CloneExploration(GalaxyExplorationState source)
+    {
+        return new GalaxyExplorationState
+        {
+            ExploredSystems = new HashSet<string>(
+                source.ExploredSystems?.Where(v => !string.IsNullOrWhiteSpace(v)) ?? Array.Empty<string>(),
+                StringComparer.Ordinal),
+            VisitedPois = new HashSet<string>(
+                source.VisitedPois?.Where(v => !string.IsNullOrWhiteSpace(v)) ?? Array.Empty<string>(),
+                StringComparer.Ordinal),
+            SurveyedSystems = new HashSet<string>(
+                source.SurveyedSystems?.Where(v => !string.IsNullOrWhiteSpace(v)) ?? Array.Empty<string>(),
+                StringComparer.Ordinal),
+            MiningCheckedPoisByResource = CloneResourceIndex(
+                source.MiningCheckedPoisByResource ?? new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase),
+                StringComparer.OrdinalIgnoreCase),
+            MiningExploredSystemsByResource = CloneResourceIndex(
+                source.MiningExploredSystemsByResource ?? new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase),
+                StringComparer.OrdinalIgnoreCase)
+        };
+    }
+
+    private static GalaxyKnowledgeState CloneKnowledge(GalaxyKnowledgeState source)
+    {
+        return new GalaxyKnowledgeState
+        {
+            PoisById = (source.PoisById ?? new Dictionary<string, GalaxyPoiKnowledge>(StringComparer.Ordinal))
+                .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Key) && kvp.Value != null)
+                .ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => ClonePoiKnowledge(kvp.Value),
+                    StringComparer.Ordinal),
+            SystemsById = (source.SystemsById ?? new Dictionary<string, GalaxySystemKnowledge>(StringComparer.Ordinal))
+                .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Key) && kvp.Value != null)
+                .ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => new GalaxySystemKnowledge
+                    {
+                        Id = kvp.Value.Id,
+                        Surveyed = kvp.Value.Surveyed
+                    },
+                    StringComparer.Ordinal)
+        };
+    }
+
+    private static GalaxyPoiKnowledge ClonePoiKnowledge(GalaxyPoiKnowledge source)
+    {
+        return new GalaxyPoiKnowledge
+        {
+            Id = source.Id,
+            SystemId = source.SystemId,
+            Name = source.Name,
+            Type = source.Type,
+            X = source.X,
+            Y = source.Y,
+            HasBase = source.HasBase,
+            BaseId = source.BaseId,
+            BaseName = source.BaseName,
+            Visited = source.Visited,
+            LastSeenUtc = source.LastSeenUtc,
+            Resources = (source.Resources ?? Array.Empty<PoiResourceInfo>())
+                .Where(r => r != null && !string.IsNullOrWhiteSpace(r.ResourceId))
+                .Select(ClonePoiResource)
+                .ToArray()
+        };
+    }
+
     private static Dictionary<string, string[]> CloneResourceIndex(
-        Dictionary<string, string[]> source)
+        Dictionary<string, string[]> source,
+        StringComparer? keyComparer = null)
     {
         return source.ToDictionary(
             kvp => kvp.Key,
             kvp => (kvp.Value ?? Array.Empty<string>())
                 .Where(v => !string.IsNullOrWhiteSpace(v))
                 .ToArray(),
-            StringComparer.Ordinal);
+            keyComparer ?? StringComparer.Ordinal);
     }
 
     private static GalaxyMapSnapshot CloneMap(GalaxyMapSnapshot source)

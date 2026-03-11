@@ -68,7 +68,29 @@ internal static class RuntimeStateContractMapper
             Market = Map(source.Market),
             Catalog = Map(source.Catalog),
             Resources = Map(source.Resources),
+            Exploration = Map(source.Exploration),
             UpdatedAtUtc = source.UpdatedAtUtc
+        };
+    }
+
+    private static Contracts.RuntimeGalaxyExplorationDto Map(GalaxyExplorationState source)
+    {
+        return new Contracts.RuntimeGalaxyExplorationDto
+        {
+            ExploredSystems = (source.ExploredSystems ?? new HashSet<string>(StringComparer.Ordinal))
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .OrderBy(v => v, StringComparer.Ordinal)
+                .ToArray(),
+            VisitedPois = (source.VisitedPois ?? new HashSet<string>(StringComparer.Ordinal))
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .OrderBy(v => v, StringComparer.Ordinal)
+                .ToArray(),
+            SurveyedSystems = (source.SurveyedSystems ?? new HashSet<string>(StringComparer.Ordinal))
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .OrderBy(v => v, StringComparer.Ordinal)
+                .ToArray(),
+            MiningCheckedPoisByResource = MapResourceIndex(source.MiningCheckedPoisByResource),
+            MiningExploredSystemsByResource = MapResourceIndex(source.MiningExploredSystemsByResource)
         };
     }
 
@@ -85,6 +107,19 @@ internal static class RuntimeStateContractMapper
                 pair => pair.Value.ToArray(),
                 StringComparer.Ordinal)
         };
+    }
+
+    private static Dictionary<string, string[]> MapResourceIndex(Dictionary<string, string[]>? source)
+    {
+        source ??= new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+        return source.ToDictionary(
+            pair => pair.Key,
+            pair => (pair.Value ?? Array.Empty<string>())
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(v => v, StringComparer.Ordinal)
+                .ToArray(),
+            StringComparer.OrdinalIgnoreCase);
     }
 
     private static Contracts.RuntimeGalaxyMarketDto Map(GalaxyMarket source)

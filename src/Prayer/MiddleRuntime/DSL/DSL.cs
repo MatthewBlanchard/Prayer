@@ -766,6 +766,11 @@ public static class DslParser
         sb.AppendLine("- until CARGO(iron_ore) >= 10 {");
         sb.AppendLine("    mine iron_ore;");
         sb.AppendLine("  }");
+        sb.AppendLine("- until STASH(nexus_prime_station, iron_ore) >= 50 {");
+        sb.AppendLine("    mine iron_ore;");
+        sb.AppendLine("    go nexus_prime;");
+        sb.AppendLine("    stash iron_ore;");
+        sb.AppendLine("  }");
         sb.AppendLine("- explore;");
         sb.AppendLine();
 

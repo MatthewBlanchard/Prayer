@@ -64,6 +64,7 @@ public static class ExplorationStateStore
         snapshot.SurveyedSystems ??= new HashSet<string>(StringComparer.Ordinal);
         snapshot.MiningCheckedPoisByResource ??= new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         snapshot.MiningExploredSystemsByResource ??= new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        snapshot.PoisById ??= new Dictionary<string, GalaxyPoiKnowledge>(StringComparer.Ordinal);
         return snapshot;
     }
 }

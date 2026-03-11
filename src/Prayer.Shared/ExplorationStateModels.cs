@@ -13,4 +13,7 @@ public sealed class ExplorationStateSnapshot
         new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, HashSet<string>> MiningExploredSystemsByResource { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
+
+    // Rich POI knowledge cache, including discovered resources, shared across bots/processes.
+    public Dictionary<string, GalaxyPoiKnowledge> PoisById { get; set; } = new(StringComparer.Ordinal);
 }

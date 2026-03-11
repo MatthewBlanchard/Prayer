@@ -189,7 +189,10 @@ internal static class GalaxyStateHub
             }
 
             if (changed)
+            {
+                PersistExplorationStateNoLock();
                 RebuildSnapshotNoLock();
+            }
         }
     }
 
@@ -478,16 +481,34 @@ internal static class GalaxyStateHub
         MiningCheckedPoisByResource.Clear();
         MiningExploredSystemsByResource.Clear();
 
-        foreach (var poiId in legacy.ExploredPois ?? new HashSet<string>(StringComparer.Ordinal))
+        if (legacy.PoisById != null && legacy.PoisById.Count > 0)
         {
-            if (!string.IsNullOrWhiteSpace(poiId))
+            foreach (var (poiId, knowledge) in legacy.PoisById)
             {
-                PoiKnowledgeById[poiId] = new GalaxyPoiKnowledge
+                if (string.IsNullOrWhiteSpace(poiId) || knowledge == null)
+                    continue;
+
+                var cloned = ClonePoiKnowledge(knowledge);
+                if (string.IsNullOrWhiteSpace(cloned.Id))
+                    cloned.Id = poiId;
+                if (cloned.LastSeenUtc == default)
+                    cloned.LastSeenUtc = legacy.UpdatedAtUtc == default ? DateTime.UtcNow : legacy.UpdatedAtUtc;
+                PoiKnowledgeById[poiId] = cloned;
+            }
+        }
+        else
+        {
+            foreach (var poiId in legacy.ExploredPois ?? new HashSet<string>(StringComparer.Ordinal))
+            {
+                if (!string.IsNullOrWhiteSpace(poiId))
                 {
-                    Id = poiId,
-                    Visited = true,
-                    LastSeenUtc = legacy.UpdatedAtUtc == default ? DateTime.UtcNow : legacy.UpdatedAtUtc
-                };
+                    PoiKnowledgeById[poiId] = new GalaxyPoiKnowledge
+                    {
+                        Id = poiId,
+                        Visited = true,
+                        LastSeenUtc = legacy.UpdatedAtUtc == default ? DateTime.UtcNow : legacy.UpdatedAtUtc
+                    };
+                }
             }
         }
 
@@ -516,7 +537,13 @@ internal static class GalaxyStateHub
             ExploredPois = new HashSet<string>(exploration.VisitedPois, StringComparer.Ordinal),
             SurveyedSystems = new HashSet<string>(exploration.SurveyedSystems, StringComparer.Ordinal),
             MiningCheckedPoisByResource = CloneResourceIndexToSets(MiningCheckedPoisByResource),
-            MiningExploredSystemsByResource = CloneResourceIndexToSets(MiningExploredSystemsByResource)
+            MiningExploredSystemsByResource = CloneResourceIndexToSets(MiningExploredSystemsByResource),
+            PoisById = PoiKnowledgeById
+                .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Key) && kvp.Value != null)
+                .ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => ClonePoiKnowledge(kvp.Value),
+                    StringComparer.Ordinal)
         };
         ExplorationStateStore.Save(snapshot);
     }

@@ -143,27 +143,34 @@
   };
 
   window.syncCurrentScript = function () {
+    var perfStart = window._uiPerf ? window._uiPerf.begin() : 0;
     var botId = window._activeBotId;
     var url = apiUrl('partial/current-script') + (botId ? '?bot_id=' + encodeURIComponent(botId) : '');
     fetch(url, { cache: 'no-store' })
       .then(function (res) { return res.ok ? res.json() : null; })
       .then(function (state) {
-        if (!state || !window._liveScriptEditor) return;
-        var text = typeof state.script === 'string' ? state.script : '';
-        var current = window._liveScriptEditor.getValue();
-        if (current !== text) window._liveScriptEditor.setValue(text);
-        var nextLine = (typeof state.currentScriptLine === 'number') ? state.currentScriptLine : null;
-        var now = Date.now();
-        if (window._haltHighlightPending) {
-          if (now < window._haltHighlightPendingUntil) {
-            nextLine = null;
-          } else {
-            window._haltHighlightPending = false;
-            window._haltHighlightPendingUntil = 0;
+        try {
+          if (!state || !window._liveScriptEditor) return;
+          var text = typeof state.script === 'string' ? state.script : '';
+          var current = window._liveScriptEditor.getValue();
+          if (current !== text) window._liveScriptEditor.setValue(text);
+          var nextLine = (typeof state.currentScriptLine === 'number') ? state.currentScriptLine : null;
+          var now = Date.now();
+          if (window._haltHighlightPending) {
+            if (now < window._haltHighlightPendingUntil) {
+              nextLine = null;
+            } else {
+              window._haltHighlightPending = false;
+              window._haltHighlightPendingUntil = 0;
+            }
           }
+          window.setExecuteButtonRunning(nextLine !== null);
+          if (window._liveScriptRunLineNumber !== nextLine) window.setLiveScriptRunLine(nextLine);
+        } finally {
+          if (window._uiPerf) window._uiPerf.end('syncCurrentScript', perfStart);
         }
-        window.setExecuteButtonRunning(nextLine !== null);
-        if (window._liveScriptRunLineNumber !== nextLine) window.setLiveScriptRunLine(nextLine);
       })
-      .catch(function () { });
+      .catch(function () {
+        if (window._uiPerf) window._uiPerf.end('syncCurrentScript', perfStart);
+      });
   };

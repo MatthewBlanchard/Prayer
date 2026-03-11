@@ -8,8 +8,12 @@
   }
 
   window.refreshTickStatusBar = function () {
+    var perfStart = window._uiPerf ? window._uiPerf.begin() : 0;
     var shell = document.querySelector('#tick-status .tick-status-shell');
-    if (!shell) return;
+    if (!shell) {
+      if (window._uiPerf) window._uiPerf.end('refreshTickStatusBar', perfStart);
+      return;
+    }
 
     var tickRaw = (shell.getAttribute('data-current-tick') || '').trim();
     var parsedTick = parseInt(tickRaw, 10);
@@ -34,13 +38,17 @@
     var fill = shell.querySelector('#tick-status-fill');
     var main = shell.querySelector('.tick-meta-main');
     var post = shell.querySelector('.tick-meta-post');
-    if (!fill || !main || !post) return;
+    if (!fill || !main || !post) {
+      if (window._uiPerf) window._uiPerf.end('refreshTickStatusBar', perfStart);
+      return;
+    }
 
     if (state.tick === null || state.observedAtMs <= 0) {
       fill.style.width = '0%';
       main.textContent = 'Next in --';
       post.textContent = 'Last Prayer POST: n/a';
       state.renderPct = null;
+      if (window._uiPerf) window._uiPerf.end('refreshTickStatusBar', perfStart);
       return;
     }
 
@@ -72,6 +80,7 @@
     } else {
       post.textContent = 'Last Prayer POST: n/a';
     }
+    if (window._uiPerf) window._uiPerf.end('refreshTickStatusBar', perfStart);
   };
 
   function startTickBarAnimationLoop() {

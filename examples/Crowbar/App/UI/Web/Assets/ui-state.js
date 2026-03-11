@@ -40,6 +40,14 @@
   document.body.addEventListener('htmx:afterRequest', function (e) {
     var detail = (e || {}).detail || {};
     var path = (detail.pathInfo || {}).requestPath || '';
+    var perf = window._uiPerf;
+    if (perf) {
+      var reqCfg = detail.requestConfig || {};
+      var startedAt = reqCfg._perfStartedAt;
+      if (typeof startedAt === 'number' && isFinite(startedAt)) {
+        perf.end('htmxRequest', startedAt);
+      }
+    }
     if (path.endsWith('/api/add-bot') || path.endsWith('/api/llm-select') || path === 'api/add-bot' || path === 'api/llm-select') {
       window.closeAllSidebarLayers();
     }
@@ -49,6 +57,10 @@
     var detail = (e || {}).detail || {};
     var path = (detail.pathInfo || {}).requestPath || '';
     var elt = detail.elt || null;
+    if (window._uiPerf) {
+      detail.requestConfig = detail.requestConfig || {};
+      detail.requestConfig._perfStartedAt = window._uiPerf.begin();
+    }
 
     if ((path.indexOf('partial/state') >= 0) && elt && elt.classList && elt.classList.contains('tab-pane')) {
       if (elt.id === 'state-pane-map' && elt.classList.contains('active')) {

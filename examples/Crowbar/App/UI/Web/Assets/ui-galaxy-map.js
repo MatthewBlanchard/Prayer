@@ -3,6 +3,18 @@
     if (!canvas || canvas._mapHandlersAttached) return;
     canvas._mapHandlersAttached = true;
 
+    if (!window._mapDragReleaseHandlerAttached) {
+      window._mapDragReleaseHandlerAttached = true;
+      window.addEventListener('mouseup', function () {
+        document.querySelectorAll('.galaxy-map-canvas').forEach(function (activeCanvas) {
+          var activeState = window._galaxyMapStates.get(activeCanvas);
+          if (!activeState || !activeState.dragging) return;
+          activeState.dragging = false;
+          activeCanvas.classList.remove('dragging');
+        });
+      });
+    }
+
     canvas.addEventListener('mousedown', function (e) {
       if (e.button !== 0) return;
       var state = window._galaxyMapStates.get(canvas);
@@ -43,7 +55,6 @@
     }
 
     canvas.addEventListener('mouseup', stopDrag);
-    window.addEventListener('mouseup', stopDrag);
 
     canvas.addEventListener('mouseleave', function () {
       var state = window._galaxyMapStates.get(canvas);
@@ -142,13 +153,18 @@
   };
 
   window.drawGalaxyMapCanvas = function (canvas) {
+    var perfStart = window._uiPerf ? window._uiPerf.begin() : 0;
     var state = window._galaxyMapStates.get(canvas);
-    if (!state || !state.layout) return;
+    if (!state || !state.layout) {
+      if (window._uiPerf) window._uiPerf.end('drawGalaxyMapCanvas', perfStart);
+      return;
+    }
 
-    var ctx = state.ctx;
-    var cssWidth = state.cssWidth;
-    var cssHeight = state.cssHeight;
-    var driftT = (state.driftT || 0);
+    try {
+      var ctx = state.ctx;
+      var cssWidth = state.cssWidth;
+      var cssHeight = state.cssHeight;
+      var driftT = (state.driftT || 0);
 
     function drawMapHud(title, modeLabel) {
       if (!title) return;
@@ -624,12 +640,17 @@
         }
       });
     }
-    drawMapHud(state.currentId || 'Unknown', 'SYSTEM MAP');
+      drawMapHud(state.currentId || 'Unknown', 'SYSTEM MAP');
+    } finally {
+      if (window._uiPerf) window._uiPerf.end('drawGalaxyMapCanvas', perfStart);
+    }
   };
 
   window.renderGalaxyMapCanvases = function () {
+    var perfStart = window._uiPerf ? window._uiPerf.begin() : 0;
     var _hasArrivalRoutes = false;
     var canvases = document.querySelectorAll('.galaxy-map-canvas');
+    if (window._uiPerf) window._uiPerf.setGauge('map_canvases', canvases.length);
     canvases.forEach(function (canvas) {
       window.initGalaxyMapCanvas(canvas);
       if (canvas.offsetParent === null) return;
@@ -1097,6 +1118,9 @@
         window._routeCountdownTimer = null;
       }
     }
+    if (window._uiPerf) window._uiPerf.setGauge('route_timer', window._routeCountdownTimer ? 'on' : 'off');
+    if (window._uiPerf) window._uiPerf.setGauge('map_drag_release_handler', window._mapDragReleaseHandlerAttached ? '1' : '0');
+    if (window._uiPerf) window._uiPerf.end('renderGalaxyMapCanvases', perfStart);
   };
 
   window.pollGalaxyMapData = function () {

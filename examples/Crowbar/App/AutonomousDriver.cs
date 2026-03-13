@@ -343,6 +343,11 @@ public sealed class AutonomousDriver
         sb.Append("POI: ").Append(state.CurrentPOI?.Id ?? "(unknown)").Append(" (").Append(state.CurrentPOI?.Type ?? "?").Append(")");
         if (state.Docked) sb.Append(" DOCKED");
         sb.AppendLine();
+        if (state.CurrentPOI != null)
+        {
+            sb.Append("POI Details: ").AppendLine(FormatPoiFlags(state.CurrentPOI));
+            sb.Append("POI Resources: ").AppendLine(FormatPoiResources(state.CurrentPOI));
+        }
         sb.Append("Credits: ").AppendLine(state.Credits.ToString());
         sb.Append("Fuel: ").Append(state.Ship?.Fuel).Append('/').AppendLine((state.Ship?.MaxFuel).ToString());
         sb.Append("Hull: ").Append(state.Ship?.Hull).Append('/').AppendLine((state.Ship?.MaxHull).ToString());
@@ -471,7 +476,16 @@ public sealed class AutonomousDriver
         {
             sb.AppendLine("### POIs in System");
             foreach (var poi in state.POIs)
-                sb.Append("- ").AppendLine(poi.Id ?? "(unknown)");
+            {
+                sb.Append("- ").Append(poi.Id ?? "(unknown)").Append(" (").Append(poi.Type ?? "?").Append(")");
+                var flags = FormatPoiFlags(poi);
+                if (!string.IsNullOrWhiteSpace(flags))
+                    sb.Append(" | ").Append(flags);
+                var resources = FormatPoiResources(poi);
+                if (!string.IsNullOrWhiteSpace(resources) && !string.Equals(resources, "(none)", StringComparison.Ordinal))
+                    sb.Append(" | resources: ").Append(resources);
+                sb.AppendLine();
+            }
         }
 
         if (state.Systems?.Length > 0)
@@ -607,6 +621,49 @@ public sealed class AutonomousDriver
 
     private static string Truncate(string s, int max)
         => s.Length <= max ? s : s[..max] + "…";
+
+    private static string FormatPoiFlags(POIInfo poi)
+    {
+        if (poi == null)
+            return "(none)";
+
+        var flags = new List<string>(4);
+        if (poi.IsStation)
+            flags.Add("station");
+        if (poi.HasBase)
+            flags.Add(!string.IsNullOrWhiteSpace(poi.BaseName)
+                ? $"dockable ({poi.BaseName})"
+                : "dockable");
+        if (poi.IsMiningTarget)
+            flags.Add("mining");
+        if (poi.Online > 0)
+            flags.Add($"online={poi.Online}");
+
+        return flags.Count == 0 ? "(none)" : string.Join(", ", flags);
+    }
+
+    private static string FormatPoiResources(POIInfo poi)
+    {
+        if (poi?.Resources == null || poi.Resources.Length == 0)
+            return "(none)";
+
+        var resources = poi.Resources
+            .Where(r => r != null && !string.IsNullOrWhiteSpace(r.ResourceId))
+            .Take(5)
+            .Select(r =>
+            {
+                var richness = r.Richness.HasValue
+                    ? r.Richness.Value.ToString()
+                    : (string.IsNullOrWhiteSpace(r.RichnessText) ? "?" : r.RichnessText);
+                var remaining = !string.IsNullOrWhiteSpace(r.RemainingDisplay)
+                    ? r.RemainingDisplay
+                    : (r.Remaining.HasValue ? r.Remaining.Value.ToString() : "?");
+                return $"{r.ResourceId} (rich {richness}, rem {remaining})";
+            })
+            .ToArray();
+
+        return resources.Length == 0 ? "(none)" : string.Join("; ", resources);
+    }
 
     private static string BuildPromptExamplesBlock()
     {

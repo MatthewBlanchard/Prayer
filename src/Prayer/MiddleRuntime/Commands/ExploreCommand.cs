@@ -18,7 +18,7 @@ public class ExploreCommand : IMultiTurnCommand
         => !string.IsNullOrWhiteSpace(state.System);
 
     public string BuildHelp(GameState state)
-        => "- explore → visit nearest unvisited POIs, then nearest unexplored system";
+        => "- explore → visit current system unvisited POIs, then nearest system with unvisited POIs or unexplored status";
 
     public async Task<(bool finished, CommandExecutionResult? result)> StartAsync(
         IRuntimeTransport client,
@@ -166,23 +166,19 @@ public class ExploreCommand : IMultiTurnCommand
         if (TryGetNearestUnvisitedPoiInSystem(state, state.System, out _))
             return state.System;
 
+        var exploredSystems = state.Galaxy?.Exploration?.ExploredSystems
+            ?? new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var systemId in OrderedSystemsByDistance(distanceBySystem))
         {
             if (_unreachableSystems.Contains(systemId))
                 continue;
             if (string.Equals(systemId, state.System, StringComparison.Ordinal))
                 continue;
-            if (TryGetNearestUnvisitedPoiInSystem(state, systemId, out _))
-                return systemId;
-        }
 
-        var exploredSystems = state.Galaxy?.Exploration?.ExploredSystems
-            ?? new HashSet<string>(StringComparer.Ordinal);
-        foreach (var systemId in OrderedSystemsByDistance(distanceBySystem))
-        {
-            if (_unreachableSystems.Contains(systemId))
-                continue;
-            if (!exploredSystems.Contains(systemId))
+            bool hasUnvisitedPois = TryGetNearestUnvisitedPoiInSystem(state, systemId, out _);
+            bool isUnexploredSystem = !exploredSystems.Contains(systemId);
+            if (hasUnvisitedPois || isUnexploredSystem)
                 return systemId;
         }
 

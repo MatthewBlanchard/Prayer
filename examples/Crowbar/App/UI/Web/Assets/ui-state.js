@@ -1,4 +1,22 @@
 
+  function getActiveStatePane() {
+    return document.querySelector('#state-panel .tab-pane.active[hx-get]');
+  }
+
+  function pollActiveStatePane() {
+    var pane = getActiveStatePane();
+    if (pane && pane.id === 'state-pane-map') return;
+    if (pane) htmx.trigger(pane, 'load');
+  }
+
+  function scheduleActiveStatePanePolling() {
+    if (window._activeStatePanePoller) return;
+    window._activeStatePanePoller = window.setInterval(function () {
+      if (document.hidden) return;
+      pollActiveStatePane();
+    }, 1000);
+  }
+
   function captureStatePaneUiState(pane) {
     if (!pane || !pane.id) return;
     var openKeys = [];
@@ -47,6 +65,13 @@
       if (typeof startedAt === 'number' && isFinite(startedAt)) {
         perf.end('htmxRequest', startedAt);
       }
+      perf.count('htmx_requests');
+      perf.setGauge('htmx_last_path', path || '(unknown)');
+      perf.event('htmx_after_request', {
+        path: path || '',
+        targetId: detail.elt && detail.elt.id ? detail.elt.id : '',
+        successful: detail.successful !== false
+      });
     }
     if (path.endsWith('/api/add-bot') || path.endsWith('/api/llm-select') || path === 'api/add-bot' || path === 'api/llm-select') {
       window.closeAllSidebarLayers();
@@ -134,7 +159,23 @@
   document.addEventListener('htmx:afterSwap', function (e) {
     var detail = (e || {}).detail || {};
     var elt = detail.elt || null;
-    if (elt && elt.id === 'state-tabs') {
+    var eltId = elt && elt.id ? elt.id : '';
+    var isTabPane = !!(elt && elt.classList && elt.classList.contains('tab-pane'));
+    var isMapPane = eltId === 'state-pane-map';
+    var isTradePane = eltId === 'state-pane-trade';
+    var isShipPane = eltId === 'state-pane-shipyard';
+    var isCraftingPane = eltId === 'state-pane-crafting';
+    var isStateTabs = eltId === 'state-tabs';
+    var isTickStatus = eltId === 'tick-status';
+    var isRightPanel = eltId === 'right-panel';
+    if (window._uiPerf) {
+      window._uiPerf.count('htmx_swaps');
+      window._uiPerf.event('htmx_after_swap', {
+        targetId: elt && elt.id ? elt.id : '',
+        className: elt && elt.className ? elt.className.toString() : ''
+      });
+    }
+    if (isStateTabs) {
       var panel = document.getElementById('state-panel');
       if (panel) {
         var activePane = panel.querySelector('.tab-pane.active');
@@ -148,29 +189,61 @@
         if (targetBtn) window._activateStateTab(targetBtn, false);
       }
     }
-    if (elt && elt.classList && elt.classList.contains('tab-pane')) {
+    if (isTabPane) {
       restoreStatePaneUiState(elt);
     }
-    window.filterTradeCatalogItems(window._tradeCatalogQuery || '');
-    window.filterShipCatalogEntries(window._shipCatalogQuery || '');
-    window.filterCraftingRecipes(window._craftingQuery || '');
-    window.applyMapSubtabSelection();
-    window.renderGalaxyMapCanvases();
-    window.refreshTickStatusBar();
-    window.ensureScriptEditor();
-    refreshEditors();
+    if (isTradePane) {
+      window.filterTradeCatalogItems(window._tradeCatalogQuery || '');
+    }
+    if (isShipPane) {
+      window.filterShipCatalogEntries(window._shipCatalogQuery || '');
+    }
+    if (isCraftingPane) {
+      window.filterCraftingRecipes(window._craftingQuery || '');
+    }
+    if (isMapPane || isStateTabs) {
+      window.applyMapSubtabSelection();
+      window.renderGalaxyMapCanvases();
+    }
+    if (isTickStatus) {
+      window.refreshTickStatusBar();
+    }
+    if (isRightPanel || isStateTabs) {
+      window.ensureScriptEditor();
+      refreshEditors();
+    }
   });
+
+  scheduleActiveStatePanePolling();
+
+  // Keep details open/closed state fresh between HTMX polling swaps.
+  document.addEventListener('toggle', function (e) {
+    var target = e.target;
+    if (!target || target.tagName !== 'DETAILS') return;
+    var pane = target.closest && target.closest('.tab-pane');
+    if (!pane || !pane.id) return;
+    captureStatePaneUiState(pane);
+  }, true);
 
   // Client-side bot selection. window._activeBotId is seeded from the server on initial load.
   window.selectBot = function (botId) {
     window._activeBotId = botId || null;
-    // Re-poll all bot-scoped partials immediately; the server renders active state via bot_id query param.
-    document.querySelectorAll('.tab-pane.active[hx-get]').forEach(function (pane) {
-      htmx.trigger(pane, 'load');
-    });
+    // Re-poll the active bot-scoped pane immediately; inactive panes stay dormant until activated.
+    var activePane = getActiveStatePane();
+    if (activePane && activePane.id === 'state-pane-map') {
+      htmx.trigger(activePane, 'load');
+    } else {
+      pollActiveStatePane();
+    }
     ['bots-panel', 'state-tabs', 'state-strip-inline', 'right-panel', 'tick-status'].forEach(function (id) {
       var el = document.getElementById(id);
-      if (el) htmx.trigger(el, 'load');
+      if (!el) return;
+      if (id === 'tick-status') {
+        htmx.trigger(el, 'load');
+        if (window.pollTickStatusData) window.pollTickStatusData();
+        return;
+      }
+      htmx.trigger(el, 'load');
     });
   };
 

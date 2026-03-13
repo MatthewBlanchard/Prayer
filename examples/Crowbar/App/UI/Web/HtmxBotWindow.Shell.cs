@@ -19,12 +19,12 @@ public sealed partial class HtmxBotWindow
 
     private static readonly IReadOnlyList<StateTabDefinition> StateTabs = new[]
     {
-        new StateTabDefinition("map", "Map", "load, every 1000ms", ActiveOnLoad: true),
-        new StateTabDefinition("shipyard", "Ship", "load, every 1000ms"),
-        new StateTabDefinition("skills", "Skills", "load, every 1000ms"),
-        new StateTabDefinition("missions", "Missions", "load, every 1000ms"),
-        new StateTabDefinition("trade", "Trade", "load, every 1000ms"),
-        new StateTabDefinition("crafting", "Crafting", "load, every 1000ms", RequiresDocked: true),
+        new StateTabDefinition("map", "Map", "load", ActiveOnLoad: true),
+        new StateTabDefinition("shipyard", "Ship", "load"),
+        new StateTabDefinition("skills", "Skills", "load"),
+        new StateTabDefinition("missions", "Missions", "load"),
+        new StateTabDefinition("trade", "Trade", "load"),
+        new StateTabDefinition("crafting", "Crafting", "load", RequiresDocked: true),
     };
 
     private string BuildShellHtml()
@@ -130,7 +130,7 @@ public sealed partial class HtmxBotWindow
             {{BuildStatePanesHtml()}}
                 </div>
               </div>
-              <div id='tick-status' class='tick-status' hx-get='partial/tick-status' hx-trigger='load, every 1000ms' hx-swap='innerHTML'></div>
+              <div id='tick-status' class='tick-status' hx-get='partial/tick-status' hx-trigger='load' hx-swap='innerHTML'></div>
             </div>
             """);
     }

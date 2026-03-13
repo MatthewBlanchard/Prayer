@@ -196,8 +196,7 @@ public sealed partial class HtmxBotWindow : IAppUi
         {
             try
             {
-                if (requestPath.EndsWith("/api/prompt", StringComparison.OrdinalIgnoreCase) ||
-                    requestPath.EndsWith("/api/prompt-active-missions", StringComparison.OrdinalIgnoreCase))
+                if (ShouldTraceUiRequest(requestPath))
                 {
                     LogUiHttpTrace(
                         "request_complete",
@@ -290,6 +289,13 @@ public sealed partial class HtmxBotWindow : IAppUi
             return;
         }
 
+        if (req.HttpMethod == "GET" && path == "/partial/tick-status-data")
+        {
+            var botId = req.QueryString["bot_id"];
+            WriteText(ctx.Response, BuildTickStatusDataJson(botId), "application/json; charset=utf-8");
+            return;
+        }
+
         if (req.HttpMethod == "GET" && path == "/partial/models")
         {
             var provider = (req.QueryString["provider"] ?? "").Trim().ToLowerInvariant();
@@ -313,6 +319,13 @@ public sealed partial class HtmxBotWindow : IAppUi
         {
             var botId = req.QueryString["bot_id"];
             WriteText(ctx.Response, BuildCurrentScriptStateJson(botId), "application/json; charset=utf-8");
+            return;
+        }
+
+        if (req.HttpMethod == "GET" && path == "/partial/map-data")
+        {
+            var botId = req.QueryString["bot_id"];
+            WriteText(ctx.Response, BuildMapDataJson(botId), "application/json; charset=utf-8");
             return;
         }
 
@@ -643,19 +656,66 @@ public sealed partial class HtmxBotWindow : IAppUi
             case "map":
             case "space":
             default:
-                // Collect known systems from all bots so routes for non-selected bots
-                // can still be resolved to screen coordinates on the galaxy map.
-                var allKnownSystems = snapshot.BotStates.Values
-                    .Where(s => s.SpaceModel?.LocalSystems != null)
-                    .SelectMany(s => s.SpaceModel!.LocalSystems)
-                    .Where(s => !string.IsNullOrWhiteSpace(s.Id))
-                    .GroupBy(s => s.Id, StringComparer.OrdinalIgnoreCase)
-                    .Select(g => g.First())
-                    .ToList();
+                // Merge known systems across all bots so galaxy rendering is not tied
+                // to whichever bot is currently selected.
+                var allKnownSystems = BuildMergedKnownSystems(snapshot);
                 sb.Append(MapTabRenderer.Build(botState?.SpaceModel, snapshot.BotMapMarkers, snapshot.BotRoutes, botId, allKnownSystems));
                 break;
         }
         return sb.ToString();
+    }
+
+    private string BuildMapDataJson(string? botId)
+    {
+        UiSnapshot snapshot;
+        lock (_lock) snapshot = _snapshot;
+        var botState = GetBotState(snapshot, botId);
+        var allKnownSystems = BuildMergedKnownSystems(snapshot);
+        return MapTabRenderer.BuildMapPayloadJson(
+            botState?.SpaceModel,
+            snapshot.BotMapMarkers,
+            snapshot.BotRoutes,
+            botId,
+            allKnownSystems);
+    }
+
+    private static IReadOnlyList<SpaceUiSystemNode> BuildMergedKnownSystems(UiSnapshot snapshot)
+    {
+        return snapshot.BotStates.Values
+            .Where(state => state?.SpaceModel?.LocalSystems != null)
+            .SelectMany(state => state!.SpaceModel!.LocalSystems)
+            .Where(system => system != null && !string.IsNullOrWhiteSpace(system.Id))
+            .GroupBy(system => system.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var entries = group.ToList();
+                var withCoords = entries.FirstOrDefault(s => s.X.HasValue && s.Y.HasValue);
+                var primary = withCoords ?? entries[0];
+                var empire = entries
+                    .Select(s => s.Empire)
+                    .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;
+                var connections = entries
+                    .SelectMany(s => s.Connections ?? Array.Empty<string>())
+                    .Where(v => !string.IsNullOrWhiteSpace(v))
+                    .Select(v => v.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(v => v, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+
+                return new SpaceUiSystemNode(
+                    Id: primary.Id,
+                    X: primary.X,
+                    Y: primary.Y,
+                    Empire: empire,
+                    IsStronghold: entries.Any(s => s.IsStronghold),
+                    HasStation: entries.Any(s => s.HasStation),
+                    IsCurrent: entries.Any(s => s.IsCurrent),
+                    Connections: connections,
+                    HasKnownPois: entries.Any(s => s.HasKnownPois),
+                    IsExplored: entries.Any(s => s.IsExplored));
+            })
+            .OrderBy(s => s.Id, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private string BuildStateStripHtml(string? botId)
@@ -723,11 +783,39 @@ public sealed partial class HtmxBotWindow : IAppUi
 
     private string BuildTickStatusHtml(string? botId)
     {
+        var tickData = BuildTickStatusData(botId);
+
+        var sb = new StringBuilder();
+        sb.Append("<div class='tick-status-shell' data-current-tick='")
+            .Append(E(tickData.TickText))
+            .Append("' data-last-post-utc='")
+            .Append(E(tickData.LastPostIso))
+            .AppendLine("'>");
+        sb.AppendLine("<div class='tick-status-track'><div class='tick-status-fill' id='tick-status-fill'></div></div>");
+        sb.Append("<div class='tick-status-meta'><span class='tick-meta-main'>Next in --</span><span class='tick-meta-post'>Last Prayer POST: ")
+            .Append(E(tickData.LastPostText))
+            .AppendLine("</span></div>");
+        sb.AppendLine("</div>");
+        return sb.ToString();
+    }
+
+    private string BuildTickStatusDataJson(string? botId)
+    {
+        var tickData = BuildTickStatusData(botId);
+        return JsonSerializer.Serialize(new
+        {
+            currentTick = tickData.TickText,
+            lastPostUtc = tickData.LastPostIso,
+            lastPostText = tickData.LastPostText
+        });
+    }
+
+    private (string TickText, string LastPostIso, string LastPostText) BuildTickStatusData(string? botId)
+    {
         UiSnapshot snapshot;
         lock (_lock) snapshot = _snapshot;
         var botState = GetBotState(snapshot, botId);
 
-        var sb = new StringBuilder();
         var tickText = botState?.CurrentTick.HasValue == true
             ? botState.CurrentTick!.Value.ToString()
             : "N/A";
@@ -738,17 +826,7 @@ public sealed partial class HtmxBotWindow : IAppUi
             ? $"{Math.Max(0, (int)(DateTime.UtcNow - botState.LastSpaceMoltPostUtc!.Value).TotalSeconds)}s ago"
             : "n/a";
 
-        sb.Append("<div class='tick-status-shell' data-current-tick='")
-            .Append(E(tickText))
-            .Append("' data-last-post-utc='")
-            .Append(E(lastPostIso))
-            .AppendLine("'>");
-        sb.AppendLine("<div class='tick-status-track'><div class='tick-status-fill' id='tick-status-fill'></div></div>");
-        sb.Append("<div class='tick-status-meta'><span class='tick-meta-main'>Next in --</span><span class='tick-meta-post'>Last Prayer POST: ")
-            .Append(E(lastPostText))
-            .AppendLine("</span></div>");
-        sb.AppendLine("</div>");
-        return sb.ToString();
+        return (tickText, lastPostIso, lastPostText);
     }
 
     private static string BuildActiveMissionObjectivesPrompt(
@@ -1132,6 +1210,16 @@ public sealed partial class HtmxBotWindow : IAppUi
         var suffix = string.IsNullOrWhiteSpace(details) ? "" : $" | {details}";
         var line = $"[{DateTime.UtcNow:O}] {context} | method={method} | path={path} | raw={rawUrl} | status={status} | elapsed_ms={elapsed}{suffix}{Environment.NewLine}";
         LogSink.Instance.Enqueue(new LogEvent(DateTime.UtcNow, LogKind.UiHttpTrace, line, AppPaths.UiHttpTraceLogFile));
+    }
+
+    private static bool ShouldTraceUiRequest(string? requestPath)
+    {
+        if (string.IsNullOrWhiteSpace(requestPath))
+            return false;
+
+        return requestPath.StartsWith("/partial/", StringComparison.OrdinalIgnoreCase) ||
+               requestPath.EndsWith("/api/prompt", StringComparison.OrdinalIgnoreCase) ||
+               requestPath.EndsWith("/api/prompt-active-missions", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string E(string value) => WebUtility.HtmlEncode(value ?? "");

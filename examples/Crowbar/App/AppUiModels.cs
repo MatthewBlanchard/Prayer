@@ -20,7 +20,8 @@ public sealed record SpaceUiSystemNode(
     bool HasStation,
     bool IsCurrent,
     IReadOnlyList<string> Connections,
-    bool HasKnownPois = false);
+    bool HasKnownPois = false,
+    bool IsExplored = false);
 
 public sealed record SpaceUiCargoItem(
     string ItemId,
@@ -38,7 +39,12 @@ public sealed record SpaceUiModel(
     string Cargo,
     IReadOnlyList<SpaceUiPoi> Pois,
     IReadOnlyList<SpaceUiCargoItem> CargoItems,
-    IReadOnlyList<SpaceUiSystemNode> LocalSystems);
+    IReadOnlyList<SpaceUiSystemNode> LocalSystems,
+    IReadOnlyList<SpaceUiResourceFilter> ResourceFilters);
+
+public sealed record SpaceUiResourceFilter(
+    string ResourceId,
+    IReadOnlyList<string> SystemIds);
 
 public sealed record TradeUiItem(
     string ItemId,

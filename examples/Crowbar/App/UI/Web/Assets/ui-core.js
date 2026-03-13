@@ -13,6 +13,7 @@
   window._uiPerf = window._uiPerf || (function () {
     var metrics = {};
     var gauges = {};
+    var counters = {};
     var longTaskCount = 0;
     var longTaskTotalMs = 0;
     var memory = { used: null, total: null, limit: null, at: 0 };
@@ -24,6 +25,16 @@
     var refreshTimer = null;
     var memoryTimer = null;
     var hasLongTaskObserver = false;
+    var fetchWrapped = false;
+    var frameLoopStarted = false;
+    var lastFrameAt = 0;
+    var slowFrameCount = 0;
+    var worstFrameMs = 0;
+
+    function pushHistory(entry) {
+      history.push(entry);
+      if (history.length > maxHistory) history.shift();
+    }
 
     function ensurePanel() {
       if (panel || !document.body) return;
@@ -68,10 +79,14 @@
         lines.push('heap: unavailable');
       }
       lines.push('long tasks: ' + longTaskCount + ' (' + longTaskTotalMs.toFixed(0) + 'ms)');
-      var keyMetrics = ['renderGalaxyMapCanvases', 'drawGalaxyMapCanvas', 'refreshTickStatusBar', 'syncCurrentScript', 'htmxRequest'];
+      lines.push('slow frames: ' + slowFrameCount + ' / worst ' + worstFrameMs.toFixed(1) + 'ms');
+      var keyMetrics = ['renderGalaxyMapCanvases', 'drawGalaxyMapCanvas', 'refreshTickStatusBar', 'syncCurrentScript', 'htmxRequest', 'fetch'];
       keyMetrics.forEach(function (key) {
         var line = formatMetric(key);
         if (line) lines.push(line);
+      });
+      Object.keys(counters).sort().forEach(function (key) {
+        lines.push(key + ': ' + counters[key]);
       });
       Object.keys(gauges).forEach(function (key) {
         lines.push(key + ': ' + gauges[key]);
@@ -83,6 +98,7 @@
       panelVisible = !!visible;
       ensurePanel();
       if (panel) panel.style.display = panelVisible ? 'block' : 'none';
+      gauges.perf_overlay_visible = panelVisible ? '1' : '0';
       if (panelVisible) renderPanel();
     }
 
@@ -117,6 +133,58 @@
       if (!refreshTimer) {
         refreshTimer = setInterval(renderPanel, 1000);
       }
+
+      if (!frameLoopStarted) {
+        frameLoopStarted = true;
+        var frame = function (ts) {
+          window.requestAnimationFrame(frame);
+          if (document.hidden) {
+            lastFrameAt = ts;
+            return;
+          }
+          if (lastFrameAt > 0) {
+            var dt = ts - lastFrameAt;
+            gauges.frame_ms = dt.toFixed(1);
+            gauges.frame_fps = (dt > 0 ? (1000 / dt).toFixed(1) : '0');
+            if (dt > 20) {
+              slowFrameCount += 1;
+              if (dt > worstFrameMs) worstFrameMs = dt;
+              pushHistory({ ts: Date.now(), type: 'frame', duration: dt });
+            }
+          }
+          lastFrameAt = ts;
+        };
+        window.requestAnimationFrame(frame);
+      }
+
+      if (!fetchWrapped && window.fetch) {
+        fetchWrapped = true;
+        var nativeFetch = window.fetch.bind(window);
+        window.fetch = function (input, init) {
+          var startedAt = nowMs();
+          var url = '';
+          if (typeof input === 'string') url = input;
+          else if (input && typeof input.url === 'string') url = input.url;
+          return nativeFetch(input, init).then(function (res) {
+            var dur = Math.max(0, nowMs() - startedAt);
+            var status = res && typeof res.status === 'number' ? res.status : 0;
+            var path = url.replace(/^https?:\/\/[^/]+/i, '');
+            window._uiPerf.mark('fetch', dur);
+            window._uiPerf.count('fetch_total');
+            window._uiPerf.count(status >= 200 && status < 300 ? 'fetch_ok' : 'fetch_fail');
+            if (path) window._uiPerf.setGauge('fetch_last', path + ' ' + status + ' ' + dur.toFixed(1) + 'ms');
+            pushHistory({ ts: Date.now(), type: 'fetch', path: path || url, status: status, duration: dur });
+            return res;
+          }, function (err) {
+            var dur = Math.max(0, nowMs() - startedAt);
+            window._uiPerf.mark('fetch', dur);
+            window._uiPerf.count('fetch_total');
+            window._uiPerf.count('fetch_fail');
+            pushHistory({ ts: Date.now(), type: 'fetch_error', path: url, duration: dur });
+            throw err;
+          });
+        };
+      }
     }
 
     return {
@@ -136,13 +204,27 @@
       setGauge: function (name, value) {
         gauges[name] = value;
       },
+      count: function (name, amount) {
+        var delta = typeof amount === 'number' && isFinite(amount) ? amount : 1;
+        counters[name] = (counters[name] || 0) + delta;
+      },
+      event: function (name, fields) {
+        var entry = { ts: Date.now(), type: name };
+        if (fields && typeof fields === 'object') {
+          Object.keys(fields).forEach(function (key) { entry[key] = fields[key]; });
+        }
+        pushHistory(entry);
+      },
       snapshot: function () {
         return {
           metrics: metrics,
+          counters: counters,
           gauges: gauges,
           memory: memory,
           longTaskCount: longTaskCount,
           longTaskTotalMs: longTaskTotalMs,
+          slowFrameCount: slowFrameCount,
+          worstFrameMs: worstFrameMs,
           history: history.slice(-50)
         };
       },
@@ -154,12 +236,37 @@
 
   window.showPerfOverlay = function () { window._uiPerf.show(); };
   window.hidePerfOverlay = function () { window._uiPerf.hide(); };
+  window.togglePerfOverlay = function () {
+    var snapshot = window.getUiPerfSnapshot();
+    var visible = snapshot && snapshot.gauges && snapshot.gauges.perf_overlay_visible === '1';
+    if (visible) window.hidePerfOverlay();
+    else window.showPerfOverlay();
+  };
   window.getUiPerfSnapshot = function () { return window._uiPerf.snapshot(); };
+  window.logUiPerfSnapshot = function () {
+    var snapshot = window.getUiPerfSnapshot();
+    try { console.log('UI perf snapshot', snapshot); } catch (_) { }
+    return snapshot;
+  };
+  window.downloadUiPerfSnapshot = function () {
+    var snapshot = window.getUiPerfSnapshot();
+    var blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'ui-perf-snapshot.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    return snapshot;
+  };
   window._uiPerfStart = window._uiPerfStart || false;
   if (!window._uiPerfStart) {
     window._uiPerfStart = true;
     window._uiPerf.start();
     window._uiPerf.setGauge('perf_overlay', 'toggle via showPerfOverlay()');
+    window._uiPerf.setGauge('perf_overlay_visible', '0');
     window._uiPerf.mark('startup', 0);
   }
 
@@ -185,6 +292,7 @@
     var _starDriftPrev = null;
     var _starDriftFrame = function (ts) {
       window.requestAnimationFrame(_starDriftFrame);
+      if (document.hidden) return;
       var dt = _starDriftPrev === null ? 0 : Math.min((ts - _starDriftPrev) / 1000, 0.1);
       _starDriftPrev = ts;
       if (dt === 0) return;

@@ -69,6 +69,7 @@
     if (target) {
       target.classList.add('active');
       target.removeAttribute('hidden');
+      htmx.trigger(target, 'load');
     }
 
     if (tab === 'map') {

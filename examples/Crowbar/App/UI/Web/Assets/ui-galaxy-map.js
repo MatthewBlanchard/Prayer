@@ -1,3 +1,46 @@
+  window._galaxyMapResourceFilterState = window._galaxyMapResourceFilterState || { selected: {} };
+
+  function getSelectedResourceLookup() {
+    var state = window._galaxyMapResourceFilterState || { selected: {} };
+    var selected = state.selected || {};
+    var lookup = {};
+    Object.keys(selected).forEach(function (resourceId) {
+      if (!selected[resourceId]) return;
+      lookup[resourceId.toLowerCase()] = true;
+    });
+    return lookup;
+  }
+
+  window.bindGalaxyMapResourceFilters = function () {
+    var selectedLookup = getSelectedResourceLookup();
+    document.querySelectorAll('[data-map-resource-checkbox]').forEach(function (checkbox) {
+      var rid = (checkbox.getAttribute('data-map-resource-checkbox') || checkbox.value || '').toString().trim();
+      if (!rid) return;
+      checkbox.checked = !!selectedLookup[rid.toLowerCase()];
+    });
+
+    if (window._mapResourceFilterHandlerAttached) return;
+    window._mapResourceFilterHandlerAttached = true;
+    document.addEventListener('change', function (e) {
+      var target = e.target;
+      if (!target || !target.matches || !target.matches('[data-map-resource-checkbox]')) return;
+      var rid = (target.getAttribute('data-map-resource-checkbox') || target.value || '').toString().trim();
+      if (!rid) return;
+      var ridKey = rid.toLowerCase();
+
+      window._galaxyMapResourceFilterState = window._galaxyMapResourceFilterState || { selected: {} };
+      var selected = window._galaxyMapResourceFilterState.selected || {};
+      selected[ridKey] = !!target.checked;
+      window._galaxyMapResourceFilterState.selected = selected;
+
+      // Keep duplicate resource checkboxes in sync if multiple map fragments are on-screen.
+      document.querySelectorAll('[data-map-resource-checkbox]').forEach(function (checkbox) {
+        var otherRid = (checkbox.getAttribute('data-map-resource-checkbox') || checkbox.value || '').toString().trim();
+        if (otherRid.toLowerCase() === ridKey) checkbox.checked = !!target.checked;
+      });
+      window.renderGalaxyMapCanvases();
+    });
+  };
 
   window.initGalaxyMapCanvas = function (canvas) {
     if (!canvas || canvas._mapHandlersAttached) return;
@@ -344,9 +387,20 @@
       }
 
       if (state.layout.systems && state.layout.systems.length > 0) {
+        var selectedResourceLookup = getSelectedResourceLookup();
+        var hasSelectedResources = Object.keys(selectedResourceLookup).length > 0;
+        function matchesSelectedResources(system) {
+          if (!hasSelectedResources) return true;
+          if (!system || !Array.isArray(system.resourceIds) || system.resourceIds.length === 0) return false;
+          for (var i = 0; i < system.resourceIds.length; i++) {
+            var rid = (system.resourceIds[i] || '').toString().trim().toLowerCase();
+            if (rid && selectedResourceLookup[rid]) return true;
+          }
+          return false;
+        }
         function colorForSystem(system) {
           if (system && (system.isStronghold || system.IsStronghold)) {
-            return { core: '#ff5252', glow: '255,82,82' };
+            return { core: '#ff9f3f', glow: '255,159,63' };
           }
           var empireRaw = system ? system.empire : '';
           var empire = (empireRaw || '').toString().trim().toLowerCase();
@@ -361,12 +415,26 @@
         state.layout.systems.forEach(function (s) {
           var sx = zx(s.point.x) + panX;
           var sy = zy(s.point.y) + panY;
-          var tint = colorForSystem(s);
           var isLandmark = landmarkSystems.indexOf((s.id || '').trim().toLowerCase()) !== -1;
-          var isUnexplored = !s.isCurrent && !s.hasKnownPois;
+          var isExplored = !!(s.isExplored || s.IsExplored);
+          var isVisited = !!s.hasKnownPois;
+          var isCompletelyUnexplored = !s.isCurrent && !isVisited && !isExplored;
+          var isVisitedNotExplored = !s.isCurrent && isVisited && !isExplored;
+          var brightnessAlpha = isCompletelyUnexplored ? 0.30 : (isVisitedNotExplored ? 0.62 : 1.0);
+          var matchesSelection = false;
+          if (hasSelectedResources && isExplored && !s.isCurrent) {
+            matchesSelection = matchesSelectedResources(s);
+            brightnessAlpha = matchesSelection
+              ? Math.max(brightnessAlpha, 0.94)
+              : Math.min(brightnessAlpha, 0.18);
+          }
+          var isStronghold = !!(s.isStronghold || s.IsStronghold);
+          var tint = (hasSelectedResources && matchesSelection && !isStronghold)
+            ? { core: '#ffd95a', glow: '255,217,90' }
+            : colorForSystem(s);
           var r = (s.isCurrent ? 4.6 : isLandmark ? 5.2 : 3.3) * Math.max(0.7, Math.min(1.8, zoom));
           var glowR = (s.isCurrent ? 15 : isLandmark ? 18 : 10) * Math.max(0.7, Math.min(1.8, zoom));
-          if (isUnexplored) ctx.globalAlpha = 0.35;
+          ctx.globalAlpha = brightnessAlpha;
           var glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, glowR);
           glow.addColorStop(0, 'rgba(' + tint.glow + ',' + (s.isCurrent ? '0.40' : '0.26') + ')');
           glow.addColorStop(1, 'rgba(' + tint.glow + ',0)');
@@ -379,7 +447,7 @@
           ctx.beginPath();
           ctx.arc(sx, sy, r, 0, Math.PI * 2);
           ctx.fill();
-          if (isUnexplored) ctx.globalAlpha = 1.0;
+          ctx.globalAlpha = 1.0;
 
           if (s.hasStation) {
             var orbitRadius = Math.max(6.2, r + 3.7);
@@ -646,20 +714,59 @@
     }
   };
 
+  function createMapStars(mode, cssWidth, cssHeight) {
+    var seed = (42 ^ (mode === 'galaxy' ? 173 : 97)) >>> 0;
+    function nextRand() {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return (seed >>> 0) / 4294967295;
+    }
+    var stars = [];
+    var starCount = mode === 'galaxy' ? 250 : 190;
+    for (var st = 0; st < starCount; st++) {
+      var warm = nextRand() > 0.82;
+      stars.push({
+        x: nextRand() * cssWidth,
+        y: nextRand() * cssHeight,
+        r: warm ? (0.5 + nextRand() * 1.2) : (0.4 + nextRand() * 1.0),
+        alpha: 0.22 + nextRand() * 0.62,
+        glow: 1.4 + nextRand() * 3.2,
+        color: warm ? 'rgba(255,230,170,1)' : 'rgba(190,220,255,1)',
+        driftX: (nextRand() - 0.5) * 3.5,
+        driftY: (nextRand() - 0.5) * 3.5,
+        phase: nextRand() * Math.PI * 2
+      });
+    }
+    return stars;
+  }
+
+  function getCanvasMapPayload(canvas, existing) {
+    var payload = canvas.getAttribute('data-map') || '';
+    if (!payload) return null;
+    if (existing && existing.sourcePayload === payload && existing.sourceMap) {
+      return { payload: payload, map: existing.sourceMap };
+    }
+    try {
+      return { payload: payload, map: JSON.parse(payload) };
+    } catch (_) {
+      return null;
+    }
+  }
+
   window.renderGalaxyMapCanvases = function () {
     var perfStart = window._uiPerf ? window._uiPerf.begin() : 0;
     var _hasArrivalRoutes = false;
+    window.bindGalaxyMapResourceFilters();
     var canvases = document.querySelectorAll('.galaxy-map-canvas');
     if (window._uiPerf) window._uiPerf.setGauge('map_canvases', canvases.length);
     canvases.forEach(function (canvas) {
       window.initGalaxyMapCanvas(canvas);
       if (canvas.offsetParent === null) return;
 
-      var payload = canvas.getAttribute('data-map');
-      if (!payload) return;
-
-      var map;
-      try { map = JSON.parse(payload); } catch (_) { return; }
+      var existing = window._galaxyMapStates.get(canvas);
+      var mapPayload = getCanvasMapPayload(canvas, existing);
+      if (!mapPayload) return;
+      var payload = mapPayload.payload;
+      var map = mapPayload.map;
 
       function getX(v) {
         if (!v) return null;
@@ -695,6 +802,10 @@
         var id = getSystemId(s);
         return id.length > 0;
       });
+      var galaxySystems = ((map && (map.GalaxySystems || map.galaxySystems)) || []).filter(function (s) {
+        var id = getSystemId(s);
+        return id.length > 0;
+      });
       var currentId = ((map && (map.CurrentSystem || map.currentSystem)) || '').trim();
       var currentPoiId = ((map && (map.CurrentPoi || map.currentPoi)) || '').trim();
       var pois = ((map && (map.Pois || map.pois)) || []).filter(function (p) {
@@ -711,6 +822,12 @@
         var hops = r.Hops || r.hops || [];
         return currentSystemId.length > 0 && Array.isArray(hops) && hops.length > 0;
       });
+      var resourceFilters = ((map && (map.ResourceFilters || map.resourceFilters)) || []).filter(function (r) {
+        if (!r) return false;
+        var resourceId = ((r.ResourceId || r.resourceId) || '').toString().trim();
+        var systemIds = (r.SystemIds || r.systemIds || []);
+        return resourceId.length > 0 && Array.isArray(systemIds) && systemIds.length > 0;
+      });
 
       var ctx = canvas.getContext('2d');
       if (!ctx) return;
@@ -718,12 +835,22 @@
       var dpr = window.devicePixelRatio || 1;
       var cssWidth = canvas.clientWidth || 800;
       var cssHeight = canvas.clientHeight || 480;
-      canvas.width = Math.max(1, Math.floor(cssWidth * dpr));
-      canvas.height = Math.max(1, Math.floor(cssHeight * dpr));
       var mode = (canvas.getAttribute('data-map-mode') || 'system').toLowerCase().trim();
       var centerX = cssWidth * 0.5;
       var centerY = cssHeight * 0.5;
-      var existing = window._galaxyMapStates.get(canvas);
+      var pixelWidth = Math.max(1, Math.floor(cssWidth * dpr));
+      var pixelHeight = Math.max(1, Math.floor(cssHeight * dpr));
+      var sizeChanged = !existing ||
+        existing.dpr !== dpr ||
+        existing.cssWidth !== cssWidth ||
+        existing.cssHeight !== cssHeight ||
+        canvas.width !== pixelWidth ||
+        canvas.height !== pixelHeight;
+      if (sizeChanged) {
+        canvas.width = pixelWidth;
+        canvas.height = pixelHeight;
+        if (window._uiPerf) window._uiPerf.count('map_canvas_resizes');
+      }
 
       if (mode !== 'galaxy' && systems.length === 0) {
         var fallbackCurrentId = currentId || 'current';
@@ -731,37 +858,21 @@
         currentId = fallbackCurrentId;
       }
 
-      var seed = (42 ^ (mode === 'galaxy' ? 173 : 97)) >>> 0;
-      function nextRand() {
-        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-        return (seed >>> 0) / 4294967295;
-      }
-      var stars = [];
-      var starCount = mode === 'galaxy' ? 250 : 190;
-      for (var st = 0; st < starCount; st++) {
-        var warm = nextRand() > 0.82;
-        stars.push({
-          x: nextRand() * cssWidth,
-          y: nextRand() * cssHeight,
-          r: warm ? (0.5 + nextRand() * 1.2) : (0.4 + nextRand() * 1.0),
-          alpha: 0.22 + nextRand() * 0.62,
-          glow: 1.4 + nextRand() * 3.2,
-          color: warm ? 'rgba(255,230,170,1)' : 'rgba(190,220,255,1)',
-          // parallax drift: slow random velocity in screen-space (px/s)
-          driftX: (nextRand() - 0.5) * 3.5,
-          driftY: (nextRand() - 0.5) * 3.5,
-          phase: nextRand() * Math.PI * 2  // twinkle phase offset
-        });
+      var stars = (!sizeChanged && existing && existing.layout && existing.layout.stars)
+        ? existing.layout.stars
+        : createMapStars(mode, cssWidth, cssHeight);
+      if ((sizeChanged || !existing || !existing.layout || !existing.layout.stars) && window._uiPerf) {
+        window._uiPerf.count('map_starfield_rebuilds');
       }
 
       if (mode === 'galaxy') {
-        var galaxySystems = systems;
+        var galaxySystemsForRender = galaxySystems.length > 0 ? galaxySystems : systems;
         // allSystemsExtra contains every bot's known systems for route coordinate resolution.
         var allSystemsExtra = ((map && (map.AllSystems || map.allSystems)) || []);
 
         // If the selected bot has no local systems, fall back to allSystems for scale computation
         // so that routes from other bots can still be drawn.
-        var coordsSource = galaxySystems.length > 0 ? galaxySystems : allSystemsExtra;
+        var coordsSource = galaxySystemsForRender.length > 0 ? galaxySystemsForRender : allSystemsExtra;
         if (coordsSource.length === 0) return;
 
         var coords = coordsSource
@@ -794,7 +905,22 @@
 
         var byId = {};
         var byIdLower = {};
-        var layoutSystems = galaxySystems.map(function (s) {
+        var resourceIdsBySystemIdLower = {};
+        resourceFilters.forEach(function (resourceFilter) {
+          var resourceId = ((resourceFilter.ResourceId || resourceFilter.resourceId) || '').toString().trim();
+          if (!resourceId) return;
+          var systemIds = resourceFilter.SystemIds || resourceFilter.systemIds || [];
+          systemIds.forEach(function (systemIdRaw) {
+            var systemId = (systemIdRaw || '').toString().trim();
+            if (!systemId) return;
+            var key = systemId.toLowerCase();
+            resourceIdsBySystemIdLower[key] = resourceIdsBySystemIdLower[key] || [];
+            if (resourceIdsBySystemIdLower[key].indexOf(resourceId) === -1) {
+              resourceIdsBySystemIdLower[key].push(resourceId);
+            }
+          });
+        });
+        var layoutSystems = galaxySystemsForRender.map(function (s) {
           var id = getSystemId(s);
           var x = getX(s);
           var y = getY(s);
@@ -810,6 +936,8 @@
             isStronghold: !!(s.IsStronghold || s.isStronghold || s.is_stronghold),
             hasStation: !!(s.HasStation || s.hasStation || s.has_station),
             hasKnownPois: !!(s.HasKnownPois || s.hasKnownPois),
+            isExplored: !!(s.IsExplored || s.isExplored),
+            resourceIds: resourceIdsBySystemIdLower[id.toLowerCase()] || [],
             point: { x: px, y: py },
             isCurrent: id === currentId,
             connections: ((s.Connections || s.connections) || [])
@@ -980,6 +1108,8 @@
           dragOriginPanY: existing ? existing.dragOriginPanY : 0,
           currentId: currentId,
           payload: payload,
+          sourcePayload: payload,
+          sourceMap: map,
           galaxyFit: galaxyFit
         });
         window.drawGalaxyMapCanvas(canvas);
@@ -1102,7 +1232,9 @@
         mouseX: existing ? existing.mouseX : null,
         mouseY: existing ? existing.mouseY : null,
         currentId: currentId,
-        payload: payload
+        payload: payload,
+        sourcePayload: payload,
+        sourceMap: map
       });
 
       window.drawGalaxyMapCanvas(canvas);
@@ -1124,18 +1256,49 @@
   };
 
   window.pollGalaxyMapData = function () {
-    fetch(apiUrl('partial/map-data'), { cache: 'no-store' })
+    var botId = window._activeBotId;
+    var url = apiUrl('partial/map-data') + (botId ? '?bot_id=' + encodeURIComponent(botId) : '');
+    fetch(url, { cache: 'no-store' })
       .then(function (res) { return res.ok ? res.json() : null; })
       .then(function (map) {
         if (!map) return;
         var payload = JSON.stringify(map);
+        if (window._uiPerf) {
+          window._uiPerf.count('map_json_polls');
+          window._uiPerf.setGauge('map_payload_bytes', payload.length);
+        }
+        var changedCanvasCount = 0;
         document.querySelectorAll('.galaxy-map-canvas').forEach(function (canvas) {
-          var existingPayload = canvas.getAttribute('data-map') || '';
-          if (existingPayload !== payload) canvas.setAttribute('data-map', payload);
+          var existingState = window._galaxyMapStates.get(canvas);
+          var existingPayload = existingState && existingState.sourcePayload
+            ? existingState.sourcePayload
+            : (canvas.getAttribute('data-map') || '');
+          if (existingState) {
+            existingState.sourcePayload = payload;
+            existingState.sourceMap = map;
+          }
+          if (existingPayload !== payload) {
+            changedCanvasCount += 1;
+            canvas.setAttribute('data-map', payload);
+          }
         });
+        if (window._uiPerf) {
+          window._uiPerf.setGauge('map_changed_canvases', changedCanvasCount);
+          window._uiPerf.event('map_poll', { bytes: payload.length, changedCanvases: changedCanvasCount });
+        }
         window.renderGalaxyMapCanvases();
       })
       .catch(function () { });
+  };
+
+  window.ensureGalaxyMapDataPolling = function () {
+    if (window._galaxyMapDataPoller) return;
+    window._galaxyMapDataPoller = window.setInterval(function () {
+      if (document.hidden) return;
+      var activeMapPane = document.querySelector('#state-pane-map.tab-pane.active');
+      if (!activeMapPane) return;
+      window.pollGalaxyMapData();
+    }, 1000);
   };
 
   window.centerGalaxyMapOnCurrent = function (canvas) {

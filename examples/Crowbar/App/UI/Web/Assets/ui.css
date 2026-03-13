@@ -304,6 +304,44 @@ details.catalog-group > summary { cursor:pointer; color:#8eb8ff; }
   color:#d7e8ff;
   line-height:1.25;
 }
+.map-resource-list {
+  margin:0;
+  padding:0;
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:4px;
+  max-height:220px;
+  overflow:auto;
+}
+.map-resource-item {
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  align-items:center;
+  gap:8px;
+  border:1px solid rgba(98,137,187,0.28);
+  border-radius:6px;
+  background:rgba(16,28,45,0.52);
+  padding:4px 6px;
+  color:#d7e8ff;
+  cursor:pointer;
+}
+.map-resource-item input[type='checkbox'] {
+  width:14px;
+  height:14px;
+  margin:0;
+}
+.map-resource-name {
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.map-resource-count {
+  color:#9cc2ff;
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:0.35px;
+}
 .local-system-map-canvas {
   min-height: 0;
   height: 100%;

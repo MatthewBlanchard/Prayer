@@ -55,6 +55,8 @@ public static class AppUiStateBuilder
             .GroupBy(s => s.Id, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         mapBySystemId.TryGetValue(currentSystem, out var currentSystemEntry);
+        var exploredSystems = state.Galaxy?.Exploration?.ExploredSystems
+            ?? new HashSet<string>(StringComparer.Ordinal);
 
         var mapSystems = mapBySystemId.Values
             .Select(systemEntry =>
@@ -68,6 +70,7 @@ public static class AppUiStateBuilder
                     .ToArray();
                 var hasStation = knownStationSystems.Contains(id);
                 var hasKnownPois = knownPoiSystems.Contains(id);
+                var isExplored = exploredSystems.Contains(id);
 
                 return new SpaceUiSystemNode(
                     id,
@@ -78,11 +81,13 @@ public static class AppUiStateBuilder
                     hasStation,
                     string.Equals(id, currentSystem, StringComparison.OrdinalIgnoreCase),
                     connections,
-                    hasKnownPois);
+                    hasKnownPois,
+                    isExplored);
             })
             .OrderByDescending(s => s.IsCurrent)
             .ThenBy(s => s.Id, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        var resourceFilters = BuildResourceFilters(state);
 
         var poiMap = new Dictionary<string, SpaceUiPoi>(StringComparer.OrdinalIgnoreCase);
 
@@ -164,7 +169,54 @@ public static class AppUiStateBuilder
             $"{state.Ship.CargoUsed}/{state.Ship.CargoCapacity}",
             pois,
             cargoItems,
-            mapSystems);
+            mapSystems,
+            resourceFilters);
+    }
+
+    private static IReadOnlyList<SpaceUiResourceFilter> BuildResourceFilters(GameState state)
+    {
+        var byResource = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        void MergeSource(Dictionary<string, string[]>? source)
+        {
+            if (source == null)
+                return;
+
+            foreach (var (resourceIdRaw, systemsRaw) in source)
+            {
+                var resourceId = (resourceIdRaw ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(resourceId))
+                    continue;
+
+                if (!byResource.TryGetValue(resourceId, out var systems))
+                {
+                    systems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    byResource[resourceId] = systems;
+                }
+
+                foreach (var systemIdRaw in systemsRaw ?? Array.Empty<string>())
+                {
+                    var systemId = (systemIdRaw ?? string.Empty).Trim();
+                    if (!string.IsNullOrWhiteSpace(systemId))
+                        systems.Add(systemId);
+                }
+            }
+        }
+
+        // Primary source: exploration-memory resource index.
+        MergeSource(state.Galaxy?.Exploration?.MiningExploredSystemsByResource);
+        // Fallback and enrichment from galaxy resource knowledge cache.
+        MergeSource(state.Galaxy?.Resources?.SystemsByResource);
+
+        return byResource
+            .Where(kvp => kvp.Value.Count > 0)
+            .OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(kvp => new SpaceUiResourceFilter(
+                kvp.Key,
+                kvp.Value
+                    .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+                    .ToArray()))
+            .ToArray();
     }
 
     private static IReadOnlyList<string> FormatPoiResources(IReadOnlyList<PoiResourceInfo>? resources)

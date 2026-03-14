@@ -48,6 +48,18 @@
     executeBtn.classList.toggle('run-active', !!isRunning);
   };
 
+  function refreshStateUiNow() {
+    ['state-tabs', 'state-strip-inline', 'right-panel', 'tick-status'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) htmx.trigger(el, 'load');
+    });
+    if (window.pollStatePanes) window.pollStatePanes();
+  }
+
+  function scheduleStateUiRefresh(delayMs) {
+    window.setTimeout(refreshStateUiNow, delayMs);
+  }
+
   window.executeIfOk = function (e) {
     var detail = (e || {}).detail || {};
     var xhr = detail.xhr || null;
@@ -78,6 +90,9 @@
     window.setLiveScriptRunLine(1);
     htmx.ajax('POST', apiUrl('api/execute'), { swap: 'none', values: { bot_id: window._activeBotId || '' } });
     // Force a quick refresh in addition to the 1s poll loop.
+    scheduleStateUiRefresh(120);
+    scheduleStateUiRefresh(450);
+    scheduleStateUiRefresh(1000);
     setTimeout(window.syncCurrentScript, 120);
     setTimeout(window.syncCurrentScript, 450);
   };
@@ -121,6 +136,9 @@
         window.setExecuteButtonRunning(true);
         window.setLiveScriptRunLine(1);
         htmx.ajax('POST', apiUrl('api/execute'), { swap: 'none', values: { bot_id: window._activeBotId || '' } });
+        scheduleStateUiRefresh(120);
+        scheduleStateUiRefresh(450);
+        scheduleStateUiRefresh(1000);
         setTimeout(window.syncCurrentScript, 120);
         setTimeout(window.syncCurrentScript, 450);
       })

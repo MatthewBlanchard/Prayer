@@ -1,19 +1,17 @@
 
-  function getActiveStatePane() {
-    return document.querySelector('#state-panel .tab-pane.active[hx-get]');
+  function pollStatePanes() {
+    document.querySelectorAll('#state-panel .tab-pane[hx-get]').forEach(function (pane) {
+      if (!pane || pane.id === 'state-pane-map') return;
+      htmx.trigger(pane, 'load');
+    });
   }
+  window.pollStatePanes = pollStatePanes;
 
-  function pollActiveStatePane() {
-    var pane = getActiveStatePane();
-    if (pane && pane.id === 'state-pane-map') return;
-    if (pane) htmx.trigger(pane, 'load');
-  }
-
-  function scheduleActiveStatePanePolling() {
-    if (window._activeStatePanePoller) return;
-    window._activeStatePanePoller = window.setInterval(function () {
+  function scheduleStatePanePolling() {
+    if (window._statePanePoller) return;
+    window._statePanePoller = window.setInterval(function () {
       if (document.hidden) return;
-      pollActiveStatePane();
+      pollStatePanes();
     }, 1000);
   }
 
@@ -214,7 +212,7 @@
     }
   });
 
-  scheduleActiveStatePanePolling();
+  scheduleStatePanePolling();
 
   // Keep details open/closed state fresh between HTMX polling swaps.
   document.addEventListener('toggle', function (e) {
@@ -228,13 +226,10 @@
   // Client-side bot selection. window._activeBotId is seeded from the server on initial load.
   window.selectBot = function (botId) {
     window._activeBotId = botId || null;
-    // Re-poll the active bot-scoped pane immediately; inactive panes stay dormant until activated.
-    var activePane = getActiveStatePane();
-    if (activePane && activePane.id === 'state-pane-map') {
-      htmx.trigger(activePane, 'load');
-    } else {
-      pollActiveStatePane();
-    }
+    document.querySelectorAll('#state-panel .tab-pane.active[hx-get]').forEach(function (pane) {
+      htmx.trigger(pane, 'load');
+    });
+    pollStatePanes();
     ['bots-panel', 'state-tabs', 'state-strip-inline', 'right-panel', 'tick-status'].forEach(function (id) {
       var el = document.getElementById(id);
       if (!el) return;

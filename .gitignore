@@ -42,3 +42,4 @@ markets/
 .DS_Store
 Thumbs.db
 /publish/runtimes
+publish-linux/

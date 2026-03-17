@@ -1,11 +1,12 @@
 {
   "runtimeTarget": {
-    "name": ".NETCoreApp,Version=v8.0",
+    "name": ".NETCoreApp,Version=v8.0/linux-x64",
     "signature": ""
   },
   "compilationOptions": {},
   "targets": {
-    ".NETCoreApp,Version=v8.0": {
+    ".NETCoreApp,Version=v8.0": {},
+    ".NETCoreApp,Version=v8.0/linux-x64": {
       "Prayer/1.0.0": {
         "dependencies": {
           "LLamaSharp": "0.26.0",
@@ -52,30 +53,20 @@
         "dependencies": {
           "LLamaSharp.Backend.Cpu": "0.26.0"
         },
-        "runtimeTargets": {
+        "native": {
           "runtimes/linux-x64/native/cuda11/libggml-base.so": {
-            "rid": "linux-x64",
-            "assetType": "native",
             "fileVersion": "0.0.0.0"
           },
           "runtimes/linux-x64/native/cuda11/libggml-cuda.so": {
-            "rid": "linux-x64",
-            "assetType": "native",
             "fileVersion": "0.0.0.0"
           },
           "runtimes/linux-x64/native/cuda11/libggml.so": {
-            "rid": "linux-x64",
-            "assetType": "native",
             "fileVersion": "0.0.0.0"
           },
           "runtimes/linux-x64/native/cuda11/libllama.so": {
-            "rid": "linux-x64",
-            "assetType": "native",
             "fileVersion": "0.0.0.0"
           },
           "runtimes/linux-x64/native/cuda11/libllava_shared.so": {
-            "rid": "linux-x64",
-            "assetType": "native",
             "fileVersion": "0.0.0.0"
           }
         }
@@ -83,33 +74,6 @@
       "LLamaSharp.Backend.Cuda11.Windows/0.24.0": {
         "dependencies": {
           "LLamaSharp.Backend.Cpu": "0.26.0"
-        },
-        "runtimeTargets": {
-          "runtimes/win-x64/native/cuda11/ggml-base.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x64/native/cuda11/ggml-cuda.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x64/native/cuda11/ggml.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x64/native/cuda11/llama.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x64/native/cuda11/llava_shared.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          }
         }
       },
       "Microsoft.Bcl.AsyncInterfaces/10.0.2": {

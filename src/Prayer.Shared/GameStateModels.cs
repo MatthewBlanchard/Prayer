@@ -16,6 +16,7 @@ public partial class GameState
     public GalaxyState Galaxy { get; set; } = new();
     public int StorageCredits { get; set; }
     public Dictionary<string, ItemStack> StorageItems { get; set; } = new();
+    public Dictionary<string, Dictionary<string, ItemStack>> StorageCacheByPoi { get; set; } = new();
     public EconomyDeal[] EconomyDeals { get; set; } = Array.Empty<EconomyDeal>();
     public OpenOrderInfo[] OwnBuyOrders { get; set; } = Array.Empty<OpenOrderInfo>();
     public OpenOrderInfo[] OwnSellOrders { get; set; } = Array.Empty<OpenOrderInfo>();
@@ -27,6 +28,7 @@ public partial class GameState
     public Catalogue ShipCatalogue { get; set; } = new();
     public OwnedShipInfo[] OwnedShips { get; set; } = Array.Empty<OwnedShipInfo>();
     public CatalogueEntry[] AvailableRecipes { get; set; } = [];
+    public Dictionary<string, int> Skills { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public MissionInfo[] ActiveMissions { get; set; } = Array.Empty<MissionInfo>();
     public MissionInfo[] AvailableMissions { get; set; } = Array.Empty<MissionInfo>();

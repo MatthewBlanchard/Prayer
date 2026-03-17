@@ -61,10 +61,10 @@ public static class ExplorationStateStore
         snapshot ??= new ExplorationStateSnapshot();
         snapshot.ExploredSystems ??= new HashSet<string>(StringComparer.Ordinal);
         snapshot.ExploredPois ??= new HashSet<string>(StringComparer.Ordinal);
-        snapshot.UnreachableSystems ??= new HashSet<string>(StringComparer.Ordinal);
         snapshot.SurveyedSystems ??= new HashSet<string>(StringComparer.Ordinal);
         snapshot.MiningCheckedPoisByResource ??= new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         snapshot.MiningExploredSystemsByResource ??= new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        snapshot.PoisById ??= new Dictionary<string, GalaxyPoiKnowledge>(StringComparer.Ordinal);
         return snapshot;
     }
 }

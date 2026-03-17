@@ -38,5 +38,10 @@
     "Prompt": "Do a mining loop at nexus prime",
     "Script": "go nexus_prime;\nrepeat {\n  mine;\n  sell;\n}",
     "CreatedUtc": "2026-03-05T10:17:15.861709Z"
+  },
+  {
+    "Prompt": "mine iron and stash it at nexus prime until 50 are stored there",
+    "Script": "until STASH(nexus_prime_station, iron_ore) >= 50 {\n  mine iron_ore;\n  go nexus_prime;\n  stash;\n}",
+    "CreatedUtc": "2026-03-11T00:00:00.0000000Z"
   }
 ]

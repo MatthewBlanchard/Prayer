@@ -135,8 +135,9 @@
     }
 
     window.loadEditorBootstrap();
-    window.syncCurrentScript();
-    if (!window._liveScriptPoller) {
-      window._liveScriptPoller = setInterval(window.syncCurrentScript, 1000);
+    if (!window._liveScriptSyncStarted) {
+      window._liveScriptSyncStarted = true;
+      window._currentScriptIdlePollMs = 1000;
+      window.syncCurrentScript();
     }
   };

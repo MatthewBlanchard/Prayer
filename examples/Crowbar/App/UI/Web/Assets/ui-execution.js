@@ -142,28 +142,80 @@
     window.issueControlScriptAndExecute('self_destruct;');
   };
 
+  function isScriptPaneVisible() {
+    var pane = document.getElementById('right-pane-script');
+    return !!(pane && pane.classList && pane.classList.contains('active') && !pane.hasAttribute('hidden'));
+  }
+
+  function scheduleCurrentScriptSync(delayMs) {
+    var delay = typeof delayMs === 'number' && delayMs >= 0 ? delayMs : 1000;
+    if (window._liveScriptSyncTimer) {
+      clearTimeout(window._liveScriptSyncTimer);
+    }
+    window._liveScriptSyncTimer = window.setTimeout(function () {
+      window._liveScriptSyncTimer = null;
+      window.syncCurrentScript();
+    }, delay);
+  }
+
   window.syncCurrentScript = function () {
+    if (!window._liveScriptEditor) return;
+    if (document.hidden || !isScriptPaneVisible()) {
+      scheduleCurrentScriptSync(1500);
+      return;
+    }
+    if (window._syncCurrentScriptInFlight) {
+      window._syncCurrentScriptPending = true;
+      return;
+    }
+
+    var perfStart = window._uiPerf ? window._uiPerf.begin() : 0;
     var botId = window._activeBotId;
     var url = apiUrl('partial/current-script') + (botId ? '?bot_id=' + encodeURIComponent(botId) : '');
+    window._syncCurrentScriptInFlight = true;
     fetch(url, { cache: 'no-store' })
       .then(function (res) { return res.ok ? res.json() : null; })
       .then(function (state) {
-        if (!state || !window._liveScriptEditor) return;
-        var text = typeof state.script === 'string' ? state.script : '';
-        var current = window._liveScriptEditor.getValue();
-        if (current !== text) window._liveScriptEditor.setValue(text);
-        var nextLine = (typeof state.currentScriptLine === 'number') ? state.currentScriptLine : null;
-        var now = Date.now();
-        if (window._haltHighlightPending) {
-          if (now < window._haltHighlightPendingUntil) {
-            nextLine = null;
+        try {
+          if (!state || !window._liveScriptEditor) return;
+          var text = typeof state.script === 'string' ? state.script : '';
+          var current = window._liveScriptEditor.getValue();
+          var textChanged = current !== text;
+          if (textChanged) window._liveScriptEditor.setValue(text);
+          var nextLine = (typeof state.currentScriptLine === 'number') ? state.currentScriptLine : null;
+          var now = Date.now();
+          if (window._haltHighlightPending) {
+            if (now < window._haltHighlightPendingUntil) {
+              nextLine = null;
+            } else {
+              window._haltHighlightPending = false;
+              window._haltHighlightPendingUntil = 0;
+            }
+          }
+          window.setExecuteButtonRunning(nextLine !== null);
+          var lineChanged = window._liveScriptRunLineNumber !== nextLine;
+          if (lineChanged) window.setLiveScriptRunLine(nextLine);
+          var isActive = nextLine !== null;
+          window._currentScriptIdlePollMs = (textChanged || lineChanged || isActive) ? 250 : 1500;
+          if (window._uiPerf) {
+            window._uiPerf.setGauge('current_script_poll_ms', window._currentScriptIdlePollMs);
+            window._uiPerf.setGauge('current_script_active', isActive ? '1' : '0');
+            window._uiPerf.count('current_script_syncs');
+          }
+        } finally {
+          window._syncCurrentScriptInFlight = false;
+          if (window._uiPerf) window._uiPerf.end('syncCurrentScript', perfStart);
+          if (window._syncCurrentScriptPending) {
+            window._syncCurrentScriptPending = false;
+            scheduleCurrentScriptSync(0);
           } else {
-            window._haltHighlightPending = false;
-            window._haltHighlightPendingUntil = 0;
+            scheduleCurrentScriptSync(window._currentScriptIdlePollMs || 1000);
           }
         }
-        window.setExecuteButtonRunning(nextLine !== null);
-        if (window._liveScriptRunLineNumber !== nextLine) window.setLiveScriptRunLine(nextLine);
       })
-      .catch(function () { });
+      .catch(function () {
+        window._syncCurrentScriptInFlight = false;
+        if (window._uiPerf) window._uiPerf.end('syncCurrentScript', perfStart);
+        scheduleCurrentScriptSync(1500);
+      });
   };

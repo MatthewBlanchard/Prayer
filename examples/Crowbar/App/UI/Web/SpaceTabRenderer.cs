@@ -19,7 +19,8 @@ internal static class SpaceTabRenderer
             Cargo: string.Empty,
             Pois: Array.Empty<SpaceUiPoi>(),
             CargoItems: Array.Empty<SpaceUiCargoItem>(),
-            LocalSystems: Array.Empty<SpaceUiSystemNode>());
+            LocalSystems: Array.Empty<SpaceUiSystemNode>(),
+            ResourceFilters: Array.Empty<SpaceUiResourceFilter>());
 
         var sb = new StringBuilder();
         sb.AppendLine("<div class='space-stats state-strip'>");
@@ -45,7 +46,8 @@ internal static class SpaceTabRenderer
             Cargo: string.Empty,
             Pois: Array.Empty<SpaceUiPoi>(),
             CargoItems: Array.Empty<SpaceUiCargoItem>(),
-            LocalSystems: Array.Empty<SpaceUiSystemNode>());
+            LocalSystems: Array.Empty<SpaceUiSystemNode>(),
+            ResourceFilters: Array.Empty<SpaceUiResourceFilter>());
 
         var systems = (connectedSystems ?? Array.Empty<string>())
             .Where(s => !string.IsNullOrWhiteSpace(s))

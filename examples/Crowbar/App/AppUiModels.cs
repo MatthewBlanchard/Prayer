@@ -17,8 +17,11 @@ public sealed record SpaceUiSystemNode(
     double? Y,
     string Empire,
     bool IsStronghold,
+    bool HasStation,
     bool IsCurrent,
-    IReadOnlyList<string> Connections);
+    IReadOnlyList<string> Connections,
+    bool HasKnownPois = false,
+    bool IsExplored = false);
 
 public sealed record SpaceUiCargoItem(
     string ItemId,
@@ -36,7 +39,12 @@ public sealed record SpaceUiModel(
     string Cargo,
     IReadOnlyList<SpaceUiPoi> Pois,
     IReadOnlyList<SpaceUiCargoItem> CargoItems,
-    IReadOnlyList<SpaceUiSystemNode> LocalSystems);
+    IReadOnlyList<SpaceUiSystemNode> LocalSystems,
+    IReadOnlyList<SpaceUiResourceFilter> ResourceFilters);
+
+public sealed record SpaceUiResourceFilter(
+    string ResourceId,
+    IReadOnlyList<string> SystemIds);
 
 public sealed record TradeUiItem(
     string ItemId,
@@ -94,13 +102,22 @@ public sealed record CraftingUiEntry(
     string Name,
     string Category,
     int? Tier,
+    bool MeetsSkillRequirements,
     string IngredientsSummary,
+    string OutputsSummary,
     string DisplayText);
 
 public sealed record CraftingUiModel(
     bool HasCrafting,
     string StationId,
     IReadOnlyList<CraftingUiEntry> Recipes);
+
+public sealed record SkillUiEntry(
+    string SkillId,
+    int Level);
+
+public sealed record SkillsUiModel(
+    IReadOnlyList<SkillUiEntry> Skills);
 
 public sealed record ShipyardUiEntry(
     string Id,
@@ -115,7 +132,16 @@ public sealed record ShipyardUiEntry(
     int? Shield = null,
     int? Cargo = null,
     int? Speed = null,
-    decimal? Price = null);
+    decimal? Price = null,
+    string? MaterialsSummary = null);
+
+public sealed record OwnedShipUiEntry(
+    string ShipId,
+    string ClassId,
+    string Location,
+    bool IsActive,
+    bool CanSwitchHere,
+    string DisplayText);
 
 public sealed record ShipyardUiModel(
     string StationId,
@@ -130,7 +156,9 @@ public sealed record ShipyardUiModel(
     int? TotalShips,
     IReadOnlyList<ShipyardUiEntry> Showroom,
     IReadOnlyList<ShipyardUiEntry> PlayerListings,
-    IReadOnlyList<ShipyardUiEntry> CatalogShips);
+    IReadOnlyList<OwnedShipUiEntry> OwnedShips,
+    IReadOnlyList<ShipyardUiEntry> CatalogShips,
+    bool Docked = false);
 
 public sealed record BotStateEntry(
     string BotId,
@@ -149,7 +177,8 @@ public sealed record BotStateEntry(
     int? CurrentTick,
     DateTime? LastSpaceMoltPostUtc,
     Prayer.Contracts.ActiveGoRouteDto? ActiveRoute,
-    CraftingUiModel? CraftingModel);
+    CraftingUiModel? CraftingModel,
+    SkillsUiModel? SkillsModel);
 
 public sealed record BotRouteOverlay(
     string BotId,
@@ -159,6 +188,6 @@ public sealed record BotRouteOverlay(
     string? TargetSystemId,
     IReadOnlyList<string> Hops,
     int? TotalJumps,
-    int? EstimatedFuel,
-    int? FuelAvailable,
+    int? EstimatedFuelUse,
+    DateTimeOffset? ArrivalTime,
     int? ShipSpeed = null);

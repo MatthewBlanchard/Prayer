@@ -9,7 +9,10 @@ public interface IRuntimeTransport
         object? payload = null,
         CancellationToken cancellationToken = default);
 
-    Task<RuntimeCommandResult> FindRouteAsync(string targetSystem);
+    RouteInfo? FindPath(GameState state, string targetSystem);
+
+    void SetActiveRoute(RouteInfo? route);
+    RouteInfo? GetActiveRoute();
 
     Task<Catalogue> GetCatalogueAsync(
         string type,

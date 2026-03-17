@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -27,6 +26,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
     private bool _stopRequested;
     private string? _stopReason;
     private string? _completionMessage;
+    private bool _haltOnFinish;
     private readonly HashSet<string> _excludedPoiIds = new(StringComparer.Ordinal);
     private readonly HashSet<string> _excludedSystems = new(StringComparer.Ordinal);
 
@@ -41,7 +41,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         CommandResult cmd,
         GameState state)
     {
-        ResetState();
+        ResetState(client);
         _resourceId = string.IsNullOrWhiteSpace(cmd.Arg1) ? null : cmd.Arg1!.Trim();
 
         JsonElement response = await ExecuteStepAsync(client, state);
@@ -87,6 +87,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
     {
         if (state.Ship.CargoUsed >= state.Ship.CargoCapacity)
         {
+            client.SetActiveRoute(null);
             _completionMessage = "Mining complete.";
             return default;
         }
@@ -113,17 +114,20 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
 
         if (!TryResolveNearestKnownTarget(state, out string targetSystemId, out string targetPoiId))
         {
+            client.SetActiveRoute(null);
             _completionMessage = string.IsNullOrWhiteSpace(_resourceId)
-                ? "Mining complete: no known mineable POI found."
-                : $"Mining complete: no known POI found for `{_resourceId}`.";
+                ? "No minable POIs!"
+                : $"No minable POIs for `{_resourceId}`!";
+            _haltOnFinish = true;
             return default;
         }
 
         if (!string.Equals(state.System, targetSystemId, StringComparison.Ordinal))
         {
-            string? nextHop = await ResolveNextHopAsync(client, state, targetSystemId);
+            string? nextHop = ResolveNextHop(client, state, targetSystemId);
             if (string.IsNullOrWhiteSpace(nextHop))
             {
+                client.SetActiveRoute(null);
                 _excludedSystems.Add(targetSystemId);
                 return default;
             }
@@ -132,16 +136,19 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
             return default;
         }
 
+        client.SetActiveRoute(null);
         await client.ExecuteCommandAsync("travel", new { target_poi = targetPoiId });
         return default;
     }
 
-    private void ResetState()
+    private void ResetState(IRuntimeTransport client)
     {
         _resourceId = null;
         _stopRequested = false;
         _stopReason = null;
         _completionMessage = null;
+        _haltOnFinish = false;
+        client.SetActiveRoute(null);
         _excludedPoiIds.Clear();
         _excludedSystems.Clear();
     }
@@ -153,80 +160,11 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
             : $"Mining nearest known `{_resourceId}` spot...";
     }
 
-    private static async Task<string?> ResolveNextHopAsync(
-        IRuntimeTransport client,
-        GameState state,
-        string targetSystem)
+    private static string? ResolveNextHop(IRuntimeTransport client, GameState state, string targetSystem)
     {
-        JsonElement routeResult = (await client.FindRouteAsync(targetSystem)).Payload;
-        string? nextHop = TryGetNextHop(routeResult, state.System);
-        if (!string.IsNullOrWhiteSpace(nextHop))
-            return nextHop;
-
-        return state.Systems.Contains(targetSystem, StringComparer.Ordinal)
-            ? targetSystem
-            : null;
-    }
-
-    private static string? TryGetNextHop(JsonElement routeResult, string currentSystem)
-    {
-        foreach (var candidate in ExtractStringRoutes(routeResult))
-        {
-            if (candidate.Count == 0)
-                continue;
-
-            var route = candidate
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .ToList();
-
-            while (route.Count > 0 && string.Equals(route[0], currentSystem, StringComparison.Ordinal))
-                route.RemoveAt(0);
-
-            if (route.Count > 0)
-                return route[0];
-        }
-
-        return null;
-    }
-
-    private static IEnumerable<List<string>> ExtractStringRoutes(JsonElement root)
-    {
-        if (root.ValueKind != JsonValueKind.Object)
-            yield break;
-
-        if (!root.TryGetProperty("route", out var routeElement))
-            yield break;
-
-        foreach (var route in ReadStringRouteCandidates(routeElement))
-            yield return route;
-    }
-
-    private static IEnumerable<List<string>> ReadStringRouteCandidates(JsonElement node)
-    {
-        if (node.ValueKind != JsonValueKind.Array)
-            yield break;
-
-        var directRoute = new List<string>();
-        bool hasNested = false;
-
-        foreach (var part in node.EnumerateArray())
-        {
-            if (part.ValueKind == JsonValueKind.String)
-            {
-                directRoute.Add(part.GetString() ?? "");
-                continue;
-            }
-
-            if (part.ValueKind == JsonValueKind.Array)
-            {
-                hasNested = true;
-                foreach (var nested in ReadStringRouteCandidates(part))
-                    yield return nested;
-            }
-        }
-
-        if (!hasNested && directRoute.Count > 0)
-            yield return directRoute;
+        RouteInfo? route = client.FindPath(state, targetSystem);
+        client.SetActiveRoute(route);
+        return route is { Hops.Count: > 0 } ? route.Hops[0] : null;
     }
 
     private bool TryResolveNearestKnownTarget(
@@ -284,16 +222,14 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         if (string.IsNullOrWhiteSpace(_resourceId))
             return GetKnownMineablePoiIds(state);
 
-        var resourceIndex = state.Galaxy?.Resources?.PoisByResource;
-        if (resourceIndex == null || resourceIndex.Count == 0)
-            return Enumerable.Empty<string>();
-
-        string? key = resourceIndex.Keys.FirstOrDefault(k =>
-            string.Equals(k, _resourceId, StringComparison.OrdinalIgnoreCase));
-        if (string.IsNullOrWhiteSpace(key))
-            return Enumerable.Empty<string>();
-
-        return resourceIndex[key];
+        return (state.Galaxy?.Knowledge?.PoisById ?? new Dictionary<string, GalaxyPoiKnowledge>(StringComparer.Ordinal))
+            .Where(kvp =>
+                kvp.Value != null &&
+                kvp.Value.Resources != null &&
+                kvp.Value.Resources.Any(r =>
+                    !string.IsNullOrWhiteSpace(r.ResourceId) &&
+                    string.Equals(r.ResourceId, _resourceId, StringComparison.OrdinalIgnoreCase)))
+            .Select(kvp => kvp.Key);
     }
 
     private static IEnumerable<string> GetKnownMineablePoiIds(GameState state)
@@ -312,6 +248,15 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         foreach (var known in state.Galaxy?.Map?.KnownPois ?? new List<GalaxyKnownPoiInfo>())
         {
             if (string.IsNullOrWhiteSpace(known.Id) || string.IsNullOrWhiteSpace(known.Type))
+                continue;
+
+            if (MineablePoiTypes.Contains(known.Type))
+                ids.Add(known.Id);
+        }
+
+        foreach (var known in state.Galaxy?.Knowledge?.PoisById?.Values ?? Enumerable.Empty<GalaxyPoiKnowledge>())
+        {
+            if (known == null || string.IsNullOrWhiteSpace(known.Id) || string.IsNullOrWhiteSpace(known.Type))
                 continue;
 
             if (MineablePoiTypes.Contains(known.Type))
@@ -341,6 +286,14 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
         foreach (var known in state.Galaxy?.Map?.KnownPois ?? new List<GalaxyKnownPoiInfo>())
         {
             if (string.IsNullOrWhiteSpace(known.Id) || string.IsNullOrWhiteSpace(known.SystemId))
+                continue;
+
+            lookup[known.Id] = known.SystemId;
+        }
+
+        foreach (var known in state.Galaxy?.Knowledge?.PoisById?.Values ?? Enumerable.Empty<GalaxyPoiKnowledge>())
+        {
+            if (known == null || string.IsNullOrWhiteSpace(known.Id) || string.IsNullOrWhiteSpace(known.SystemId))
                 continue;
 
             lookup[known.Id] = known.SystemId;
@@ -478,9 +431,11 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
 
     private (bool finished, CommandExecutionResult? result) FinishWithMessage(string message)
     {
+        bool halt = _haltOnFinish;
         _stopRequested = false;
         _stopReason = null;
         _completionMessage = null;
-        return (true, new CommandExecutionResult { ResultMessage = message });
+        _haltOnFinish = false;
+        return (true, new CommandExecutionResult { ResultMessage = message, HaltScript = halt });
     }
 }

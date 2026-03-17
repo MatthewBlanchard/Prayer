@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 
 public class ExploreCommand : IMultiTurnCommand
@@ -9,44 +8,27 @@ public class ExploreCommand : IMultiTurnCommand
     public string Name => "explore";
     public DslCommandSyntax GetDslSyntax() => new();
 
-    private ExplorationStateSnapshot _snapshot = new();
     private string? _targetSystemId;
     private bool _completed;
     private string? _completionMessage;
+    private bool _haltOnFinish;
+    private readonly HashSet<string> _unreachableSystems = new(StringComparer.Ordinal);
 
     public bool IsAvailable(GameState state)
         => !string.IsNullOrWhiteSpace(state.System);
 
     public string BuildHelp(GameState state)
-        => "- explore → go to nearest unexplored system, visit unexplored POIs, gather intel";
+        => "- explore → visit current system unvisited POIs, then nearest system with unvisited POIs or unexplored status";
 
     public async Task<(bool finished, CommandExecutionResult? result)> StartAsync(
         IRuntimeTransport client,
         CommandResult cmd,
         GameState state)
     {
-        ResetRuntimeState();
-        _snapshot = LoadSnapshot();
-
-        if (!string.IsNullOrWhiteSpace(state.CurrentPOI?.Id))
-            MarkPoiExplored(state.CurrentPOI.Id);
-
-        _targetSystemId = SelectNearestUnexploredSystem(state);
-        if (string.IsNullOrWhiteSpace(_targetSystemId))
-        {
-            _completed = true;
-            _completionMessage = "Exploration complete: no unexplored systems or POIs found.";
-            return (true, new CommandExecutionResult { ResultMessage = _completionMessage });
-        }
-
+        ResetRuntimeState(client);
+        MarkCurrentPoiVisited(state);
         await ExecuteStepAsync(client, state);
-        if (_completed)
-            return (true, new CommandExecutionResult { ResultMessage = _completionMessage ?? "Exploration complete." });
-
-        return (false, new CommandExecutionResult
-        {
-            ResultMessage = $"Exploring system `{_targetSystemId}`..."
-        });
+        return BuildStepResult();
     }
 
     public async Task<(bool finished, CommandExecutionResult? result)> ContinueAsync(
@@ -54,27 +36,28 @@ public class ExploreCommand : IMultiTurnCommand
         GameState state)
     {
         if (_completed)
-        {
-            return (true, new CommandExecutionResult
-            {
-                ResultMessage = _completionMessage ?? "Exploration complete."
-            });
-        }
+            return BuildStepResult();
 
+        MarkCurrentPoiVisited(state);
         await ExecuteStepAsync(client, state);
+        return BuildStepResult();
+    }
 
+    private (bool finished, CommandExecutionResult? result) BuildStepResult()
+    {
         if (_completed)
         {
             return (true, new CommandExecutionResult
             {
-                ResultMessage = _completionMessage ?? "Exploration complete."
+                ResultMessage = _completionMessage ?? "Exploration complete.",
+                HaltScript = _haltOnFinish
             });
         }
 
         return (false, new CommandExecutionResult
         {
             ResultMessage = !string.IsNullOrWhiteSpace(_targetSystemId)
-                ? $"Exploring system `{_targetSystemId}`..."
+                ? $"Exploring `{_targetSystemId}`..."
                 : "Exploring..."
         });
     }
@@ -87,34 +70,25 @@ public class ExploreCommand : IMultiTurnCommand
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(state.CurrentPOI?.Id))
-            MarkPoiExplored(state.CurrentPOI.Id);
+        if (string.IsNullOrWhiteSpace(_targetSystemId))
+            _targetSystemId = SelectNextTargetSystem(state);
 
         if (string.IsNullOrWhiteSpace(_targetSystemId))
         {
-            _targetSystemId = SelectNearestUnexploredSystem(state);
-            if (string.IsNullOrWhiteSpace(_targetSystemId))
-            {
-                _completed = true;
-                _completionMessage = "Exploration complete: no unexplored systems or POIs found.";
-            }
-
+            _completed = true;
+            _haltOnFinish = true;
+            _completionMessage = "No unexplored systems or POIs found!";
             return;
         }
 
         if (!string.Equals(state.System, _targetSystemId, StringComparison.Ordinal))
         {
-            string? nextHop = await ResolveNextHopAsync(client, state, _targetSystemId);
+            string? nextHop = ResolveNextHop(client, state, _targetSystemId);
             if (string.IsNullOrWhiteSpace(nextHop))
             {
-                MarkSystemUnreachable(_targetSystemId);
-                _targetSystemId = SelectNearestUnexploredSystem(state);
-                if (string.IsNullOrWhiteSpace(_targetSystemId))
-                {
-                    _completed = true;
-                    _completionMessage = "Exploration complete: all remaining unexplored systems are unreachable.";
-                }
-
+                client.SetActiveRoute(null);
+                _unreachableSystems.Add(_targetSystemId);
+                _targetSystemId = null;
                 return;
             }
 
@@ -122,7 +96,22 @@ public class ExploreCommand : IMultiTurnCommand
             return;
         }
 
-        if (!_snapshot.SurveyedSystems.Contains(state.System))
+        client.SetActiveRoute(null);
+
+        if (TryGetNearestUnvisitedPoiInSystem(state, state.System, out var targetPoiId))
+        {
+            if (!string.Equals(state.CurrentPOI?.Id, targetPoiId, StringComparison.Ordinal))
+            {
+                await client.ExecuteCommandAsync("travel", new { target_poi = targetPoiId });
+                return;
+            }
+
+            MarkCurrentPoiVisited(state);
+            return;
+        }
+
+        var exploration = state.Galaxy?.Exploration ?? new GalaxyExplorationState();
+        if (!exploration.SurveyedSystems.Contains(state.System))
         {
             try
             {
@@ -130,135 +119,226 @@ public class ExploreCommand : IMultiTurnCommand
             }
             catch
             {
-                // Best-effort survey for extra intel.
+                // Survey is best-effort and can fail without scanner modules.
             }
 
-            _snapshot.SurveyedSystems.Add(state.System);
-            SaveSnapshot();
+            GalaxyStateHub.MarkSystemSurveyed(state.System);
             return;
         }
 
-        string? nextPoiId = SelectNextUnexploredPoiInCurrentSystem(state);
-        if (!string.IsNullOrWhiteSpace(nextPoiId))
-        {
-            await client.ExecuteCommandAsync("travel", new { target_poi = nextPoiId });
-            return;
-        }
-
-        MarkSystemExplored(state.System);
         _completed = true;
         _completionMessage = $"Exploration complete: `{state.System}` explored.";
     }
 
-    private void ResetRuntimeState()
+    private void ResetRuntimeState(IRuntimeTransport client)
     {
-        _snapshot = new ExplorationStateSnapshot();
         _targetSystemId = null;
         _completed = false;
         _completionMessage = null;
+        _haltOnFinish = false;
+        _unreachableSystems.Clear();
+        client.SetActiveRoute(null);
     }
 
-    private string? SelectNextUnexploredPoiInCurrentSystem(GameState state)
+    private void MarkCurrentPoiVisited(GameState state)
     {
-        var candidatePoiIds = GetKnownPoiIdsBySystem(state)
-            .Where(kvp => string.Equals(kvp.Value, state.System, StringComparison.Ordinal))
-            .Select(kvp => kvp.Key)
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
+        if (string.IsNullOrWhiteSpace(state.CurrentPOI?.Id))
+            return;
 
-        foreach (var poiId in candidatePoiIds)
-        {
-            if (_snapshot.ExploredPois.Contains(poiId))
-                continue;
-
-            if (string.Equals(poiId, state.CurrentPOI?.Id, StringComparison.Ordinal))
-            {
-                MarkPoiExplored(poiId);
-                continue;
-            }
-
-            return poiId;
-        }
-
-        return null;
+        GalaxyStateHub.MarkPoiVisited(
+            state.CurrentPOI.Id,
+            state.CurrentPOI.SystemId,
+            state.CurrentPOI.Name,
+            state.CurrentPOI.Type,
+            state.CurrentPOI.X,
+            state.CurrentPOI.Y,
+            state.CurrentPOI.HasBase,
+            state.CurrentPOI.BaseId,
+            state.CurrentPOI.BaseName);
     }
 
-    private string? SelectNearestUnexploredSystem(GameState state)
+    private string? SelectNextTargetSystem(GameState state)
     {
         var distanceBySystem = BuildSystemDistanceIndex(state);
         if (distanceBySystem.Count == 0)
             return null;
 
-        var systems = distanceBySystem.Keys
-            .OrderBy(s => distanceBySystem[s])
-            .ThenBy(s => s, StringComparer.Ordinal)
-            .ToList();
+        if (TryGetNearestUnvisitedPoiInSystem(state, state.System, out _))
+            return state.System;
 
-        foreach (var systemId in systems)
+        var exploredSystems = state.Galaxy?.Exploration?.ExploredSystems
+            ?? new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var systemId in OrderedSystemsByDistance(distanceBySystem))
         {
-            if (_snapshot.UnreachableSystems.Contains(systemId))
+            if (_unreachableSystems.Contains(systemId))
+                continue;
+            if (string.Equals(systemId, state.System, StringComparison.Ordinal))
                 continue;
 
-            if (IsSystemUnexplored(state, systemId))
+            bool hasUnvisitedPois = TryGetNearestUnvisitedPoiInSystem(state, systemId, out _);
+            bool isUnexploredSystem = !exploredSystems.Contains(systemId);
+            if (hasUnvisitedPois || isUnexploredSystem)
                 return systemId;
         }
 
         return null;
     }
 
-    private bool IsSystemUnexplored(GameState state, string systemId)
+    private static IEnumerable<string> OrderedSystemsByDistance(Dictionary<string, int> distanceBySystem)
+        => distanceBySystem.Keys
+            .OrderBy(s => distanceBySystem[s])
+            .ThenBy(s => s, StringComparer.Ordinal);
+
+    private static bool TryGetNearestUnvisitedPoiInSystem(
+        GameState state,
+        string systemId,
+        out string poiId)
     {
+        poiId = "";
         if (string.IsNullOrWhiteSpace(systemId))
             return false;
 
-        var knownPoiIds = GetKnownPoiIdsBySystem(state)
-            .Where(kvp => string.Equals(kvp.Value, systemId, StringComparison.Ordinal))
+        var visited = (state.Galaxy?.Knowledge?.PoisById ?? new Dictionary<string, GalaxyPoiKnowledge>(StringComparer.Ordinal))
+            .Where(kvp => kvp.Value != null && kvp.Value.Visited)
             .Select(kvp => kvp.Key)
-            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.Ordinal);
+        var candidates = CollectKnownPoiIdsForSystem(state, systemId)
+            .Where(id => !visited.Contains(id))
             .Distinct(StringComparer.Ordinal)
             .ToList();
+        if (candidates.Count == 0)
+            return false;
 
-        if (knownPoiIds.Count == 0)
-            return !_snapshot.ExploredSystems.Contains(systemId);
+        var positions = BuildPoiPositionLookup(state, systemId);
+        var currentX = state.CurrentPOI?.X;
+        var currentY = state.CurrentPOI?.Y;
+        var currentId = state.CurrentPOI?.Id ?? "";
 
-        bool hasUnexploredPoi = knownPoiIds.Any(poiId => !_snapshot.ExploredPois.Contains(poiId));
-        return hasUnexploredPoi || !_snapshot.ExploredSystems.Contains(systemId);
+        poiId = candidates
+            .OrderBy(id => string.Equals(id, currentId, StringComparison.Ordinal) ? -1 : 0)
+            .ThenBy(id => ComputeDistanceSquared(positions, id, currentX, currentY) ?? double.MaxValue)
+            .ThenBy(id => id, StringComparer.Ordinal)
+            .First();
+
+        return true;
     }
 
-    private Dictionary<string, string> GetKnownPoiIdsBySystem(GameState state)
+    private static IEnumerable<string> CollectKnownPoiIdsForSystem(GameState state, string systemId)
     {
-        var byPoi = new Dictionary<string, string>(StringComparer.Ordinal);
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var knowledge = state.Galaxy?.Knowledge?.PoisById
+            ?? new Dictionary<string, GalaxyPoiKnowledge>(StringComparer.Ordinal);
 
-        void Add(string? poiId, string? systemId)
+        foreach (var poi in knowledge.Values)
         {
-            if (string.IsNullOrWhiteSpace(poiId) || string.IsNullOrWhiteSpace(systemId))
-                return;
-
-            byPoi[poiId] = systemId;
+            if (poi == null || string.IsNullOrWhiteSpace(poi.Id))
+                continue;
+            if (!string.Equals(poi.SystemId, systemId, StringComparison.Ordinal))
+                continue;
+            ids.Add(poi.Id);
         }
 
-        Add(state.CurrentPOI?.Id, state.System);
+        if (string.Equals(state.System, systemId, StringComparison.Ordinal))
+        {
+            if (!string.IsNullOrWhiteSpace(state.CurrentPOI?.Id))
+                ids.Add(state.CurrentPOI.Id);
 
-        foreach (var poi in state.POIs ?? Array.Empty<POIInfo>())
-            Add(poi.Id, string.IsNullOrWhiteSpace(poi.SystemId) ? state.System : poi.SystemId);
+            foreach (var poi in state.POIs ?? Array.Empty<POIInfo>())
+            {
+                if (string.IsNullOrWhiteSpace(poi?.Id))
+                    continue;
+                if (!string.IsNullOrWhiteSpace(poi.SystemId) &&
+                    !string.Equals(poi.SystemId, systemId, StringComparison.Ordinal))
+                    continue;
+                ids.Add(poi.Id);
+            }
+        }
 
         foreach (var system in state.Galaxy?.Map?.Systems ?? new List<GalaxySystemInfo>())
         {
-            if (string.IsNullOrWhiteSpace(system?.Id))
+            if (!string.Equals(system?.Id, systemId, StringComparison.Ordinal))
                 continue;
 
-            foreach (var poi in system.Pois ?? new List<GalaxyPoiInfo>())
-                Add(poi?.Id, system.Id);
+            foreach (var poi in system?.Pois ?? new List<GalaxyPoiInfo>())
+            {
+                if (!string.IsNullOrWhiteSpace(poi?.Id))
+                    ids.Add(poi.Id);
+            }
         }
 
-        foreach (var known in state.Galaxy?.Map?.KnownPois ?? new List<GalaxyKnownPoiInfo>())
-            Add(known.Id, known.SystemId);
-
-        return byPoi;
+        return ids;
     }
 
-    private Dictionary<string, int> BuildSystemDistanceIndex(GameState state)
+    private static Dictionary<string, (double? x, double? y)> BuildPoiPositionLookup(GameState state, string systemId)
+    {
+        var lookup = new Dictionary<string, (double? x, double? y)>(StringComparer.Ordinal);
+
+        void Merge(string id, double? x, double? y)
+        {
+            if (string.IsNullOrWhiteSpace(id))
+                return;
+
+            if (!lookup.TryGetValue(id, out var existing))
+            {
+                lookup[id] = (x, y);
+                return;
+            }
+
+            lookup[id] = (existing.x ?? x, existing.y ?? y);
+        }
+
+        foreach (var poi in state.Galaxy?.Knowledge?.PoisById?.Values ?? Enumerable.Empty<GalaxyPoiKnowledge>())
+        {
+            if (poi == null || !string.Equals(poi.SystemId, systemId, StringComparison.Ordinal))
+                continue;
+            Merge(poi.Id, poi.X, poi.Y);
+        }
+
+        if (string.Equals(state.System, systemId, StringComparison.Ordinal))
+        {
+            Merge(state.CurrentPOI?.Id ?? "", state.CurrentPOI?.X, state.CurrentPOI?.Y);
+            foreach (var poi in state.POIs ?? Array.Empty<POIInfo>())
+            {
+                if (poi == null)
+                    continue;
+                if (!string.IsNullOrWhiteSpace(poi.SystemId) &&
+                    !string.Equals(poi.SystemId, systemId, StringComparison.Ordinal))
+                    continue;
+                Merge(poi.Id, poi.X, poi.Y);
+            }
+        }
+
+        foreach (var system in state.Galaxy?.Map?.Systems ?? new List<GalaxySystemInfo>())
+        {
+            if (!string.Equals(system?.Id, systemId, StringComparison.Ordinal))
+                continue;
+            foreach (var poi in system?.Pois ?? new List<GalaxyPoiInfo>())
+                Merge(poi?.Id ?? "", poi?.X, poi?.Y);
+        }
+
+        return lookup;
+    }
+
+    private static double? ComputeDistanceSquared(
+        IReadOnlyDictionary<string, (double? x, double? y)> positions,
+        string poiId,
+        double? originX,
+        double? originY)
+    {
+        if (string.IsNullOrWhiteSpace(poiId) || !originX.HasValue || !originY.HasValue)
+            return null;
+        if (!positions.TryGetValue(poiId, out var point))
+            return null;
+        if (!point.x.HasValue || !point.y.HasValue)
+            return null;
+
+        double dx = point.x.Value - originX.Value;
+        double dy = point.y.Value - originY.Value;
+        return (dx * dx) + (dy * dy);
+    }
+
+    private static Dictionary<string, int> BuildSystemDistanceIndex(GameState state)
     {
         var distances = new Dictionary<string, int>(StringComparer.Ordinal);
         var adjacency = BuildAdjacency(state);
@@ -291,7 +371,7 @@ public class ExploreCommand : IMultiTurnCommand
         return distances;
     }
 
-    private Dictionary<string, List<string>> BuildAdjacency(GameState state)
+    private static Dictionary<string, List<string>> BuildAdjacency(GameState state)
     {
         var adjacency = new Dictionary<string, List<string>>(StringComparer.Ordinal);
 
@@ -335,112 +415,10 @@ public class ExploreCommand : IMultiTurnCommand
         return adjacency;
     }
 
-    private static async Task<string?> ResolveNextHopAsync(
-        IRuntimeTransport client,
-        GameState state,
-        string targetSystem)
+    private static string? ResolveNextHop(IRuntimeTransport client, GameState state, string targetSystem)
     {
-        JsonElement routeResult = (await client.FindRouteAsync(targetSystem)).Payload;
-        string? nextHop = TryGetNextHop(routeResult, state.System);
-        if (!string.IsNullOrWhiteSpace(nextHop))
-            return nextHop;
-
-        return state.Systems.Contains(targetSystem, StringComparer.Ordinal)
-            ? targetSystem
-            : null;
+        RouteInfo? route = client.FindPath(state, targetSystem);
+        client.SetActiveRoute(route);
+        return route is { Hops.Count: > 0 } ? route.Hops[0] : null;
     }
-
-    private static string? TryGetNextHop(JsonElement routeResult, string currentSystem)
-    {
-        foreach (var candidate in ExtractStringRoutes(routeResult))
-        {
-            if (candidate.Count == 0)
-                continue;
-
-            var route = candidate
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .ToList();
-
-            while (route.Count > 0 && string.Equals(route[0], currentSystem, StringComparison.Ordinal))
-                route.RemoveAt(0);
-
-            if (route.Count > 0)
-                return route[0];
-        }
-
-        return null;
-    }
-
-    private static IEnumerable<List<string>> ExtractStringRoutes(JsonElement root)
-    {
-        if (root.ValueKind != JsonValueKind.Object)
-            yield break;
-
-        if (!root.TryGetProperty("route", out var routeElement))
-            yield break;
-
-        foreach (var route in ReadStringRouteCandidates(routeElement))
-            yield return route;
-    }
-
-    private static IEnumerable<List<string>> ReadStringRouteCandidates(JsonElement node)
-    {
-        if (node.ValueKind != JsonValueKind.Array)
-            yield break;
-
-        var directRoute = new List<string>();
-        bool hasNested = false;
-
-        foreach (var part in node.EnumerateArray())
-        {
-            if (part.ValueKind == JsonValueKind.String)
-            {
-                directRoute.Add(part.GetString() ?? "");
-                continue;
-            }
-
-            if (part.ValueKind == JsonValueKind.Array)
-            {
-                hasNested = true;
-                foreach (var nested in ReadStringRouteCandidates(part))
-                    yield return nested;
-            }
-        }
-
-        if (!hasNested && directRoute.Count > 0)
-            yield return directRoute;
-    }
-
-    private void MarkPoiExplored(string poiId)
-    {
-        if (string.IsNullOrWhiteSpace(poiId))
-            return;
-
-        if (_snapshot.ExploredPois.Add(poiId))
-            SaveSnapshot();
-    }
-
-    private void MarkSystemExplored(string systemId)
-    {
-        if (string.IsNullOrWhiteSpace(systemId))
-            return;
-
-        if (_snapshot.ExploredSystems.Add(systemId))
-            SaveSnapshot();
-    }
-
-    private void MarkSystemUnreachable(string systemId)
-    {
-        if (string.IsNullOrWhiteSpace(systemId))
-            return;
-
-        if (_snapshot.UnreachableSystems.Add(systemId))
-            SaveSnapshot();
-    }
-
-    private static ExplorationStateSnapshot LoadSnapshot()
-        => ExplorationStateStore.Load();
-
-    private void SaveSnapshot()
-        => ExplorationStateStore.Save(_snapshot);
 }

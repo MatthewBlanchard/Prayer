@@ -8,6 +8,8 @@ using System.Threading.Tasks;
 
 class Program
 {
+    private const int MaxRoleplayToolTraceLines = 120;
+
     private static readonly string[] BotColorPalette =
     {
         "#ff6b6b", "#ffd166", "#06d6a0", "#4cc9f0", "#90be6d",
@@ -34,6 +36,93 @@ class Program
             var index = (int)(hash % (uint)BotColorPalette.Length);
             return BotColorPalette[index];
         }
+    }
+
+    private static void AppendRoleplayToolTrace(BotSession session, string message)
+    {
+        if (session == null || string.IsNullOrWhiteSpace(message))
+            return;
+
+        foreach (var line in ExtractRoleplayToolTraceLines(message))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+
+            session.RoleplayToolTraceLines.Add(line.Trim());
+        }
+
+        var overflow = session.RoleplayToolTraceLines.Count - MaxRoleplayToolTraceLines;
+        if (overflow > 0)
+            session.RoleplayToolTraceLines.RemoveRange(0, overflow);
+    }
+
+    private static IReadOnlyList<string> ExtractRoleplayToolTraceLines(string message)
+    {
+        var normalized = (message ?? string.Empty).Replace("\r\n", "\n");
+        if (string.IsNullOrWhiteSpace(normalized))
+            return Array.Empty<string>();
+
+        var firstLine = normalized.Split('\n', 2)[0].Trim();
+        var lines = new List<string>();
+
+        if (firstLine.Contains("state_call", StringComparison.OrdinalIgnoreCase))
+        {
+            lines.Add(firstLine);
+            return lines;
+        }
+
+        if (firstLine.Contains("tool_loop_fail", StringComparison.OrdinalIgnoreCase))
+        {
+            lines.Add(firstLine);
+            return lines;
+        }
+
+        if (firstLine.Contains("llm_generate_response", StringComparison.OrdinalIgnoreCase))
+        {
+            var response = ExtractLogBlock(normalized, "---RESPONSE---", "---END_RESPONSE---");
+            if (!string.IsNullOrWhiteSpace(response))
+                lines.Add($"{firstLine} => {ToSingleLine(response, 180)}");
+            return lines;
+        }
+
+        if (firstLine.Contains("do_selected", StringComparison.OrdinalIgnoreCase))
+        {
+            var instruction = ExtractLogBlock(normalized, "---INSTRUCTION---", "---END_INSTRUCTION---");
+            if (!string.IsNullOrWhiteSpace(instruction))
+                lines.Add($"{firstLine} => do(\"{ToSingleLine(instruction, 180)}\")");
+            return lines;
+        }
+
+        return Array.Empty<string>();
+    }
+
+    private static string ExtractLogBlock(string text, string startMarker, string endMarker)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        var start = text.IndexOf(startMarker, StringComparison.Ordinal);
+        if (start < 0)
+            return string.Empty;
+
+        start += startMarker.Length;
+        var end = text.IndexOf(endMarker, start, StringComparison.Ordinal);
+        if (end < 0)
+            end = text.Length;
+
+        return text.Substring(start, end - start).Trim();
+    }
+
+    private static string ToSingleLine(string text, int maxLength)
+    {
+        var single = (text ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+        while (single.Contains("  ", StringComparison.Ordinal))
+            single = single.Replace("  ", " ", StringComparison.Ordinal);
+
+        if (single.Length <= maxLength)
+            return single;
+
+        return single.Substring(0, maxLength) + "...";
     }
 
     static async Task Main(string[] args)
@@ -91,6 +180,22 @@ class Program
         {
             var line = $"[{DateTime.UtcNow:O}] {message}{Environment.NewLine}";
             LogSink.Instance.Enqueue(new LogEvent(DateTime.UtcNow, LogKind.AuthFlow, line, AppPaths.AuthFlowLogFile));
+        }
+
+        void LogStatus(string message)
+        {
+            var line = $"[{DateTime.UtcNow:O}] {message}{Environment.NewLine}";
+            LogSink.Instance.Enqueue(new LogEvent(DateTime.UtcNow, LogKind.RuntimeHost, line, AppPaths.RuntimeHostLogFile));
+        }
+
+        void LogAutonomousGeneration(string message)
+        {
+            var line = $"[{DateTime.UtcNow:O}] {message}{Environment.NewLine}";
+            LogSink.Instance.Enqueue(new LogEvent(
+                DateTime.UtcNow,
+                LogKind.AutonomousGeneration,
+                line,
+                AppPaths.AutonomousGenerationLogFile));
         }
 
         IReadOnlyList<BotSession> GetAllBots()
@@ -159,8 +264,8 @@ class Program
                             string.IsNullOrWhiteSpace(activeRoute.Target) ? null : activeRoute.Target.Trim(),
                             hops,
                             activeRoute.TotalJumps,
-                            activeRoute.EstimatedFuel,
-                            activeRoute.FuelAvailable,
+                            activeRoute.EstimatedFuelUse,
+                            activeRoute.ArrivalTime,
                             session.LastPrayerState?.State?.Ship?.Speed);
                     })
                     .Where(route => route != null)
@@ -195,6 +300,70 @@ class Program
             var generatedScript = await prayerApi.GenerateScriptAsync(prayerSessionId, prompt);
             channels.Status.Writer.TryWrite($"Generated script draft for {target.Label}. Review and set script to apply.");
             return generatedScript;
+        });
+
+        htmxUi.SetRoleplayStartHandler((botId, persona) =>
+        {
+            BotSession? target;
+            lock (botLock)
+                target = botSessions.TryGetValue(botId, out var s) ? s : null;
+
+            if (target == null || string.IsNullOrWhiteSpace(target.PrayerSessionId))
+                return false;
+
+            // Stop any existing driver first.
+            target.Driver?.Stop();
+
+            target.RoleplayPersona = persona;
+            target.RoleplayToolTraceLines.Clear();
+            target.Driver = new AutonomousDriver(
+                prayerApi,
+                target.PrayerSessionId!,
+                target.Label,
+                () => { lock (botLock) { botSessions.TryGetValue(botId, out var s); return s?.LastPrayerState; } },
+                msg => channels.Status.Writer.TryWrite(msg),
+                msg =>
+                {
+                    LogAutonomousGeneration(msg);
+                    lock (botLock)
+                    {
+                        if (botSessions.TryGetValue(botId, out var session))
+                            AppendRoleplayToolTrace(session, msg);
+                    }
+                });
+            target.Driver.Start(persona);
+            return true;
+        });
+
+        htmxUi.SetRoleplayStopHandler(botId =>
+        {
+            BotSession? target;
+            lock (botLock)
+                target = botSessions.TryGetValue(botId, out var s) ? s : null;
+
+            target?.Driver?.Stop();
+        });
+
+        htmxUi.SetRoleplayStatusHandler(botId =>
+        {
+            BotSession? target;
+            lock (botLock)
+                target = botSessions.TryGetValue(botId, out var s) ? s : null;
+
+            if (target?.Driver == null)
+                return (false, null, target?.RoleplayPersona);
+
+            return (target.Driver.IsRunning, target.Driver.StatusMessage, target.RoleplayPersona);
+        });
+        htmxUi.SetRoleplayTraceHandler(botId =>
+        {
+            lock (botLock)
+            {
+                if (botSessions.TryGetValue(botId, out var target))
+                    return target.RoleplayToolTraceLines.ToArray();
+            }
+
+            return Array.Empty<string>();
         });
 
         var snapshotPublisher = new UiSnapshotPublisher(
@@ -471,6 +640,29 @@ class Program
 
         snapshotPublisher.PublishSnapshot();
 
+        var statusTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (await channels.Status.Reader.WaitToReadAsync(cts.Token))
+                {
+                    while (channels.Status.Reader.TryRead(out var status))
+                    {
+                        var text = (status ?? string.Empty).Trim();
+                        if (text.Length == 0)
+                            continue;
+
+                        Console.WriteLine(text);
+                        LogStatus(text);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal shutdown.
+            }
+        }, cts.Token);
+
         var botTask = Task.Run(async () =>
         {
             try
@@ -738,6 +930,7 @@ class Program
         cts.Cancel();
         var pollerHandles = sessionPollers.Values.ToList();
         var routePollerHandles = routePollers.Values.ToList();
+        channels.Status.Writer.TryComplete();
         foreach (var (pollerCts, _) in pollerHandles)
             pollerCts.Cancel();
         foreach (var (pollerCts, _) in routePollerHandles)
@@ -766,6 +959,7 @@ class Program
         }
 
         await Task.WhenAll(
+            statusTask.ContinueWith(_ => { }),
             botTask.ContinueWith(_ => { }),
             uiRenderTask.ContinueWith(_ => { }),
             Task.WhenAll(pollerHandles.Select(p => p.Task.ContinueWith(_ => { }))),

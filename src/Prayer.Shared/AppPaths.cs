@@ -25,7 +25,9 @@ public static class AppPaths
     public static readonly string ScriptWriterContextLogFile = Path.Combine(LogDir, "script_writer_context.log");
     public static readonly string PromptGenerationPairsLogFile = Path.Combine(LogDir, "prompt_generation_pairs.log");
     public static readonly string AstWalkerLogFile = Path.Combine(LogDir, "ast_walker.log");
+    public static readonly string ScriptCommandFailuresLogFile = Path.Combine(LogDir, "script_command_failures.log");
     public static readonly string RuntimeHostLogFile = Path.Combine(LogDir, "runtime_host.log");
+    public static readonly string AutonomousGenerationLogFile = Path.Combine(LogDir, "autonomous_generation.log");
     public static readonly string GoArgValidationLogFile = Path.Combine(LogDir, "go_arg_validation.log");
     public static readonly string GoArgValidationMapDumpLogFile = Path.Combine(LogDir, "go_arg_validation_mapdump.log");
     public static readonly string UiHttpErrorLogFile = Path.Combine(LogDir, "ui_http_errors.log");
@@ -57,7 +59,9 @@ public static class AppPaths
         ScriptWriterContextLogFile,
         PromptGenerationPairsLogFile,
         AstWalkerLogFile,
+        ScriptCommandFailuresLogFile,
         RuntimeHostLogFile,
+        AutonomousGenerationLogFile,
         GoArgValidationLogFile,
         GoArgValidationMapDumpLogFile
     };

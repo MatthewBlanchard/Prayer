@@ -7,20 +7,24 @@ internal static class ShipyardTabRenderer
     public static string Build(ShipyardUiModel? model)
     {
         if (model == null)
-            return "<section class='space-page'><div class='small'>(shipyard unavailable)</div></section>";
+            return "<section class='space-page'><div class='small'>(ship unavailable)</div></section>";
 
         var sb = new StringBuilder();
         sb.AppendLine("<section class='space-page'>");
-        sb.AppendLine("<div class='space-header'>");
-        sb.Append("<h4 class='space-title'>Shipyard • ").Append(E(model.StationId)).AppendLine("</h4>");
-        sb.Append("<div class='space-subtitle'>Showroom ")
-            .Append(model.Showroom.Count)
-            .Append(" • Listings ")
-            .Append(model.PlayerListings.Count)
-            .Append(" • Catalog ")
-            .Append(model.CatalogShips.Count)
-            .AppendLine("</div>");
-        sb.AppendLine("</div>");
+
+        if (model.Docked)
+        {
+            sb.AppendLine("<div class='space-header'>");
+            sb.Append("<h4 class='space-title'>Shipyard • ").Append(E(model.StationId)).AppendLine("</h4>");
+            sb.Append("<div class='space-subtitle'>Showroom ")
+                .Append(model.Showroom.Count)
+                .Append(" • Listings ")
+                .Append(model.PlayerListings.Count)
+                .Append(" • Catalog ")
+                .Append(model.CatalogShips.Count)
+                .AppendLine("</div>");
+            sb.AppendLine("</div>");
+        }
 
         sb.AppendLine("<div class='space-stats shipyard-stats'>");
         AppendStatCard(sb, "Ship", model.ShipName);
@@ -55,10 +59,52 @@ internal static class ShipyardTabRenderer
         }
         sb.AppendLine("</section>");
 
-        sb.AppendLine("<div class='space-grid'>");
-        AppendPanel(sb, "Showroom", model.Showroom, "commission_quote", "Quote", "buy_ship", "Buy");
-        AppendPanel(sb, "Player Listings", model.PlayerListings, "buy_listed_ship", "Buy Listing", null, null);
-        sb.AppendLine("</div>");
+        sb.AppendLine("<section class='space-panel'>");
+        sb.Append("<div class='space-panel-title'>Owned Ships (")
+            .Append(model.OwnedShips.Count)
+            .AppendLine(")</div>");
+        if (model.OwnedShips.Count == 0)
+        {
+            sb.AppendLine("<div class='small'>(none)</div>");
+        }
+        else
+        {
+            foreach (var ship in model.OwnedShips)
+            {
+                sb.Append("<div class='mission-item shipyard-card'><div class='mission-title'>")
+                    .Append(E(ship.DisplayText))
+                    .AppendLine("</div>");
+
+                if (ship.IsActive)
+                {
+                    sb.AppendLine("<div class='small'>Current active ship</div>");
+                }
+                else if (ship.CanSwitchHere)
+                {
+                    sb.AppendLine("<div class='mission-actions'>");
+                    AppendScriptChip(sb, $"switch_ship {ship.ShipId};", "Switch");
+                    sb.AppendLine("</div>");
+                }
+                else
+                {
+                    sb.Append("<div class='small'>")
+                        .Append(E(model.Docked
+                            ? "Switch unavailable at this station"
+                            : "Dock at the ship's station to switch"))
+                        .AppendLine("</div>");
+                }
+                sb.AppendLine("</div>");
+            }
+        }
+        sb.AppendLine("</section>");
+
+        if (model.Docked)
+        {
+            sb.AppendLine("<div class='space-grid'>");
+            AppendPanel(sb, "Showroom", model.Showroom, "commission_quote", "Quote", "buy_ship", "Buy");
+            AppendPanel(sb, "Player Listings", model.PlayerListings, "buy_listed_ship", "Buy Listing", null, null);
+            sb.AppendLine("</div>");
+        }
 
         sb.AppendLine("<section class='space-panel'>");
         sb.AppendLine("<div class='space-panel-title'>Galaxy Ship Catalog</div>");
@@ -156,6 +202,7 @@ internal static class ShipyardTabRenderer
                         AppendShipStat(sb, "Cargo", entry.Cargo);
                         AppendShipStat(sb, "Speed", entry.Speed);
                         AppendShipStat(sb, "Price", entry.Price.HasValue ? entry.Price.Value.ToString("0.##") : null);
+                        AppendShipStat(sb, "Materials", entry.MaterialsSummary);
                         sb.AppendLine("</div>");
 
                         if (!string.IsNullOrWhiteSpace(entry.Id))

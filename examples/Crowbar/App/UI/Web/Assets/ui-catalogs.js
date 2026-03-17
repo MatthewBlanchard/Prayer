@@ -90,6 +90,12 @@
   };
 
   window._craftingQuery = window._craftingQuery || '';
+  if (typeof window._craftingOnlyWithSkills !== 'boolean') window._craftingOnlyWithSkills = true;
+
+  window.toggleCraftingOnlyWithSkills = function (enabled) {
+    window._craftingOnlyWithSkills = !!enabled;
+    window.filterCraftingRecipes(window._craftingQuery || '');
+  };
 
   window.filterCraftingRecipes = function (query) {
     var next = (typeof query === 'string' ? query : window._craftingQuery || '');
@@ -101,7 +107,10 @@
 
     pane.querySelectorAll('.cargo-row').forEach(function (row) {
       var hay = row.getAttribute('data-search') || '';
-      row.style.display = q === '' || hay.indexOf(q) >= 0 ? '' : 'none';
+      var meetsSkills = (row.getAttribute('data-meets-skill') || '') === 'true';
+      var matchesSearch = q === '' || hay.indexOf(q) >= 0;
+      var matchesSkills = !window._craftingOnlyWithSkills || meetsSkills;
+      row.style.display = matchesSearch && matchesSkills ? '' : 'none';
     });
 
     Array.prototype.slice.call(pane.querySelectorAll('details.catalog-group'))
@@ -115,6 +124,10 @@
 
     var input = pane.querySelector("input.catalog-search[oninput*='filterCraftingRecipes']");
     if (input && input.value !== next) input.value = next;
+    var toggle = pane.querySelector('.trade-only-orders-toggle input[type="checkbox"]');
+    if (toggle && toggle.checked !== !!window._craftingOnlyWithSkills) {
+      toggle.checked = !!window._craftingOnlyWithSkills;
+    }
   };
 
   window.submitCraft = function (_event, form) {

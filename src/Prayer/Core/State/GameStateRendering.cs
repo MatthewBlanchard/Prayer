@@ -72,6 +72,38 @@ public partial class GameState
         };
     }
 
+    internal string BuildStorageCacheLlmSection()
+    {
+        if (StorageCacheByPoi == null || StorageCacheByPoi.Count == 0)
+            return "";
+
+        var estimatedPrices = BuildEstimatedItemPrices();
+        var lines = new System.Text.StringBuilder();
+        lines.AppendLine("\n### Storage Cache (last seen by POI)");
+        foreach (var (poiId, items) in StorageCacheByPoi.OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            lines.AppendLine($"**{poiId}**");
+            lines.AppendLine(FormatCargo(items, estimatedPrices));
+        }
+        return lines.ToString();
+    }
+
+    internal string BuildStorageCacheDisplaySection()
+    {
+        if (StorageCacheByPoi == null || StorageCacheByPoi.Count == 0)
+            return "";
+
+        var estimatedPrices = BuildEstimatedItemPrices();
+        var lines = new System.Text.StringBuilder();
+        lines.AppendLine("\nSTORAGE CACHE");
+        foreach (var (poiId, items) in StorageCacheByPoi.OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            lines.AppendLine(poiId);
+            lines.AppendLine(StripMarkdown(FormatCargo(items, estimatedPrices)));
+        }
+        return lines.ToString().TrimEnd();
+    }
+
     internal string BuildNotificationsLlmSection()
     {
         string body = FormatNotifications(Notifications);
@@ -302,6 +334,7 @@ Current POI Resources: {currentPoiResources}
 ### Cargo
 {r.CargoMarkdown}
 {r.StorageItemsSectionMarkdown}
+{BuildStorageCacheLlmSection()}
 {BuildChatLlmSection()}
 {r.NotificationsMarkdown}
 ";
@@ -339,7 +372,7 @@ CONNECTED SYSTEMS
 
 CARGO
 {r.CargoDisplay}
-{r.StorageItemsSectionDisplay}{BuildChatDisplaySection()}{BuildNotificationsDisplaySection()}";
+{r.StorageItemsSectionDisplay}{BuildStorageCacheDisplaySection()}{BuildChatDisplaySection()}{BuildNotificationsDisplaySection()}";
     }
 
     internal static string StripMarkdown(string value)

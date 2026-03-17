@@ -59,13 +59,6 @@ internal static class GalaxyMapSnapshotFile
         if (root.ValueKind != JsonValueKind.Object)
             return new GalaxyMapSnapshot();
 
-        // Backward compatibility for old parsed cache files.
-        if (root.TryGetProperty("Systems", out var legacySystems) &&
-            legacySystems.ValueKind == JsonValueKind.Array)
-        {
-            return ParseLegacySnapshot(legacySystems);
-        }
-
         var systems = new List<GalaxySystemInfo>();
 
         foreach (var systemObj in EnumerateSystemsFromMap(root))
@@ -218,95 +211,6 @@ internal static class GalaxyMapSnapshotFile
             existingPoi.Y ??= knownPoi.Y;
         }
     }
-
-    private static GalaxyMapSnapshot ParseLegacySnapshot(JsonElement systemsArray)
-    {
-        var systems = new List<GalaxySystemInfo>();
-
-        foreach (var systemObj in systemsArray.EnumerateArray())
-        {
-            if (systemObj.ValueKind != JsonValueKind.Object)
-                continue;
-
-            string? systemId = TryGetString(systemObj, "Id")
-                               ?? TryGetString(systemObj, "id")
-                               ?? TryGetString(systemObj, "system_id");
-
-            if (string.IsNullOrWhiteSpace(systemId))
-                continue;
-
-            string empire = TryGetString(systemObj, "Empire")
-                            ?? TryGetString(systemObj, "empire")
-                            ?? "";
-            bool isStronghold = TryGetBool(systemObj, "IsStronghold")
-                                ?? TryGetBool(systemObj, "is_stronghold")
-                                ?? TryGetBool(systemObj, "isStronghold")
-                                ?? false;
-            double? x = TryGetDouble(systemObj, "X");
-            double? y = TryGetDouble(systemObj, "Y");
-            if (TryGetObject(systemObj, "Position", out var legacyPosition) ||
-                TryGetObject(systemObj, "position", out legacyPosition))
-            {
-                x ??= TryGetDouble(legacyPosition, "X") ?? TryGetDouble(legacyPosition, "x");
-                y ??= TryGetDouble(legacyPosition, "Y") ?? TryGetDouble(legacyPosition, "y");
-            }
-
-            var connections = new List<string>();
-            if (TryGetArray(systemObj, "Connections", out var legacyConnections) ||
-                TryGetArray(systemObj, "connections", out legacyConnections))
-            {
-                foreach (var connection in legacyConnections.EnumerateArray())
-                {
-                    string? connectionId = connection.ValueKind == JsonValueKind.String
-                        ? connection.GetString()
-                        : TryGetString(connection, "Id")
-                          ?? TryGetString(connection, "id")
-                          ?? TryGetString(connection, "system_id");
-
-                    if (!string.IsNullOrWhiteSpace(connectionId))
-                        connections.Add(connectionId);
-                }
-            }
-
-            var poiList = new List<GalaxyPoiInfo>();
-
-            if (TryGetArray(systemObj, "Pois", out var legacyPois) ||
-                TryGetArray(systemObj, "pois", out legacyPois))
-            {
-                foreach (var poi in legacyPois.EnumerateArray())
-                {
-                    string? poiId = TryGetString(poi, "Id")
-                                    ?? TryGetString(poi, "id")
-                                    ?? TryGetString(poi, "poi_id");
-
-                    if (string.IsNullOrWhiteSpace(poiId))
-                        continue;
-
-                    TryGetPosition(poi, out var poiX, out var poiY);
-                    poiList.Add(new GalaxyPoiInfo
-                    {
-                        Id = poiId,
-                        X = poiX,
-                        Y = poiY
-                    });
-                }
-            }
-
-            systems.Add(new GalaxySystemInfo
-            {
-                Id = systemId,
-                Empire = empire,
-                IsStronghold = isStronghold,
-                X = x,
-                Y = y,
-                Connections = connections,
-                Pois = poiList
-            });
-        }
-
-        return new GalaxyMapSnapshot { Systems = systems };
-    }
-
     private static IEnumerable<JsonElement> EnumerateSystemsFromMap(JsonElement map)
     {
         if (map.ValueKind != JsonValueKind.Object)

@@ -15,6 +15,20 @@ public sealed class RuntimeStateBuilder
         JsonElement ship,
         bool docked)
     {
+        var skills = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (player.TryGetProperty("skills", out var skillsEl) && skillsEl.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in skillsEl.EnumerateObject())
+            {
+                if (string.IsNullOrWhiteSpace(property.Name))
+                    continue;
+                if (property.Value.ValueKind != JsonValueKind.Number || !property.Value.TryGetInt32(out var level))
+                    continue;
+
+                skills[property.Name] = level;
+            }
+        }
+
         return new GameState
         {
             System = currentSystem,
@@ -87,6 +101,7 @@ public sealed class RuntimeStateBuilder
             },
             Credits = player.GetProperty("credits").GetInt32(),
             Docked = docked,
+            Skills = skills,
             Notifications = Array.Empty<GameNotification>(),
             ChatMessages = Array.Empty<GameChatMessage>()
         };

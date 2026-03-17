@@ -24,7 +24,6 @@ public class SpaceMoltAgent
     public string? LastScriptGenerationPrompt => _lastScriptGenerationPrompt;
     public int? CurrentScriptLine => _execution.CurrentScriptLine;
     public string? CurrentControlInput => _execution.CurrentScript;
-    public ActiveGoRoute? ActiveRoute => _execution.ActiveRoute;
 
     private ChannelWriter<string>? _statusWriter;
 
@@ -164,7 +163,7 @@ public class SpaceMoltAgent
         return _uiStateBuilder.BuildUiState(state);
     }
 
-    public Task ExecuteAsync(
+    public Task<string?> ExecuteAsync(
         IRuntimeTransport client,
         CommandResult result,
         GameState state)

@@ -20,6 +20,7 @@ internal static class CraftingTabRenderer
         sb.AppendLine("<section class='space-panel'>");
         sb.AppendLine("<div class='space-panel-title'>Available Recipes</div>");
 
+        sb.AppendLine("<label class='trade-only-orders-toggle'><input type='checkbox' checked onchange='window.toggleCraftingOnlyWithSkills(this.checked)'> Only recipes matching my skills</label>");
         sb.AppendLine("<input class='catalog-search' type='search' placeholder='Search recipes...' oninput='window.filterCraftingRecipes(this.value)'>");
 
         var byCategory = model.Recipes
@@ -43,6 +44,8 @@ internal static class CraftingTabRenderer
                 var searchText = $"{recipe.RecipeId} {recipe.Name} {recipe.Category} {recipe.Tier}".ToLowerInvariant();
                 sb.Append("<div class='cargo-row' data-search='")
                     .Append(E(searchText))
+                    .Append("' data-meets-skill='")
+                    .Append(recipe.MeetsSkillRequirements ? "true" : "false")
                     .AppendLine("'>");
 
                 sb.Append("<div class='cargo-item-main'>");
@@ -52,6 +55,7 @@ internal static class CraftingTabRenderer
                     sb.Append(" • T").Append(recipe.Tier.Value);
                 sb.AppendLine("</div>");
                 sb.Append("<div class='cargo-meta'>").Append(E(recipe.IngredientsSummary)).AppendLine("</div>");
+                sb.Append("<div class='cargo-meta'>").Append(E(recipe.OutputsSummary)).AppendLine("</div>");
                 sb.AppendLine("</div>");
 
                 AppendCraftForm(sb, recipe.RecipeId);

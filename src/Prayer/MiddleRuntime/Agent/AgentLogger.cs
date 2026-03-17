@@ -26,6 +26,7 @@ public interface IAgentLogger
 
     void LogScriptNormalization(string source, string inputScript, string outputScript);
     void LogAstWalker(string eventName, string detail);
+    void LogScriptCommandFailure(string commandText, string failureMessage);
 }
 
 public sealed class FileAgentLogger : IAgentLogger
@@ -162,6 +163,21 @@ public sealed class FileAgentLogger : IAgentLogger
             LogKind.AstWalker,
             line,
             AppPaths.AstWalkerLogFile));
+    }
+
+    public void LogScriptCommandFailure(string commandText, string failureMessage)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"[{DateTime.UtcNow:O}] === script_command_failure ===");
+        sb.AppendLine($"COMMAND: {commandText}");
+        sb.AppendLine($"REASON: {failureMessage}");
+        sb.AppendLine();
+
+        LogSink.Instance.Enqueue(new LogEvent(
+            DateTime.UtcNow,
+            LogKind.ScriptCommandFailure,
+            sb.ToString(),
+            AppPaths.ScriptCommandFailuresLogFile));
     }
 
     private static int EstimateTokenCount(string? text)

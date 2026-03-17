@@ -32,6 +32,10 @@ public sealed partial class HtmxBotWindow : IAppUi
     private ChannelWriter<AddBotRequest>? _addBotWriter;
     private ChannelWriter<LlmProviderSelection>? _llmSelectionWriter;
     private Func<string, string, Task<string>>? _generateScriptHandler;
+    private Func<string, string, bool>? _roleplayStartHandler;  // botId, persona → isRunning
+    private Action<string>? _roleplayStopHandler;               // botId
+    private Func<string, (bool IsRunning, string? Status, string? Persona)>? _roleplayStatusHandler;
+    private Func<string, IReadOnlyList<string>>? _roleplayTraceHandler;
 
     private string _selectedProvider = "llamacpp";
     private string _selectedModel = "model";
@@ -57,6 +61,10 @@ public sealed partial class HtmxBotWindow : IAppUi
     public void SetAddBotWriter(ChannelWriter<AddBotRequest> writer) => _addBotWriter = writer;
     public void SetLlmSelectionWriter(ChannelWriter<LlmProviderSelection> writer) => _llmSelectionWriter = writer;
     public void SetGenerateScriptHandler(Func<string, string, Task<string>> handler) => _generateScriptHandler = handler;
+    public void SetRoleplayStartHandler(Func<string, string, bool> handler) => _roleplayStartHandler = handler;
+    public void SetRoleplayStopHandler(Action<string> handler) => _roleplayStopHandler = handler;
+    public void SetRoleplayStatusHandler(Func<string, (bool IsRunning, string? Status, string? Persona)> handler) => _roleplayStatusHandler = handler;
+    public void SetRoleplayTraceHandler(Func<string, IReadOnlyList<string>> handler) => _roleplayTraceHandler = handler;
 
     public void ConfigureInitialLlmSelection(string provider, string model)
     {
@@ -188,8 +196,7 @@ public sealed partial class HtmxBotWindow : IAppUi
         {
             try
             {
-                if (requestPath.EndsWith("/api/prompt", StringComparison.OrdinalIgnoreCase) ||
-                    requestPath.EndsWith("/api/prompt-active-missions", StringComparison.OrdinalIgnoreCase))
+                if (ShouldTraceUiRequest(requestPath))
                 {
                     LogUiHttpTrace(
                         "request_complete",
@@ -282,6 +289,13 @@ public sealed partial class HtmxBotWindow : IAppUi
             return;
         }
 
+        if (req.HttpMethod == "GET" && path == "/partial/tick-status-data")
+        {
+            var botId = req.QueryString["bot_id"];
+            WriteText(ctx.Response, BuildTickStatusDataJson(botId), "application/json; charset=utf-8");
+            return;
+        }
+
         if (req.HttpMethod == "GET" && path == "/partial/models")
         {
             var provider = (req.QueryString["provider"] ?? "").Trim().ToLowerInvariant();
@@ -305,6 +319,13 @@ public sealed partial class HtmxBotWindow : IAppUi
         {
             var botId = req.QueryString["bot_id"];
             WriteText(ctx.Response, BuildCurrentScriptStateJson(botId), "application/json; charset=utf-8");
+            return;
+        }
+
+        if (req.HttpMethod == "GET" && path == "/partial/map-data")
+        {
+            var botId = req.QueryString["bot_id"];
+            WriteText(ctx.Response, BuildMapDataJson(botId), "application/json; charset=utf-8");
             return;
         }
 
@@ -522,6 +543,55 @@ public sealed partial class HtmxBotWindow : IAppUi
             return;
         }
 
+        if (req.HttpMethod == "GET" && path == "/partial/roleplay")
+        {
+            var botId = req.QueryString["bot_id"];
+            WriteText(ctx.Response, BuildRoleplayPaneHtml(botId), "text/html; charset=utf-8");
+            return;
+        }
+
+        if (req.HttpMethod == "GET" && path == "/partial/roleplay-status")
+        {
+            var botId = req.QueryString["bot_id"];
+            WriteText(ctx.Response, BuildRoleplayStatusHtml(botId), "text/html; charset=utf-8");
+            return;
+        }
+
+        if (req.HttpMethod == "POST" && path == "/api/roleplay-start")
+        {
+            var form = ReadForm(req);
+            var botId = GetValue(form, "bot_id");
+            var persona = GetValue(form, "persona");
+            if (string.IsNullOrWhiteSpace(botId))
+            {
+                WriteText(ctx.Response, "No active bot selected.", "text/plain; charset=utf-8", 400);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(persona))
+            {
+                WriteText(ctx.Response, "Persona is required.", "text/plain; charset=utf-8", 400);
+                return;
+            }
+            if (_roleplayStartHandler == null)
+            {
+                WriteText(ctx.Response, "Roleplay is not configured.", "text/plain; charset=utf-8", 500);
+                return;
+            }
+            _roleplayStartHandler(botId!, persona!);
+            WriteNoContent(ctx.Response);
+            return;
+        }
+
+        if (req.HttpMethod == "POST" && path == "/api/roleplay-stop")
+        {
+            var form = ReadForm(req);
+            var botId = GetValue(form, "bot_id");
+            if (!string.IsNullOrWhiteSpace(botId))
+                _roleplayStopHandler?.Invoke(botId!);
+            WriteNoContent(ctx.Response);
+            return;
+        }
+
         WriteText(ctx.Response, "Not found", "text/plain", 404);
     }
 
@@ -575,6 +645,9 @@ public sealed partial class HtmxBotWindow : IAppUi
             case "crafting":
                 sb.Append(CraftingTabRenderer.Build(botState?.CraftingModel));
                 break;
+            case "skills":
+                sb.Append(SkillsTabRenderer.Build(botState?.SkillsModel));
+                break;
             case "missions":
                 sb.Append(MissionsTabRenderer.Build(
                     botState?.ActiveMissionPrompts ?? Array.Empty<MissionPromptOption>(),
@@ -583,19 +656,66 @@ public sealed partial class HtmxBotWindow : IAppUi
             case "map":
             case "space":
             default:
-                // Collect known systems from all bots so routes for non-selected bots
-                // can still be resolved to screen coordinates on the galaxy map.
-                var allKnownSystems = snapshot.BotStates.Values
-                    .Where(s => s.SpaceModel?.LocalSystems != null)
-                    .SelectMany(s => s.SpaceModel!.LocalSystems)
-                    .Where(s => !string.IsNullOrWhiteSpace(s.Id))
-                    .GroupBy(s => s.Id, StringComparer.OrdinalIgnoreCase)
-                    .Select(g => g.First())
-                    .ToList();
+                // Merge known systems across all bots so galaxy rendering is not tied
+                // to whichever bot is currently selected.
+                var allKnownSystems = BuildMergedKnownSystems(snapshot);
                 sb.Append(MapTabRenderer.Build(botState?.SpaceModel, snapshot.BotMapMarkers, snapshot.BotRoutes, botId, allKnownSystems));
                 break;
         }
         return sb.ToString();
+    }
+
+    private string BuildMapDataJson(string? botId)
+    {
+        UiSnapshot snapshot;
+        lock (_lock) snapshot = _snapshot;
+        var botState = GetBotState(snapshot, botId);
+        var allKnownSystems = BuildMergedKnownSystems(snapshot);
+        return MapTabRenderer.BuildMapPayloadJson(
+            botState?.SpaceModel,
+            snapshot.BotMapMarkers,
+            snapshot.BotRoutes,
+            botId,
+            allKnownSystems);
+    }
+
+    private static IReadOnlyList<SpaceUiSystemNode> BuildMergedKnownSystems(UiSnapshot snapshot)
+    {
+        return snapshot.BotStates.Values
+            .Where(state => state?.SpaceModel?.LocalSystems != null)
+            .SelectMany(state => state!.SpaceModel!.LocalSystems)
+            .Where(system => system != null && !string.IsNullOrWhiteSpace(system.Id))
+            .GroupBy(system => system.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var entries = group.ToList();
+                var withCoords = entries.FirstOrDefault(s => s.X.HasValue && s.Y.HasValue);
+                var primary = withCoords ?? entries[0];
+                var empire = entries
+                    .Select(s => s.Empire)
+                    .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;
+                var connections = entries
+                    .SelectMany(s => s.Connections ?? Array.Empty<string>())
+                    .Where(v => !string.IsNullOrWhiteSpace(v))
+                    .Select(v => v.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(v => v, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+
+                return new SpaceUiSystemNode(
+                    Id: primary.Id,
+                    X: primary.X,
+                    Y: primary.Y,
+                    Empire: empire,
+                    IsStronghold: entries.Any(s => s.IsStronghold),
+                    HasStation: entries.Any(s => s.HasStation),
+                    IsCurrent: entries.Any(s => s.IsCurrent),
+                    Connections: connections,
+                    HasKnownPois: entries.Any(s => s.HasKnownPois),
+                    IsExplored: entries.Any(s => s.IsExplored));
+            })
+            .OrderBy(s => s.Id, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private string BuildStateStripHtml(string? botId)
@@ -618,13 +738,84 @@ public sealed partial class HtmxBotWindow : IAppUi
         return sb.ToString();
     }
 
+    private string BuildRoleplayPaneHtml(string? botId)
+    {
+        UiSnapshot snapshot;
+        lock (_lock) snapshot = _snapshot;
+        var id = botId ?? snapshot.DefaultBotId;
+        var botState = GetBotState(snapshot, botId);
+
+        bool isRunning = false;
+        string? status = null;
+        string? persona = null;
+        IReadOnlyList<string> toolTrace = Array.Empty<string>();
+
+        if (id != null && _roleplayStatusHandler != null)
+            (isRunning, status, persona) = _roleplayStatusHandler(id);
+        if (id != null && _roleplayTraceHandler != null)
+            toolTrace = _roleplayTraceHandler(id);
+        else if (botState?.ExecutionStatusLines != null)
+            toolTrace = botState.ExecutionStatusLines;
+
+        return RoleplayTabRenderer.Build(isRunning, status ?? "", persona ?? "", toolTrace);
+    }
+
+    private string BuildRoleplayStatusHtml(string? botId)
+    {
+        UiSnapshot snapshot;
+        lock (_lock) snapshot = _snapshot;
+        var id = botId ?? snapshot.DefaultBotId;
+        var botState = GetBotState(snapshot, botId);
+
+        bool isRunning = false;
+        string? status = null;
+        IReadOnlyList<string> toolTrace = Array.Empty<string>();
+
+        if (id != null && _roleplayStatusHandler != null)
+            (isRunning, status, _) = _roleplayStatusHandler(id);
+        if (id != null && _roleplayTraceHandler != null)
+            toolTrace = _roleplayTraceHandler(id);
+        else if (botState?.ExecutionStatusLines != null)
+            toolTrace = botState.ExecutionStatusLines;
+
+        return RoleplayTabRenderer.BuildStatusInner(isRunning, status, toolTrace);
+    }
+
     private string BuildTickStatusHtml(string? botId)
+    {
+        var tickData = BuildTickStatusData(botId);
+
+        var sb = new StringBuilder();
+        sb.Append("<div class='tick-status-shell' data-current-tick='")
+            .Append(E(tickData.TickText))
+            .Append("' data-last-post-utc='")
+            .Append(E(tickData.LastPostIso))
+            .AppendLine("'>");
+        sb.AppendLine("<div class='tick-status-track'><div class='tick-status-fill' id='tick-status-fill'></div></div>");
+        sb.Append("<div class='tick-status-meta'><span class='tick-meta-main'>Next in --</span><span class='tick-meta-post'>Last Prayer POST: ")
+            .Append(E(tickData.LastPostText))
+            .AppendLine("</span></div>");
+        sb.AppendLine("</div>");
+        return sb.ToString();
+    }
+
+    private string BuildTickStatusDataJson(string? botId)
+    {
+        var tickData = BuildTickStatusData(botId);
+        return JsonSerializer.Serialize(new
+        {
+            currentTick = tickData.TickText,
+            lastPostUtc = tickData.LastPostIso,
+            lastPostText = tickData.LastPostText
+        });
+    }
+
+    private (string TickText, string LastPostIso, string LastPostText) BuildTickStatusData(string? botId)
     {
         UiSnapshot snapshot;
         lock (_lock) snapshot = _snapshot;
         var botState = GetBotState(snapshot, botId);
 
-        var sb = new StringBuilder();
         var tickText = botState?.CurrentTick.HasValue == true
             ? botState.CurrentTick!.Value.ToString()
             : "N/A";
@@ -635,17 +826,7 @@ public sealed partial class HtmxBotWindow : IAppUi
             ? $"{Math.Max(0, (int)(DateTime.UtcNow - botState.LastSpaceMoltPostUtc!.Value).TotalSeconds)}s ago"
             : "n/a";
 
-        sb.Append("<div class='tick-status-shell' data-current-tick='")
-            .Append(E(tickText))
-            .Append("' data-last-post-utc='")
-            .Append(E(lastPostIso))
-            .AppendLine("'>");
-        sb.AppendLine("<div class='tick-status-track'><div class='tick-status-fill' id='tick-status-fill'></div></div>");
-        sb.Append("<div class='tick-status-meta'><span class='tick-meta-main'>Next in --</span><span class='tick-meta-post'>Last Prayer POST: ")
-            .Append(E(lastPostText))
-            .AppendLine("</span></div>");
-        sb.AppendLine("</div>");
-        return sb.ToString();
+        return (tickText, lastPostIso, lastPostText);
     }
 
     private static string BuildActiveMissionObjectivesPrompt(
@@ -1029,6 +1210,16 @@ public sealed partial class HtmxBotWindow : IAppUi
         var suffix = string.IsNullOrWhiteSpace(details) ? "" : $" | {details}";
         var line = $"[{DateTime.UtcNow:O}] {context} | method={method} | path={path} | raw={rawUrl} | status={status} | elapsed_ms={elapsed}{suffix}{Environment.NewLine}";
         LogSink.Instance.Enqueue(new LogEvent(DateTime.UtcNow, LogKind.UiHttpTrace, line, AppPaths.UiHttpTraceLogFile));
+    }
+
+    private static bool ShouldTraceUiRequest(string? requestPath)
+    {
+        if (string.IsNullOrWhiteSpace(requestPath))
+            return false;
+
+        return requestPath.StartsWith("/partial/", StringComparison.OrdinalIgnoreCase) ||
+               requestPath.EndsWith("/api/prompt", StringComparison.OrdinalIgnoreCase) ||
+               requestPath.EndsWith("/api/prompt-active-missions", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string E(string value) => WebUtility.HtmlEncode(value ?? "");

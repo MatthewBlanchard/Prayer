@@ -7,7 +7,7 @@ using System.Text.Json;
 
 internal static class MapTabRenderer
 {
-    public static string Build(
+    public static string BuildMapPayloadJson(
         SpaceUiModel? model,
         IReadOnlyList<BotMapMarker>? botMapMarkers = null,
         IReadOnlyList<BotRouteOverlay>? botRoutes = null,
@@ -25,22 +25,26 @@ internal static class MapTabRenderer
             Cargo: string.Empty,
             Pois: Array.Empty<SpaceUiPoi>(),
             CargoItems: Array.Empty<SpaceUiCargoItem>(),
-            LocalSystems: Array.Empty<SpaceUiSystemNode>());
+            LocalSystems: Array.Empty<SpaceUiSystemNode>(),
+            ResourceFilters: Array.Empty<SpaceUiResourceFilter>());
 
         var localSystems = (vm.LocalSystems ?? Array.Empty<SpaceUiSystemNode>())
             .Where(s => !string.IsNullOrWhiteSpace(s.Id))
             .ToList();
+        var galaxySystems = ((allKnownSystems != null && allKnownSystems.Count > 0)
+                ? allKnownSystems
+                : localSystems)
+            .Where(s => !string.IsNullOrWhiteSpace(s.Id))
+            .ToList();
+
         var pois = (vm.Pois ?? Array.Empty<SpaceUiPoi>())
             .Where(p => !string.IsNullOrWhiteSpace(p.Target))
             .ToList();
         var current = localSystems.FirstOrDefault(s => s.IsCurrent);
         var currentPoi = pois
             .FirstOrDefault(p => string.Equals(p.Target, vm.Poi, StringComparison.OrdinalIgnoreCase));
-        var miningPoi = pois.FirstOrDefault(p => IsMiningPoiType(p.Type));
-        var stationPoi = pois.FirstOrDefault(p => IsStationPoi(p));
-        var isDocked = string.Equals(vm.Docked ?? string.Empty, "true", StringComparison.OrdinalIgnoreCase);
 
-        var payload = JsonSerializer.Serialize(new
+        return JsonSerializer.Serialize(new
         {
             currentSystem = current?.Id ?? vm.System,
             currentPoi = currentPoi?.Target ?? vm.Poi,
@@ -51,6 +55,21 @@ internal static class MapTabRenderer
                 y = s.Y,
                 empire = s.Empire,
                 isStronghold = s.IsStronghold,
+                hasStation = s.HasStation,
+                hasKnownPois = s.HasKnownPois,
+                isExplored = s.IsExplored,
+                connections = s.Connections ?? Array.Empty<string>()
+            }),
+            galaxySystems = galaxySystems.Select(s => new
+            {
+                id = s.Id,
+                x = s.X,
+                y = s.Y,
+                empire = s.Empire,
+                isStronghold = s.IsStronghold,
+                hasStation = s.HasStation,
+                hasKnownPois = s.HasKnownPois,
+                isExplored = s.IsExplored,
                 connections = s.Connections ?? Array.Empty<string>()
             }),
             pois = pois
@@ -63,10 +82,7 @@ internal static class MapTabRenderer
                     y = p.Y,
                     isCurrent = string.Equals(p.Target, vm.Poi, StringComparison.OrdinalIgnoreCase)
                 }),
-            // allSystems contains every bot's known systems for route coordinate resolution.
-            // Not rendered as visible map nodes — only used to look up positions for route hops
-            // that pass through systems the selected bot hasn't visited yet.
-            allSystems = (allKnownSystems ?? Array.Empty<SpaceUiSystemNode>())
+            allSystems = galaxySystems
                 .Where(s => !string.IsNullOrWhiteSpace(s.Id) &&
                             s.X.HasValue && s.Y.HasValue)
                 .Select(s => new { id = s.Id, x = s.X!.Value, y = s.Y!.Value }),
@@ -95,9 +111,67 @@ internal static class MapTabRenderer
                     currentSystemId = r.CurrentSystemId,
                     targetSystemId = r.TargetSystemId,
                     hops = r.Hops,
-                    shipSpeed = r.ShipSpeed
+                    shipSpeed = r.ShipSpeed,
+                    arrivalTime = r.ArrivalTime?.ToString("O")
+                }),
+            resourceFilters = (vm.ResourceFilters ?? Array.Empty<SpaceUiResourceFilter>())
+                .Where(r => !string.IsNullOrWhiteSpace(r.ResourceId) &&
+                            r.SystemIds != null &&
+                            r.SystemIds.Count > 0)
+                .Select(r => new
+                {
+                    resourceId = r.ResourceId.Trim(),
+                    systemIds = r.SystemIds
+                        .Where(id => !string.IsNullOrWhiteSpace(id))
+                        .Select(id => id.Trim())
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+                        .ToArray()
                 })
         });
+    }
+
+    public static string Build(
+        SpaceUiModel? model,
+        IReadOnlyList<BotMapMarker>? botMapMarkers = null,
+        IReadOnlyList<BotRouteOverlay>? botRoutes = null,
+        string? activeBotId = null,
+        IReadOnlyList<SpaceUiSystemNode>? allKnownSystems = null)
+    {
+        var vm = model ?? new SpaceUiModel(
+            System: string.Empty,
+            Poi: string.Empty,
+            Docked: string.Empty,
+            Credits: 0,
+            Fuel: string.Empty,
+            Hull: string.Empty,
+            Shield: string.Empty,
+            Cargo: string.Empty,
+            Pois: Array.Empty<SpaceUiPoi>(),
+            CargoItems: Array.Empty<SpaceUiCargoItem>(),
+            LocalSystems: Array.Empty<SpaceUiSystemNode>(),
+            ResourceFilters: Array.Empty<SpaceUiResourceFilter>());
+
+        var localSystems = (vm.LocalSystems ?? Array.Empty<SpaceUiSystemNode>())
+            .Where(s => !string.IsNullOrWhiteSpace(s.Id))
+            .ToList();
+        var galaxySystems = ((allKnownSystems != null && allKnownSystems.Count > 0)
+                ? allKnownSystems
+                : localSystems)
+            .Where(s => !string.IsNullOrWhiteSpace(s.Id))
+            .ToList();
+
+        var pois = (vm.Pois ?? Array.Empty<SpaceUiPoi>())
+            .Where(p => !string.IsNullOrWhiteSpace(p.Target))
+            .ToList();
+        var current = localSystems.FirstOrDefault(s => s.IsCurrent);
+        var currentPoi = pois
+            .FirstOrDefault(p => string.Equals(p.Target, vm.Poi, StringComparison.OrdinalIgnoreCase));
+        var miningPoi = pois.FirstOrDefault(p => IsMiningPoiType(p.Type));
+        var stationPoi = pois.FirstOrDefault(p => IsStationPoi(p));
+        var isDocked = string.Equals(vm.Docked ?? string.Empty, "true", StringComparison.OrdinalIgnoreCase);
+
+        var payload = BuildMapPayloadJson(vm, botMapMarkers, botRoutes, activeBotId, allKnownSystems);
 
         var sb = new StringBuilder();
         sb.AppendLine("<section class='space-page map-page'>");
@@ -120,43 +194,43 @@ internal static class MapTabRenderer
             .Append(E(payload))
             .AppendLine("'></canvas>");
         sb.AppendLine("</div>");
-        sb.AppendLine("<details class='map-context-box' open>");
-        sb.AppendLine("<summary>Context</summary>");
-        sb.AppendLine("<div class='map-context-body'>");
-        sb.Append("<div class='map-context-row'><span class='map-context-k'>System</span><span class='map-context-v'>")
-            .Append(E(string.IsNullOrWhiteSpace(vm.System) ? "(unknown)" : vm.System))
-            .AppendLine("</span></div>");
-        sb.Append("<div class='map-context-row'><span class='map-context-k'>POI</span><span class='map-context-v'>")
-            .Append(E(currentPoi?.Label ?? (string.IsNullOrWhiteSpace(vm.Poi) ? "(unknown)" : vm.Poi)))
-            .AppendLine("</span></div>");
-        sb.Append("<div class='map-context-row'><span class='map-context-k'>Type</span><span class='map-context-v'>")
-            .Append(E(string.IsNullOrWhiteSpace(currentPoi?.Type) ? "-" : currentPoi!.Type))
-            .AppendLine("</span></div>");
-        sb.Append("<div class='map-context-row'><span class='map-context-k'>Base</span><span class='map-context-v'>")
-            .Append(E(currentPoi?.HasBase == true
-                ? (!string.IsNullOrWhiteSpace(currentPoi.BaseName) ? currentPoi.BaseName : "Yes")
-                : "No"))
-            .AppendLine("</span></div>");
-        if (currentPoi?.Online.HasValue == true)
+        sb.AppendLine("<details class='map-context-box' data-persist-key='map-resources' open>");
+        sb.AppendLine("<summary>Resources</summary>");
+        sb.AppendLine("<div class='map-context-body' data-map-resource-panel>");
+        var resourceFilters = (vm.ResourceFilters ?? Array.Empty<SpaceUiResourceFilter>())
+            .Where(r => !string.IsNullOrWhiteSpace(r.ResourceId) &&
+                        r.SystemIds != null &&
+                        r.SystemIds.Count > 0)
+            .OrderBy(r => r.ResourceId, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (resourceFilters.Length == 0)
         {
-            sb.Append("<div class='map-context-row'><span class='map-context-k'>Online</span><span class='map-context-v'>")
-                .Append(E(currentPoi.Online.Value.ToString()))
-                .AppendLine("</span></div>");
-        }
-        sb.AppendLine("<div class='map-context-section'>Resources</div>");
-        var resources = currentPoi?.Resources ?? Array.Empty<string>();
-        if (resources.Count == 0)
-        {
-            sb.AppendLine("<div class='small'>(none)</div>");
+            sb.AppendLine("<div class='small'>(none discovered yet)</div>");
         }
         else
         {
-            sb.AppendLine("<ul class='map-context-list'>");
-            foreach (var resource in resources.Take(8))
+            sb.AppendLine("<div class='map-resource-list'>");
+            foreach (var resource in resourceFilters)
             {
-                sb.Append("<li>").Append(E(resource)).AppendLine("</li>");
+                var rid = resource.ResourceId.Trim();
+                var count = resource.SystemIds
+                    .Where(id => !string.IsNullOrWhiteSpace(id))
+                    .Select(id => id.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Count();
+                sb.Append("<label class='map-resource-item'>")
+                    .Append("<input type='checkbox' data-map-resource-checkbox='")
+                    .Append(E(rid))
+                    .Append("' value='")
+                    .Append(E(rid))
+                    .Append("'>")
+                    .Append("<span class='map-resource-name'>")
+                    .Append(E(rid))
+                    .Append("</span><span class='map-resource-count'>")
+                    .Append(count)
+                    .AppendLine("</span></label>");
             }
-            sb.AppendLine("</ul>");
+            sb.AppendLine("</div>");
         }
         sb.AppendLine("</div>");
         sb.AppendLine("</details>");

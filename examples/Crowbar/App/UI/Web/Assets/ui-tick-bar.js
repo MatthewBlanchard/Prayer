@@ -7,9 +7,34 @@
     return mins + 'm ' + secs + 's ago';
   }
 
+  window.pollTickStatusData = function () {
+    var botId = window._activeBotId;
+    var url = apiUrl('partial/tick-status-data') + (botId ? '?bot_id=' + encodeURIComponent(botId) : '');
+    fetch(url, { cache: 'no-store' })
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (data) {
+        if (!data) return;
+        var shell = document.querySelector('#tick-status .tick-status-shell');
+        if (!shell) return;
+        var tickText = typeof data.currentTick === 'string' ? data.currentTick : 'N/A';
+        var lastPostUtc = typeof data.lastPostUtc === 'string' ? data.lastPostUtc : '';
+        shell.setAttribute('data-current-tick', tickText);
+        shell.setAttribute('data-last-post-utc', lastPostUtc);
+        if (window._uiPerf) {
+          window._uiPerf.count('tick_status_json_polls');
+          window._uiPerf.setGauge('tick_status_tick', tickText);
+        }
+      })
+      .catch(function () { });
+  };
+
   window.refreshTickStatusBar = function () {
+    var perfStart = window._uiPerf ? window._uiPerf.begin() : 0;
     var shell = document.querySelector('#tick-status .tick-status-shell');
-    if (!shell) return;
+    if (!shell) {
+      if (window._uiPerf) window._uiPerf.end('refreshTickStatusBar', perfStart);
+      return;
+    }
 
     var tickRaw = (shell.getAttribute('data-current-tick') || '').trim();
     var parsedTick = parseInt(tickRaw, 10);
@@ -34,13 +59,17 @@
     var fill = shell.querySelector('#tick-status-fill');
     var main = shell.querySelector('.tick-meta-main');
     var post = shell.querySelector('.tick-meta-post');
-    if (!fill || !main || !post) return;
+    if (!fill || !main || !post) {
+      if (window._uiPerf) window._uiPerf.end('refreshTickStatusBar', perfStart);
+      return;
+    }
 
     if (state.tick === null || state.observedAtMs <= 0) {
       fill.style.width = '0%';
       main.textContent = 'Next in --';
       post.textContent = 'Last Prayer POST: n/a';
       state.renderPct = null;
+      if (window._uiPerf) window._uiPerf.end('refreshTickStatusBar', perfStart);
       return;
     }
 
@@ -72,13 +101,24 @@
     } else {
       post.textContent = 'Last Prayer POST: n/a';
     }
+    if (window._uiPerf) window._uiPerf.end('refreshTickStatusBar', perfStart);
   };
 
   function startTickBarAnimationLoop() {
     if (window._tickBarRaf) return;
     var frame = function () {
-      window.refreshTickStatusBar();
+      if (!document.hidden) {
+        window.refreshTickStatusBar();
+      }
       window._tickBarRaf = window.requestAnimationFrame(frame);
     };
     window._tickBarRaf = window.requestAnimationFrame(frame);
   }
+
+  window.ensureTickStatusPolling = function () {
+    if (window._tickStatusPoller) return;
+    window._tickStatusPoller = window.setInterval(function () {
+      if (document.hidden) return;
+      window.pollTickStatusData();
+    }, 1000);
+  };

@@ -22,12 +22,14 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
     private readonly SpaceMoltSessionCache _sessionCache;
     private readonly ConcurrentDictionary<string, ApiCommandPerfCounter> _apiCommandPerf =
         new(StringComparer.OrdinalIgnoreCase);
+    private RouteInfo? _activeRoute;
 
     private string? _sessionId;
     private DateTimeOffset? _sessionExpiresAt;
     private string? _username;
     private string? _password;
     private readonly Dictionary<string, StationInfo> _stationCache = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<string, ItemStack>> _storageCacheByPoi = new(StringComparer.Ordinal);
     private int _currentTick;
     private int _shipCatalogPage = 1;
     private long _requestSequence;
@@ -167,6 +169,7 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
     }
 
     internal Dictionary<string, StationInfo> StationCache => _stationCache;
+    internal Dictionary<string, Dictionary<string, ItemStack>> StorageCacheByPoi => _storageCacheByPoi;
     internal TimeSpan CatalogueCacheTtlValue => CatalogueCacheTtl;
     internal int ShipCatalogPageSize => ShipCatalogPageSizeConst;
 
@@ -309,26 +312,6 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
         return await _catalogService.GetFullRecipeCatalogByIdAsync(forceRefresh);
     }
 
-    public async Task<JsonElement> FindRouteAsync(
-        string targetSystem,
-        CancellationToken cancellationToken = default)
-    {
-        cancellationToken = ResolveCancellationToken(cancellationToken);
-        JsonElement routeResult = await ExecuteAsync(
-            "find_route",
-            new { target_system = targetSystem },
-            cancellationToken);
-
-        await SpaceMoltHttpLogging.LogPathfindAsync(targetSystem, routeResult);
-        return routeResult;
-    }
-
-    async Task<RuntimeCommandResult> IRuntimeTransport.FindRouteAsync(string targetSystem)
-    {
-        JsonElement response = await FindRouteAsync(targetSystem);
-        return ToRuntimeCommandResult(response);
-    }
-
     public async Task<Catalogue> GetCatalogueAsync(
         string type,
         string? category = null,
@@ -361,6 +344,21 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
     GameState IRuntimeTransport.GetLatestState()
     {
         return GetGameState();
+    }
+
+    public RouteInfo? FindPath(GameState state, string targetSystem)
+    {
+        return new SpaceMoltRuntimeTransportAdapter(this).FindPath(state, targetSystem);
+    }
+
+    public void SetActiveRoute(RouteInfo? route)
+    {
+        _activeRoute = route;
+    }
+
+    public RouteInfo? GetActiveRoute()
+    {
+        return _activeRoute;
     }
 
     private async Task<GameState> BuildGameStateFromStatusAsync(JsonElement status)

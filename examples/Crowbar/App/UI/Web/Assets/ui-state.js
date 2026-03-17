@@ -74,6 +74,11 @@
     if (path.endsWith('/api/add-bot') || path.endsWith('/api/llm-select') || path === 'api/add-bot' || path === 'api/llm-select') {
       window.closeAllSidebarLayers();
     }
+    if (path.endsWith('/api/roleplay-start') || path.endsWith('/api/roleplay-stop') ||
+        path === 'api/roleplay-start' || path === 'api/roleplay-stop') {
+      var roleplayPane = document.querySelector('#right-pane-roleplay [hx-get=\"partial/roleplay\"]');
+      if (roleplayPane) htmx.trigger(roleplayPane, 'load');
+    }
   });
 
   document.body.addEventListener('htmx:beforeRequest', function (e) {
@@ -240,6 +245,8 @@
       }
       htmx.trigger(el, 'load');
     });
+    var roleplayPane = document.querySelector('#right-pane-roleplay [hx-get=\"partial/roleplay\"]');
+    if (roleplayPane) htmx.trigger(roleplayPane, 'load');
   };
 
   // Inject bot_id into every HTMX request so the server always knows which bot to target.

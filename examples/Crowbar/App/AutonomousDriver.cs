@@ -95,8 +95,15 @@ public sealed class AutonomousDriver
                 _log($"[{_botLabel}] cycle={cycle} waiting_for_halt");
 
                 // 1. Wait until the bot is idle (not executing a script).
-                await WaitForHaltAsync(ct);
+                var isIdle = await WaitForHaltAsync(ct);
                 if (ct.IsCancellationRequested) break;
+                if (!isIdle)
+                {
+                    SetStatus("Previous script still running. Waiting...");
+                    _log($"[{_botLabel}] cycle={cycle} wait_for_halt_timeout");
+                    await Task.Delay(PollWaitMs, ct);
+                    continue;
+                }
 
                 // 2. Get current game state.
                 var state = _getState();
@@ -516,7 +523,7 @@ public sealed class AutonomousDriver
 
     // ── Halt detection ────────────────────────────────────────────────────────
 
-    private async Task WaitForHaltAsync(CancellationToken ct)
+    private async Task<bool> WaitForHaltAsync(CancellationToken ct)
     {
         var deadline = DateTime.UtcNow.AddSeconds(MaxHaltWaitSeconds);
         while (!ct.IsCancellationRequested && DateTime.UtcNow < deadline)
@@ -524,8 +531,8 @@ public sealed class AutonomousDriver
             try
             {
                 var snapshot = await _api.GetRuntimeSnapshotAsync(_prayerSessionId, ct);
-                if (snapshot.Snapshot.IsHalted)
-                    return;
+                if (IsIdleBySnapshot(snapshot))
+                    return true;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -537,11 +544,28 @@ public sealed class AutonomousDriver
                 _log($"[{_botLabel}] wait_for_halt_snapshot_error | {ex.GetType().Name}: {ex.Message}");
                 var state = _getState();
                 if (IsHaltedByState(state))
-                    return;
+                    return true;
             }
 
             await Task.Delay(HaltPollWaitMs, ct);
         }
+
+        return false;
+    }
+
+    private static bool IsIdleBySnapshot(Prayer.Contracts.RuntimeSnapshotResponse snapshot)
+    {
+        var host = snapshot?.Snapshot;
+        if (host == null)
+            return false;
+
+        if (host.HasActiveCommand)
+            return false;
+
+        if (host.CurrentScriptLine != null)
+            return false;
+
+        return host.IsHalted;
     }
 
     private static bool IsHaltedByState(AppPrayerRuntimeState? state)

@@ -11,7 +11,7 @@ It is derived from:
 ## Base system prompt
 
 ```txt
-You are an autonomous agent playing the online game SpaceMolt. Pursue the user objective with short, deterministic DSL scripts. Avoid redundant movement and setup steps. Do not add dock before commands that can auto-dock. Do not add go before mine; use mine or mine <resource_id> directly so runtime can resolve navigation.
+You are an autonomous agent playing the online game SpaceMolt. Pursue the user objective with short, deterministic DSL scripts. Avoid redundant movement and setup steps. Do not add dock before commands that can auto-dock. Do not add go before mine; use mine or mine <resource_id> directly so runtime can resolve navigation. Remember: mine <resource_id> selects where to mine, but mined output can still include other resources. For mine quests, plan to stash cargo at station and use stash; (no item argument) to deposit all cargo when needed.
 ```
 
 ## Prompt scaffold sent to the model
@@ -45,6 +45,7 @@ Checklist:
 - blocks are allowed only as: repeat { ... }, if <CONDITION> { ... }, until <CONDITION> { ... }
 - avoid explicit dock unless user explicitly asks for dock
 - avoid explicit go before mine; use mine or mine <resource_id>
+- mine <resource_id> does not guarantee only that resource in cargo; for mine quests, include stash; at station when you need to deposit mixed cargo
 - no markdown fence
 Return only the script text.
 <|eot_id|><|start_header_id|>assistant<|end_header_id|>

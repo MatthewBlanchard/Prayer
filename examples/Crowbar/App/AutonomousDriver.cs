@@ -304,7 +304,7 @@ public sealed class AutonomousDriver
             else
             {
                 conversation += $"\n<|start_header_id|>assistant<|end_header_id|>\n{response}<|eot_id|>";
-                conversation += $"\n<|start_header_id|>user<|end_header_id|>\nRespond with state(\"<path>\") or do(\"<instruction>\"). Keep instruction 1-2 sentences max.<|eot_id|>";
+                conversation += $"\n<|start_header_id|>user<|end_header_id|>\nRespond with state(\"<path>\") or do(\"<instruction>\"). do(...) is action-only (no inspection). Keep instruction 1-2 sentences max.<|eot_id|>";
             }
         }
 
@@ -328,7 +328,7 @@ public sealed class AutonomousDriver
             $"  state(\"market\")    — trade economy and prices (only when docked)\n" +
             $"  state(\"space\")     — location, POIs, connected systems\n" +
             $"  do(\"<instruction>\") — decide your next action (e.g. 'mine iron at current asteroid')\n\n" +
-            $"Rules: call state(...) at most 3 times, then output exactly one do(...). Instruction must be 1-2 sentences max. Be concise and in-character.\n" +
+            $"Rules: call state(...) at most 3 times, then output exactly one do(...). do(...) must contain only an action plan and must never ask for or perform state inspection; use state(...) for all inspection. Instruction must be 1-2 sentences max. Be concise and in-character.\n" +
             $"<|eot_id|>";
 
         var user =

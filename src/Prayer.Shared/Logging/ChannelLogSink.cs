@@ -3,8 +3,6 @@ using System.Threading.Channels;
 
 public sealed class ChannelLogSink : ILogSink, IAsyncDisposable
 {
-    private const long MaxFileSizeBytes = 5 * 1024 * 1024; // 5MB cap per log file — rotate (clear) when exceeded
-
     private readonly Channel<LogEvent> _channel;
     private readonly TimeSpan _flushInterval = TimeSpan.FromMilliseconds(250);
     private readonly Dictionary<string, StreamWriter> _writers = new(StringComparer.OrdinalIgnoreCase);
@@ -103,23 +101,6 @@ public sealed class ChannelLogSink : ILogSink, IAsyncDisposable
         {
             writer = new StreamWriter(filePath, append: true, Encoding.UTF8) { AutoFlush = true };
             _writers[filePath] = writer;
-        }
-        else
-        {
-            // Rotate (clear) the file if it has exceeded the size cap.
-            try
-            {
-                var info = new System.IO.FileInfo(filePath);
-                if (info.Exists && info.Length > MaxFileSizeBytes)
-                {
-                    writer.Flush();
-                    writer.Dispose();
-                    writer = new StreamWriter(filePath, append: false, Encoding.UTF8) { AutoFlush = true };
-                    writer.WriteLine($"[LOG ROTATED at {DateTime.UtcNow:O} — previous content cleared, exceeded {MaxFileSizeBytes / 1024 / 1024}MB cap]");
-                    _writers[filePath] = writer;
-                }
-            }
-            catch { }
         }
         return writer;
     }

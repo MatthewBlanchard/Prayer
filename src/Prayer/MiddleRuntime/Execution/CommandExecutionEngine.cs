@@ -11,6 +11,8 @@ public sealed class CommandExecutionEngine
     private readonly Queue<ActionMemory> _memory = new();
     private readonly LinkedList<CommandResult> _requeuedSteps = new();
     private readonly List<ExecutionFrame> _frames = new();
+    private readonly Dictionary<string, int> _minedByItem = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _stashedByItem = new(StringComparer.OrdinalIgnoreCase);
 
     private const int MaxMemory = 12;
 
@@ -21,6 +23,8 @@ public sealed class CommandExecutionEngine
     private ActiveCommandState _activeCommandState;
     private IMultiTurnCommand? _activeCommand;
     private CommandResult? _activeCommandResult;
+    private StateSnapshot? _lastObservedState;
+    private string? _pendingDeltaAction;
 
     private readonly Action<string> _setStatus;
     private readonly IAgentLogger _logger;
@@ -64,6 +68,7 @@ public sealed class CommandExecutionEngine
         _logger.LogScriptNormalization("set_script", rawScript, _script);
 
         ResetFrames();
+        ResetScriptConditionCounters();
         ClearActiveCommand();
         _requeuedSteps.Clear();
         _isHalted = false;
@@ -171,6 +176,7 @@ public sealed class CommandExecutionEngine
         GameState state)
     {
         EnsureActiveCommandInvariant();
+        ObserveStateAndApplyCounters(state);
         string? message = null;
         bool shouldAddMemory = false;
         bool haltScript = false;
@@ -201,6 +207,7 @@ public sealed class CommandExecutionEngine
 
             bool finished = continuation.Item1;
             var response = continuation.Item2;
+            SetPendingDeltaAction(_activeCommandResult!.Action);
 
             if (finished)
             {
@@ -272,6 +279,8 @@ public sealed class CommandExecutionEngine
                     ClearActiveCommand();
                     _setStatus("Waiting");
                 }
+
+                SetPendingDeltaAction(result.Action);
             }
             else if (command is ISingleTurnCommand singleTurnCommand)
             {
@@ -281,6 +290,7 @@ public sealed class CommandExecutionEngine
                 shouldAddMemory = true;
                 haltScript = response?.HaltScript == true;
                 _setStatus("Waiting");
+                SetPendingDeltaAction(result.Action);
             }
         }
 
@@ -309,6 +319,7 @@ public sealed class CommandExecutionEngine
     public Task<CommandResult?> DecideAsync(GameState state)
     {
         EnsureActiveCommandInvariant();
+        ObserveStateAndApplyCounters(state);
         if (_isHalted)
         {
             _setStatus("Halted: waiting for user input");
@@ -438,28 +449,6 @@ public sealed class CommandExecutionEngine
                         $"Selected command line={result.SourceLine?.ToString() ?? "?"} cmd={FormatCommand(result)} path={frame.Path}/{nodeIndex}.");
                     return true;
 
-                case DslRepeatAstNode repeatNode:
-                {
-                    IReadOnlyList<DslAstNode> body = repeatNode.Body ?? Array.Empty<DslAstNode>();
-                    LogAstWalker(
-                        "repeat_visit",
-                        $"Visited repeat line={repeatNode.SourceLine} bodyCount={body.Count} path={frame.Path}/{nodeIndex}.");
-                    if (body.Count > 0)
-                    {
-                        _frames.Add(new ExecutionFrame(
-                            body,
-                            ExecutionFrameKind.Repeat,
-                            repeatNode.SourceLine,
-                            untilCondition: null,
-                            untilConditionKnown: false,
-                            path: $"{frame.Path}/{nodeIndex}"));
-                        LogAstWalker(
-                            "frame_push",
-                            $"Pushed repeat frame line={repeatNode.SourceLine} path={frame.Path}/{nodeIndex}.");
-                    }
-                    continue;
-                }
-
                 case DslIfAstNode ifNode:
                 {
                     IReadOnlyList<DslAstNode> body = ifNode.Body ?? Array.Empty<DslAstNode>();
@@ -528,12 +517,6 @@ public sealed class CommandExecutionEngine
     {
         if (frame.Nodes.Count == 0)
             return false;
-
-        if (frame.Kind == ExecutionFrameKind.Repeat)
-        {
-            frame.Index = 0;
-            return true;
-        }
 
         if (frame.Kind != ExecutionFrameKind.Until)
             return false;
@@ -625,10 +608,6 @@ public sealed class CommandExecutionEngine
                     }
                     break;
                 }
-
-                case DslRepeatAstNode repeatNode:
-                    ValidateCommandNodes(repeatNode.Body ?? Array.Empty<DslAstNode>(), state);
-                    break;
 
                 case DslIfAstNode ifNode:
                     ValidateCommandNodes(ifNode.Body ?? Array.Empty<DslAstNode>(), state);
@@ -739,6 +718,8 @@ public sealed class CommandExecutionEngine
         {
             _requeuedSteps.AddFirst(CloneStep(checkpoint.ActiveCommandResult));
         }
+
+        RestoreScriptConditionCounters(checkpoint);
 
         if (!TryRestoreFrames(checkpoint.Frames))
             ResetFrames();
@@ -859,7 +840,6 @@ public sealed class CommandExecutionEngine
             var node = currentNodes[nodeIndex];
             currentNodes = node switch
             {
-                DslRepeatAstNode repeatNode => repeatNode.Body,
                 DslIfAstNode ifNode => ifNode.Body,
                 DslUntilAstNode untilNode => untilNode.Body,
                 _ => Array.Empty<DslAstNode>()
@@ -937,7 +917,9 @@ public sealed class CommandExecutionEngine
                 UntilCondition = DslBooleanEvaluator.RenderCondition(f.UntilCondition),
                 UntilConditionKnown = f.UntilConditionKnown,
                 Path = f.Path
-            }).ToList()
+            }).ToList(),
+            MinedByItem = new Dictionary<string, int>(_minedByItem, StringComparer.OrdinalIgnoreCase),
+            StashedByItem = new Dictionary<string, int>(_stashedByItem, StringComparer.OrdinalIgnoreCase)
         };
     }
 
@@ -949,6 +931,118 @@ public sealed class CommandExecutionEngine
 
         return DslParser.TryParseCondition(condition, out parsed, out _);
     }
+
+    private void ResetScriptConditionCounters()
+    {
+        _minedByItem.Clear();
+        _stashedByItem.Clear();
+        _lastObservedState = null;
+        _pendingDeltaAction = null;
+    }
+
+    private void RestoreScriptConditionCounters(CommandExecutionCheckpoint checkpoint)
+    {
+        _minedByItem.Clear();
+        foreach (var entry in checkpoint.MinedByItem)
+        {
+            if (string.IsNullOrWhiteSpace(entry.Key))
+                continue;
+            _minedByItem[entry.Key] = Math.Max(0, entry.Value);
+        }
+
+        _stashedByItem.Clear();
+        foreach (var entry in checkpoint.StashedByItem)
+        {
+            if (string.IsNullOrWhiteSpace(entry.Key))
+                continue;
+            _stashedByItem[entry.Key] = Math.Max(0, entry.Value);
+        }
+
+        _lastObservedState = null;
+        _pendingDeltaAction = null;
+    }
+
+    private void ObserveStateAndApplyCounters(GameState state)
+    {
+        if (state == null)
+            return;
+
+        var current = CaptureStateSnapshot(state);
+
+        if (_lastObservedState != null &&
+            !string.IsNullOrWhiteSpace(_pendingDeltaAction))
+        {
+            if (string.Equals(_pendingDeltaAction, "mine", StringComparison.OrdinalIgnoreCase))
+                AccumulatePositiveDelta(_minedByItem, _lastObservedState.CargoByItem, current.CargoByItem);
+            else if (string.Equals(_pendingDeltaAction, "stash", StringComparison.OrdinalIgnoreCase))
+                AccumulatePositiveDelta(_stashedByItem, _lastObservedState.StorageByItem, current.StorageByItem);
+        }
+
+        _lastObservedState = current;
+        _pendingDeltaAction = null;
+        ApplyCountersToState(state);
+    }
+
+    private void SetPendingDeltaAction(string? action)
+    {
+        if (string.IsNullOrWhiteSpace(action))
+            return;
+
+        _pendingDeltaAction = action.Trim();
+    }
+
+    private void ApplyCountersToState(GameState state)
+    {
+        state.ScriptMinedByItem = new Dictionary<string, int>(_minedByItem, StringComparer.OrdinalIgnoreCase);
+        state.ScriptStashedByItem = new Dictionary<string, int>(_stashedByItem, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static StateSnapshot CaptureStateSnapshot(GameState state)
+    {
+        return new StateSnapshot(
+            CopyItemStacks(state.Ship?.Cargo),
+            CopyItemStacks(state.StorageItems));
+    }
+
+    private static Dictionary<string, int> CopyItemStacks(Dictionary<string, ItemStack>? source)
+    {
+        var snapshot = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (source == null)
+            return snapshot;
+
+        foreach (var (itemId, stack) in source)
+        {
+            if (string.IsNullOrWhiteSpace(itemId))
+                continue;
+
+            int quantity = stack?.Quantity ?? 0;
+            if (quantity > 0)
+                snapshot[itemId] = quantity;
+        }
+
+        return snapshot;
+    }
+
+    private static void AccumulatePositiveDelta(
+        Dictionary<string, int> totals,
+        Dictionary<string, int> before,
+        Dictionary<string, int> after)
+    {
+        foreach (var (itemId, afterQuantity) in after)
+        {
+            before.TryGetValue(itemId, out var beforeQuantity);
+            int delta = afterQuantity - beforeQuantity;
+            if (delta <= 0)
+                continue;
+
+            totals.TryGetValue(itemId, out var existing);
+            totals[itemId] = existing + delta;
+        }
+    }
+
+    private sealed record StateSnapshot(
+        Dictionary<string, int> CargoByItem,
+        Dictionary<string, int> StorageByItem);
 
     private sealed class ExecutionFrame
     {
@@ -980,7 +1074,6 @@ public sealed class CommandExecutionEngine
     private enum ExecutionFrameKind
     {
         Root,
-        Repeat,
         If,
         Until
     }

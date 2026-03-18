@@ -83,11 +83,6 @@ public static class DslScriptTransformer
                     output.Add(result);
                     break;
                 }
-                case DslRepeatAstNode repeatNode:
-                {
-                    InterpretNodes(repeatNode.Body ?? Array.Empty<DslAstNode>(), state, output);
-                    break;
-                }
                 case DslIfAstNode ifNode:
                 {
                     InterpretNodes(ifNode.Body ?? Array.Empty<DslAstNode>(), state, output);

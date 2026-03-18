@@ -42,7 +42,7 @@ Prompt -> script examples:
 Generate a DSL script now.
 Checklist:
 - every command ends with ;
-- blocks are allowed only as: repeat { ... }, if <CONDITION> { ... }, until <CONDITION> { ... }
+- blocks are allowed only as: if <CONDITION> { ... }, until <CONDITION> { ... }
 - avoid explicit dock unless user explicitly asks for dock
 - avoid explicit go before mine; use mine or mine <resource_id>
 - mine <resource_id> does not guarantee only that resource in cargo; for mine quests, include stash; at station when you need to deposit mixed cargo
@@ -64,16 +64,19 @@ Prayer injects a generated DSL reference block with:
 The block includes these rule lines exactly:
 
 ```txt
-- Blocks are supported via: repeat { ... }
 - Conditional blocks are supported via: if <CONDITION> { ... }
 - Until blocks are supported via: until <CONDITION> { ... }
-- All commands still end with ';' inside repeat blocks.
+- All commands still end with ';' inside blocks.
 ```
 
 Current condition tokens:
 
 - Boolean: `MISSION_COMPLETE(mission_id)`
-- Numeric: `FUEL()`, `CREDITS()`, `CARGO_PCT()`, `CARGO(item_id)`, `STASH(poi_id, item_id)`
+- Numeric: `FUEL()`, `CREDITS()`, `CARGO_PCT()`, `CARGO(item_id)`, `STASH(poi_id, item_id)`, `MINED(item_id)`, `STASHED(item_id)`
+
+`MINED(item_id)` and `STASHED(item_id)` are script-scoped counters:
+- reset to `0` for all items when a new script is loaded
+- increment as script execution mines/stashes items
 
 ## Current command surface (catalog)
 
@@ -134,13 +137,13 @@ Observed aliases in prompt/logs:
 
 Execution behavior in `src/Prayer/log/ast_walker.log`:
 
-- Scripts execute as frames (`Root`, `If`, `Repeat`) with explicit push/pop events.
+- Scripts execute as frames (`Root`, `If`, `Until`) with explicit push/pop events.
 - `if`:
   - Condition evaluated once when encountered (`if_visit ... known=True value=...`).
   - Body frame is entered only if condition is true.
-- `repeat`:
-  - Body frame is revisited continuously (`repeat_visit`, `frame_push` of `Repeat`).
-  - This is an intentional infinite loop construct until externally halted or replaced.
+- `until`:
+  - Condition is evaluated before entering the block and after each full pass.
+  - Body frame repeats only while condition remains false.
 - Root script ends when all statements are exhausted (`frame_complete` then `step_scan_end`).
 
 Validation/normalization behavior:

@@ -27,14 +27,6 @@ internal static class DslPrettyPrinter
                     AppendAstCommand(commandNode, sb, indent);
                     break;
 
-                case DslRepeatAstNode repeatNode:
-                    AppendIndent(sb, indent);
-                    sb.AppendLine("repeat {");
-                    AppendAstNodes(repeatNode.Body ?? Array.Empty<DslAstNode>(), sb, indent + 2);
-                    AppendIndent(sb, indent);
-                    sb.AppendLine("}");
-                    break;
-
                 case DslIfAstNode ifNode:
                     AppendIndent(sb, indent);
                     sb.Append("if ");

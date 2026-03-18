@@ -43,7 +43,7 @@ The script is always visible and editable — never a black box. The agent write
 Prayer scripts use a small DSL that the runtime parses and executes deterministically.
 
 - One command per line, terminated by `;`
-- Blocks are supported as `repeat { ... }`, `if <CONDITION> { ... }`, and `until <CONDITION> { ... }`
+- Blocks are supported as `if <CONDITION> { ... }` and `until <CONDITION> { ... }`
 - `halt;` is a first-class DSL command to stop execution
 - The agent should generate only supported commands and syntax
 
@@ -210,13 +210,11 @@ go nexus;
 ```
 
 ```txt
-Prompt: "Do a mining loop at nexus prime"
+Prompt: "Mine and sell at nexus prime"
 Script:
 go nexus_prime;
-repeat {
-  mine;
-  sell;
-}
+mine;
+sell;
 ```
 
 ## Scope right now

@@ -51,7 +51,7 @@ public static class AgentPrompt
             "Generate a DSL script now.\n" +
             "Checklist:\n" +
             "- every command ends with ;\n" +
-            "- blocks are allowed only as: repeat { ... }, if <CONDITION> { ... }, until <CONDITION> { ... }\n" +
+            "- blocks are allowed only as: if <CONDITION> { ... }, until <CONDITION> { ... }\n" +
             "- avoid explicit dock unless user explicitly asks for dock\n" +
             "- avoid explicit go before mine; use mine or mine <resource_id>\n" +
             "- mine <resource_id> does not guarantee only that resource in cargo; for mine quests, include stash; at station when you need to deposit mixed cargo\n" +

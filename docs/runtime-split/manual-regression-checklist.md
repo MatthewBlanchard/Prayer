@@ -25,7 +25,7 @@ Expected:
 2. Confirm script is accepted and runtime enters script mode.
 3. Execute one tick and confirm runtime halts with a halt-related status.
 4. Load `smoke-02-control-flow`.
-5. Confirm parser accepts `repeat`, `if`, `until`, and `halt` without syntax errors.
+5. Confirm parser accepts `if`, `until`, and `halt` without syntax errors.
 6. Confirm invalid boolean token still fails (negative check with `if NOT_A_FLAG { halt; }`).
 
 Expected:

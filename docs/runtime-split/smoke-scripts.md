@@ -17,17 +17,15 @@ Purpose: verifies minimal parser + halt execution path.
 ## smoke-02-control-flow
 
 ```txt
-repeat {
-  if MISSION_COMPLETE {
-    halt;
-  }
-  until MISSION_COMPLETE {
-    go <SYSTEM_ID>;
-  }
+if MISSION_COMPLETE {
+  halt;
+}
+until MISSION_COMPLETE {
+  go <SYSTEM_ID>;
 }
 ```
 
-Purpose: verifies `repeat`, `if`, `until`, and `halt` parse/normalize support in one script.
+Purpose: verifies `if`, `until`, and `halt` parse/normalize support in one script.
 
 ## smoke-03-multiturn-go
 
@@ -72,7 +70,7 @@ Purpose: positions bot for docked enrichment verification in state/UI snapshot.
 ## smoke-06-checkpoint-resume
 
 ```txt
-repeat {
+until CARGO_PCT() >= 100 {
   go <SYSTEM_ID>;
   mine;
 }

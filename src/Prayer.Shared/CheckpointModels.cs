@@ -45,6 +45,8 @@ public sealed record CommandExecutionCheckpoint
     public IReadOnlyList<ActionMemoryCheckpoint> Memory { get; init; } = Array.Empty<ActionMemoryCheckpoint>();
     public IReadOnlyList<CommandResult> RequeuedSteps { get; init; } = Array.Empty<CommandResult>();
     public IReadOnlyList<ExecutionFrameCheckpoint> Frames { get; init; } = Array.Empty<ExecutionFrameCheckpoint>();
+    public Dictionary<string, int> MinedByItem { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, int> StashedByItem { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed class ActionMemoryCheckpoint

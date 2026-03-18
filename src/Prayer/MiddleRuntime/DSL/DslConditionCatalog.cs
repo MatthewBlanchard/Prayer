@@ -26,6 +26,8 @@ public static class DslConditionCatalog
         new("CARGO_PCT", [],         (state, _)    => ResolveCargoPercent(state)),
         new("CARGO",   ["item_id"],  (state, args) => ResolveItemCount(state.Ship.Cargo, args)),
         new("STASH",   ["poi_id", "item_id"],  (state, args) => ResolveStashCount(state, args)),
+        new("MINED",   ["item_id"],  (state, args) => ResolveTrackedCount(state.ScriptMinedByItem, args)),
+        new("STASHED", ["item_id"],  (state, args) => ResolveTrackedCount(state.ScriptStashedByItem, args)),
     };
 
     private static bool IsMissionComplete(GameState state, IReadOnlyList<string> args)
@@ -106,6 +108,16 @@ public static class DslConditionCatalog
             return ResolveItemCount(cached, itemArgs);
 
         return 0;
+    }
+
+    private static int ResolveTrackedCount(Dictionary<string, int>? dict, IReadOnlyList<string> args)
+    {
+        if (dict == null || args.Count == 0 || string.IsNullOrWhiteSpace(args[0]))
+            return 0;
+
+        return dict.TryGetValue(args[0], out var value)
+            ? Math.Max(0, value)
+            : 0;
     }
 
     private static int ResolveFuelPercent(GameState state)

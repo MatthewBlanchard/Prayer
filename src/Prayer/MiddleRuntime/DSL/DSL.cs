@@ -38,7 +38,6 @@ public sealed class DslAstProgram
 public abstract record DslAstNode;
 
 public sealed record DslCommandAstNode(string Name, IReadOnlyList<string> Args, int SourceLine = 0) : DslAstNode;
-public sealed record DslRepeatAstNode(IReadOnlyList<DslAstNode> Body, int SourceLine = 0) : DslAstNode;
 public sealed record DslIfAstNode(DslConditionAstNode Condition, IReadOnlyList<DslAstNode> Body, int SourceLine = 0) : DslAstNode;
 public sealed record DslUntilAstNode(DslConditionAstNode Condition, IReadOnlyList<DslAstNode> Body, int SourceLine = 0) : DslAstNode;
 
@@ -178,16 +177,6 @@ public static class DslParser
         from _semi in Character.EqualTo(';')
         select (DslAstNode)new DslCommandAstNode(commandName, commandArgs);
 
-    private static readonly TextParser<DslAstNode> RepeatAst =
-        from _repeat in Span.EqualToIgnoreCase("repeat").Value(Unit.Value)
-        from _ in Ws
-        from _open in Character.EqualTo('{')
-        from __ in Ws
-        from body in Superpower.Parse.Ref(() => StatementAst!).Many()
-        from ___ in Ws
-        from _close in Character.EqualTo('}')
-        select (DslAstNode)new DslRepeatAstNode(body);
-
     private static readonly TextParser<DslAstNode> IfAst =
         from _if in Span.EqualToIgnoreCase("if").Value(Unit.Value)
         from _ in Ws1
@@ -236,9 +225,6 @@ public static class DslParser
 
         if (StartsWithKeyword(input, "if", requireWhitespaceAfter: true))
             return IfAst(input);
-
-        if (StartsWithKeyword(input, "repeat", requireWhitespaceAfter: false))
-            return RepeatAst(input);
 
         return CommandAst(input);
     }
@@ -295,6 +281,8 @@ public static class DslParser
         if (string.IsNullOrWhiteSpace(text))
             return new DslAstProgram(Array.Empty<DslAstNode>());
 
+        RejectRemovedConstructs(text);
+
         try
         {
             var tree = ProgramAstParser.Parse(text);
@@ -306,6 +294,30 @@ public static class DslParser
         {
             throw new FormatException($"Invalid DSL script: {ex.Message}", ex);
         }
+    }
+
+    private static void RejectRemovedConstructs(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return;
+
+        var repeatMatch = System.Text.RegularExpressions.Regex.Match(
+            text,
+            @"\brepeat\b\s*\{",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        if (!repeatMatch.Success)
+            return;
+
+        int line = 1;
+        for (int i = 0; i < repeatMatch.Index; i++)
+        {
+            if (text[i] == '\n')
+                line++;
+        }
+
+        throw new FormatException(
+            $"Line {line}: 'repeat {{ ... }}' is no longer supported. Use an 'until <CONDITION> {{ ... }}' block instead.");
     }
 
     private readonly record struct StatementLineEntry(int Line);
@@ -333,30 +345,9 @@ public static class DslParser
             {
                 SourceLine = ConsumeLine(entries, ref entryIndex)
             },
-            DslRepeatAstNode repeatNode => AnnotateRepeatNode(repeatNode, entries, ref entryIndex),
             DslIfAstNode ifNode => AnnotateIfNode(ifNode, entries, ref entryIndex),
             DslUntilAstNode untilNode => AnnotateUntilNode(untilNode, entries, ref entryIndex),
             _ => node
-        };
-    }
-
-    private static DslRepeatAstNode AnnotateRepeatNode(
-        DslRepeatAstNode repeatNode,
-        IReadOnlyList<StatementLineEntry> entries,
-        ref int entryIndex)
-    {
-        var body = new List<DslAstNode>(repeatNode.Body.Count);
-        foreach (var child in repeatNode.Body)
-            body.Add(AnnotateNodeLine(child, entries, ref entryIndex));
-
-        int sourceLine = repeatNode.SourceLine > 0
-            ? repeatNode.SourceLine
-            : InferRepeatSourceLine(repeatNode with { Body = body }, entries, entryIndex);
-
-        return repeatNode with
-        {
-            SourceLine = sourceLine,
-            Body = body
         };
     }
 
@@ -398,24 +389,6 @@ public static class DslParser
             SourceLine = sourceLine,
             Body = body
         };
-    }
-
-    private static int InferRepeatSourceLine(
-        DslRepeatAstNode repeatNode,
-        IReadOnlyList<StatementLineEntry> entries,
-        int entryIndex)
-    {
-        if (repeatNode.Body != null && repeatNode.Body.Count > 0)
-        {
-            var firstLine = FindFirstCommandLine(repeatNode.Body);
-            if (firstLine > 0)
-                return firstLine;
-        }
-
-        if (entryIndex < entries.Count)
-            return entries[entryIndex].Line;
-
-        return 1;
     }
 
     private static int InferIfSourceLine(
@@ -462,13 +435,6 @@ public static class DslParser
             {
                 case DslCommandAstNode commandNode when commandNode.SourceLine > 0:
                     return commandNode.SourceLine;
-                case DslRepeatAstNode repeatNode:
-                {
-                    var nested = FindFirstCommandLine(repeatNode.Body);
-                    if (nested > 0)
-                        return nested;
-                    break;
-                }
                 case DslIfAstNode ifNode:
                 {
                     var nested = FindFirstCommandLine(ifNode.Body);
@@ -525,12 +491,6 @@ public static class DslParser
                 {
                     int identifierLine = line;
                     string token = ReadIdentifier(text, ref i);
-                    if (IsRepeatToken(token, text, i))
-                    {
-                        SkipRepeatHeader(text, ref i, ref line);
-                        expectingCommand = true;
-                        continue;
-                    }
                     if (IsIfToken(token, text, i))
                     {
                         SkipIfHeader(text, ref i, ref line);
@@ -570,16 +530,6 @@ public static class DslParser
         return entries;
     }
 
-    private static bool IsRepeatToken(string token, string text, int indexAfterToken)
-    {
-        if (!token.Equals("repeat", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        int i = indexAfterToken;
-        SkipWhitespace(text, ref i);
-        return i < text.Length && text[i] == '{';
-    }
-
     private static bool IsIfToken(string token, string text, int indexAfterToken)
     {
         if (!token.Equals("if", StringComparison.OrdinalIgnoreCase))
@@ -598,13 +548,6 @@ public static class DslParser
         int i = indexAfterToken;
         SkipWhitespace(text, ref i);
         return HasConditionAndOpeningBrace(text, i);
-    }
-
-    private static void SkipRepeatHeader(string text, ref int index, ref int line)
-    {
-        SkipWhitespaceAndCountLines(text, ref index, ref line);
-        if (index < text.Length && text[index] == '{')
-            index++;
     }
 
     private static void SkipIfHeader(string text, ref int index, ref int line)
@@ -662,16 +605,6 @@ public static class DslParser
     {
         while (index < text.Length && char.IsWhiteSpace(text[index]))
             index++;
-    }
-
-    private static void SkipWhitespaceAndCountLines(string text, ref int index, ref int line)
-    {
-        while (index < text.Length && char.IsWhiteSpace(text[index]))
-        {
-            if (text[index] == '\n')
-                line++;
-            index++;
-        }
     }
 
     private static bool IsIdentifierStart(char c)
@@ -794,13 +727,11 @@ public static class DslParser
 
         sb.AppendLine();
         sb.AppendLine("Keywords:");
-        sb.AppendLine("- repeat: infinite runtime loop block");
         sb.AppendLine("- until: runtime loop block that exits when a condition is true");
         sb.AppendLine("- if: conditional block executed only when a condition is true");
         sb.AppendLine("- halt: stop script execution");
         sb.AppendLine();
         sb.AppendLine("Rules:");
-        sb.AppendLine("- Blocks are supported via: repeat { ... }");
         sb.AppendLine("- Conditional blocks are supported via: if <CONDITION> { ... }");
         sb.AppendLine("- Until blocks are supported via: until <CONDITION> { ... }");
         if (Macros.Count > 0)
@@ -822,7 +753,8 @@ public static class DslParser
             sb.AppendLine($"- Boolean conditions: {string.Join(", ", booleanSigs)}");
         if (numericSigs.Count > 0)
             sb.AppendLine($"- Numeric conditions: {string.Join(", ", numericSigs)}");
-        sb.AppendLine("- All commands still end with ';' inside repeat blocks.");
+        sb.AppendLine("- MINED(item_id) and STASHED(item_id) are script-scoped counters; both reset to 0 when a new script is loaded.");
+        sb.AppendLine("- All commands still end with ';' inside blocks.");
         sb.AppendLine("- Do not add a trailing 'halt;' at script end unless user explicitly asks to stop/pause.");
         sb.AppendLine();
 
@@ -902,9 +834,6 @@ public static class DslParser
                         names.Add(normalized);
                     break;
                 }
-                case DslRepeatAstNode repeatNode:
-                    CollectCommandNames(repeatNode.Body ?? Array.Empty<DslAstNode>(), names);
-                    break;
                 case DslIfAstNode ifNode:
                     CollectCommandNames(ifNode.Body ?? Array.Empty<DslAstNode>(), names);
                     break;
@@ -1093,11 +1022,10 @@ public static class DslParser
         }
 
         sb.AppendLine("condition_expr ::= [^\\{\\n\\r][^\\{\\n\\r]*");
-        sb.AppendLine("repeat_stmt ::= \"repeat\" ws \"{\" ws statement* ws \"}\"");
         sb.AppendLine("if_stmt ::= \"if\" ws condition_expr ws \"{\" ws statement* ws \"}\"");
         sb.AppendLine("until_stmt ::= \"until\" ws condition_expr ws \"{\" ws statement* ws \"}\"");
         sb.AppendLine("halt_stmt ::= \"halt\" ws \";\"");
-        sb.AppendLine($"statement ::= {string.Join(" | ", statementRules)} | repeat_stmt | if_stmt | until_stmt | halt_stmt");
+        sb.AppendLine($"statement ::= {string.Join(" | ", statementRules)} | if_stmt | until_stmt | halt_stmt");
         sb.AppendLine("script ::= (ws statement)*");
         sb.AppendLine();
     }
@@ -1391,11 +1319,6 @@ public static class DslParser
                     if (CommandSyntaxByName.TryGetValue(normalizedName, out var commandSyntax))
                         ValidateCommandArgs(normalizedName, args, commandSyntax);
 
-                    break;
-                }
-                case DslRepeatAstNode repeatNode:
-                {
-                    ValidateNodes(repeatNode.Body ?? Array.Empty<DslAstNode>());
                     break;
                 }
                 case DslIfAstNode ifNode:

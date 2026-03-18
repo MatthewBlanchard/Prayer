@@ -9,7 +9,7 @@ public class BuyListedShipCommand : AutoDockSingleTurnCommand
     public override DslCommandSyntax GetDslSyntax() => new(
         ArgSpecs: new[]
         {
-            new DslArgumentSpec(DslArgKind.Any, Required: true)
+            new DslArgumentSpec(DslArgType.ListingId, Required: true)
         });
 
     protected override bool IsAvailableWhenDocked(GameState state)

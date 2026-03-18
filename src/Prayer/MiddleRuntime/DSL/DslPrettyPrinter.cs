@@ -68,16 +68,13 @@ internal static class DslPrettyPrinter
 
         AppendIndent(sb, indent);
         sb.Append(normalized.Action);
-        if (!string.IsNullOrWhiteSpace(normalized.Arg1))
+        foreach (var arg in normalized.Args)
         {
-            sb.Append(' ');
-            sb.Append(normalized.Arg1);
-        }
+            if (string.IsNullOrWhiteSpace(arg))
+                continue;
 
-        if (normalized.Quantity.HasValue)
-        {
             sb.Append(' ');
-            sb.Append(normalized.Quantity.Value);
+            sb.Append(arg);
         }
 
         sb.AppendLine(";");

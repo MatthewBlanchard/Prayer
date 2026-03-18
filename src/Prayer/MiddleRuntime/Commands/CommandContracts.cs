@@ -21,31 +21,32 @@ public interface ICommand
     DslCommandSyntax GetDslSyntax();
 }
 
-[Flags]
-public enum DslArgKind
+public enum DslArgType
 {
     None = 0,
-    Any = 1 << 0,
-    Integer = 1 << 1,
-    System = 1 << 2,
-    Item = 1 << 3,
-    Enum = 1 << 4,
-
-    // Backward-compat aliases for older command syntax declarations.
-    Identifier = Any,
-    String = Any
+    Any,
+    Integer,
+    ItemId,
+    SystemId,
+    PoiId,
+    GoTarget,
+    ShipId,
+    ListingId,
+    MissionId,
+    ModuleId,
+    RecipeId,
+    Enum
 }
 
 public sealed record DslArgumentSpec(
-    DslArgKind Kind,
+    DslArgType Type,
     bool Required = true,
     string? DefaultValue = null,
     string? EnumType = null,
-    IReadOnlyList<string>? EnumValues = null,
-    IReadOnlyDictionary<string, double>? ArgTypeWeights = null);
+    IReadOnlyList<string>? EnumValues = null);
 
 public sealed record DslCommandSyntax(
-    DslArgKind ArgKind = DslArgKind.None,
+    DslArgType ArgType = DslArgType.None,
     bool ArgRequired = false,
     string? DefaultArg = null,
     IReadOnlyList<DslArgumentSpec>? ArgSpecs = null);

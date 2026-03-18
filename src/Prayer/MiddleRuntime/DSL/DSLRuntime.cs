@@ -23,14 +23,13 @@ public class DslCommand
         if (state != null && !string.IsNullOrWhiteSpace(action) && args.Count > 0)
         {
             var specs = DslParser.GetArgSpecsForCommand(action);
-            DslFuzzyMatcher.ValidateArguments(action, args, specs, state);
+            args = DslFuzzyMatcher.CastArguments(action, args, specs, state).ToList();
         }
 
         return new CommandResult
         {
             Action = action,
-            Arg1 = args.ElementAtOrDefault(0),
-            Quantity = int.TryParse(args.ElementAtOrDefault(1), out int n) ? n : null
+            Args = args
         };
     }
 }

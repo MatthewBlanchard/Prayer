@@ -678,31 +678,22 @@ public sealed class CommandExecutionEngine
 
         _memory.Enqueue(new ActionMemory(
             result.Action,
-            result.Arg1,
-            result.Quantity,
+            result.Args.ToList(),
             message));
     }
 
     private static string FormatAction(ActionMemory m)
     {
-        if (!string.IsNullOrWhiteSpace(m.Arg1) && m.Quantity.HasValue)
-            return $"{m.Action} {m.Arg1} {m.Quantity}";
-
-        if (!string.IsNullOrWhiteSpace(m.Arg1))
-            return $"{m.Action} {m.Arg1}";
-
-        return m.Action;
+        if (m.Args.Count == 0)
+            return m.Action;
+        return $"{m.Action} {string.Join(" ", m.Args.Where(a => !string.IsNullOrWhiteSpace(a)))}";
     }
 
     private static string FormatCommand(CommandResult cmd)
     {
-        if (!string.IsNullOrWhiteSpace(cmd.Arg1) && cmd.Quantity.HasValue)
-            return $"{cmd.Action} {cmd.Arg1} {cmd.Quantity}";
-
-        if (!string.IsNullOrWhiteSpace(cmd.Arg1))
-            return $"{cmd.Action} {cmd.Arg1}";
-
-        return cmd.Action;
+        if (cmd.Args.Count == 0)
+            return cmd.Action;
+        return $"{cmd.Action} {string.Join(" ", cmd.Args.Where(a => !string.IsNullOrWhiteSpace(a)))}";
     }
 
     private static CommandResult CloneStep(CommandResult step)
@@ -710,8 +701,7 @@ public sealed class CommandExecutionEngine
         return new CommandResult
         {
             Action = step.Action,
-            Arg1 = step.Arg1,
-            Quantity = step.Quantity,
+            Args = step.Args.ToList(),
             SourceLine = step.SourceLine
         };
     }
@@ -726,8 +716,7 @@ public sealed class CommandExecutionEngine
 
             _memory.Enqueue(new ActionMemory(
                 memoryEntry.Action,
-                memoryEntry.Arg1,
-                memoryEntry.Quantity,
+                memoryEntry.Args ?? new List<string>(),
                 memoryEntry.ResultMessage));
         }
 
@@ -934,8 +923,7 @@ public sealed class CommandExecutionEngine
             Memory = _memory.Select(m => new ActionMemoryCheckpoint
             {
                 Action = m.Action,
-                Arg1 = m.Arg1,
-                Quantity = m.Quantity,
+                Args = m.Args.ToList(),
                 ResultMessage = m.ResultMessage
             }).ToList(),
             RequeuedSteps = _requeuedSteps
@@ -1005,7 +993,6 @@ public sealed class CommandExecutionEngine
 
     private record ActionMemory(
         string Action,
-        string? Arg1,
-        int? Quantity,
+        IReadOnlyList<string> Args,
         string? ResultMessage);
 }

@@ -4,9 +4,33 @@ using System.Collections.Generic;
 public sealed class CommandResult
 {
     public string Action { get; set; } = string.Empty;
-    public string? Arg1 { get; set; }
-    public int? Quantity { get; set; }
+    public List<string> Args { get; set; } = new();
+    public string? Arg1
+    {
+        get => Args.Count > 0 ? Args[0] : null;
+        set => SetArgAt(0, value);
+    }
+    public int? Quantity
+    {
+        get => Args.Count > 1 && int.TryParse(Args[1], out var n) ? n : null;
+        set => SetArgAt(1, value?.ToString());
+    }
     public int? SourceLine { get; set; }
+
+    private void SetArgAt(int index, string? value)
+    {
+        while (Args.Count <= index)
+            Args.Add(string.Empty);
+
+        Args[index] = value ?? string.Empty;
+
+        for (int i = Args.Count - 1; i >= 0; i--)
+        {
+            if (!string.IsNullOrWhiteSpace(Args[i]))
+                break;
+            Args.RemoveAt(i);
+        }
+    }
 }
 
 public sealed record CommandExecutionCheckpoint
@@ -26,8 +50,7 @@ public sealed record CommandExecutionCheckpoint
 public sealed class ActionMemoryCheckpoint
 {
     public string Action { get; set; } = string.Empty;
-    public string? Arg1 { get; set; }
-    public int? Quantity { get; set; }
+    public List<string> Args { get; set; } = new();
     public string? ResultMessage { get; set; }
 }
 

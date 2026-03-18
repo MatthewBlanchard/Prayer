@@ -438,7 +438,10 @@ public sealed class RuntimeHost : IRuntimeHost
 
     private static string BuildScriptStepKey(CommandResult step)
     {
-        return $"{step.SourceLine?.ToString() ?? "-"}|{step.Action}|{step.Arg1 ?? ""}|{step.Quantity?.ToString() ?? ""}";
+        var args = step.Args.Count == 0
+            ? string.Empty
+            : string.Join("|", step.Args.Where(a => !string.IsNullOrWhiteSpace(a)));
+        return $"{step.SourceLine?.ToString() ?? "-"}|{step.Action}|{args}";
     }
 
     private async Task<GameState> TryAutoDockedMaintenanceAsync(
@@ -583,13 +586,15 @@ public sealed class RuntimeHost : IRuntimeHost
 
     private static string FormatCommand(CommandResult result)
     {
-        if (!string.IsNullOrWhiteSpace(result.Arg1) && result.Quantity.HasValue)
-            return $"{result.Action} {result.Arg1} {result.Quantity.Value}";
+        if (result.Args.Count == 0)
+            return result.Action;
 
-        if (!string.IsNullOrWhiteSpace(result.Arg1))
-            return $"{result.Action} {result.Arg1}";
-
-        return result.Action;
+        var args = result.Args
+            .Where(a => !string.IsNullOrWhiteSpace(a))
+            .ToArray();
+        return args.Length == 0
+            ? result.Action
+            : $"{result.Action} {string.Join(" ", args)}";
     }
 
     private async Task<bool> HandlePendingHaltsAsync(CancellationToken token)

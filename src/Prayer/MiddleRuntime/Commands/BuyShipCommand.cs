@@ -9,7 +9,7 @@ public class BuyShipCommand : AutoDockSingleTurnCommand
     public override DslCommandSyntax GetDslSyntax() => new(
         ArgSpecs: new[]
         {
-            new DslArgumentSpec(DslArgKind.Enum, Required: true, EnumType: "ship_class")
+            new DslArgumentSpec(DslArgType.Enum, Required: true, EnumType: "ship_class")
         });
 
     protected override bool IsAvailableWhenDocked(GameState state)

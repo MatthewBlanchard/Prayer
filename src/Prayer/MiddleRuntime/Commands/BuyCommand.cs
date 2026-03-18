@@ -11,8 +11,8 @@ public class BuyCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
     public override DslCommandSyntax GetDslSyntax() => new(
         ArgSpecs: new[]
         {
-            new DslArgumentSpec(DslArgKind.Item, Required: true),
-            new DslArgumentSpec(DslArgKind.Integer, Required: true),
+            new DslArgumentSpec(DslArgType.ItemId, Required: true),
+            new DslArgumentSpec(DslArgType.Integer, Required: true),
         });
 
     protected override bool IsAvailableWhenDocked(GameState state)

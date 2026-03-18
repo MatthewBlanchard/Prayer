@@ -19,7 +19,7 @@ public class MineCommand : IMultiTurnCommand, IDslCommandGrammar
     public DslCommandSyntax GetDslSyntax() => new(
         ArgSpecs: new[]
         {
-            new DslArgumentSpec(DslArgKind.Item, Required: false)
+            new DslArgumentSpec(DslArgType.ItemId, Required: false)
         });
 
     private string? _resourceId;

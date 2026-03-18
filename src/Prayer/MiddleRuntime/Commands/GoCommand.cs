@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -11,13 +10,8 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
         ArgSpecs: new[]
         {
             new DslArgumentSpec(
-                DslArgKind.System | DslArgKind.Any,
-                Required: true,
-                ArgTypeWeights: new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["system"] = 1.08,
-                    ["poi"] = 1.00
-                })
+                DslArgType.GoTarget,
+                Required: true)
         });
 
     private string? _target;

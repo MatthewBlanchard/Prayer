@@ -11,7 +11,7 @@ public class StashCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
         ArgSpecs: new[]
         {
             new DslArgumentSpec(
-                DslArgKind.Item,
+                DslArgType.ItemId,
                 Required: false)
         });
 

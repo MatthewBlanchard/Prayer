@@ -9,35 +9,26 @@ internal static class DslFuzzyMatcher
 {
     private const double MinDidYouMeanScore = 0.62d;
 
-    private sealed record Candidate(
-        string Canonical,
-        IReadOnlyList<string> Aliases,
-        string ArgType);
+    private sealed record Candidate(string Canonical, IReadOnlyList<string> Aliases);
 
-    private sealed record MatchResult(
-        string Canonical,
-        double Score,
-        string ArgType);
-
-    public static void ValidateArguments(
+    public static IReadOnlyList<string> CastArguments(
         string action,
         IReadOnlyList<string> args,
         IReadOnlyList<DslArgumentSpec> argSpecs,
         GameState state)
     {
-        if (args.Count == 0)
-            return;
+        var casted = new List<string>(args.Count);
 
         for (int i = 0; i < args.Count; i++)
         {
             var spec = i < argSpecs.Count
                 ? argSpecs[i]
-                : new DslArgumentSpec(DslArgKind.Any, Required: false);
+                : new DslArgumentSpec(DslArgType.Any, Required: false);
 
-            var error = ValidateTypedArg(action, i + 1, args[i], spec, state);
-            if (!string.IsNullOrWhiteSpace(error))
-                throw new FormatException(error);
+            casted.Add(CastTypedArg(action, i + 1, args[i], spec, state));
         }
+
+        return casted;
     }
 
     public static string Normalize(string value)
@@ -70,7 +61,7 @@ internal static class DslFuzzyMatcher
         return sb.ToString().Trim('_');
     }
 
-    private static string? ValidateTypedArg(
+    private static string CastTypedArg(
         string action,
         int argIndex,
         string rawArg,
@@ -78,69 +69,73 @@ internal static class DslFuzzyMatcher
         GameState state)
     {
         if (string.IsNullOrWhiteSpace(rawArg))
-            return null;
+            return rawArg ?? string.Empty;
 
         string trimmed = rawArg.Trim();
         string normalized = Normalize(trimmed);
-        if (string.IsNullOrWhiteSpace(normalized))
-            return null;
 
-        var kind = spec.Kind;
+        if (spec.Type == DslArgType.Any || spec.Type == DslArgType.None)
+            return trimmed;
 
-        if (kind.HasFlag(DslArgKind.Integer) && int.TryParse(trimmed, out _))
-            return null;
-
-        var candidates = BuildTypedCandidates(action, spec, state);
-        if (candidates.Count == 0)
-            return null;
-
-        if (candidates.Any(c => c.Aliases.Any(alias => string.Equals(alias, normalized, StringComparison.Ordinal))))
-            return null;
-
-        if (TryFindBestMatch(normalized, candidates, spec, out var best) &&
-            best.Score >= MinDidYouMeanScore)
+        if (spec.Type == DslArgType.Integer)
         {
-            LogGoValidationFailureDiagnostics(
-                action,
-                argIndex,
-                trimmed,
-                normalized,
-                state,
-                candidates,
-                best.Canonical,
-                best.Score);
-            return $"Command '{action}' argument {argIndex} value '{trimmed}' is not recognized. Did you mean '{best.Canonical}'?";
+            if (!int.TryParse(trimmed, out var n))
+                throw new FormatException($"Command '{action}' argument {argIndex} value '{trimmed}' is not a valid integer.");
+            return n.ToString();
         }
 
-        LogGoValidationFailureDiagnostics(
-            action,
-            argIndex,
-            trimmed,
-            normalized,
-            state,
-            candidates,
-            bestCanonical: null,
-            bestScore: null);
-        return $"Command '{action}' argument {argIndex} value '{trimmed}' is not recognized.";
+        var candidates = BuildCandidates(spec, state);
+        if (candidates.Count == 0)
+            return trimmed;
+
+        var exact = candidates.FirstOrDefault(c => c.Aliases.Any(a => string.Equals(a, normalized, StringComparison.Ordinal)));
+        if (exact != null)
+            return exact.Canonical;
+
+        if (TryFindBestMatch(normalized, candidates, out var bestCanonical, out var bestScore) &&
+            bestScore >= MinDidYouMeanScore)
+        {
+            throw new FormatException(
+                $"Command '{action}' argument {argIndex} value '{trimmed}' is not recognized as {DescribeType(spec.Type)}. Did you mean '{bestCanonical}'?");
+        }
+
+        throw new FormatException(
+            $"Command '{action}' argument {argIndex} value '{trimmed}' is not recognized as {DescribeType(spec.Type)}.");
     }
 
-    private static IReadOnlyList<Candidate> BuildTypedCandidates(
-        string action,
+    private static string DescribeType(DslArgType type) => type switch
+    {
+        DslArgType.ItemId => "item id",
+        DslArgType.SystemId => "system id",
+        DslArgType.PoiId => "POI id",
+        DslArgType.GoTarget => "go target",
+        DslArgType.ShipId => "ship id",
+        DslArgType.ListingId => "listing id",
+        DslArgType.MissionId => "mission id",
+        DslArgType.ModuleId => "module id",
+        DslArgType.RecipeId => "recipe id",
+        DslArgType.Enum => "enum value",
+        _ => "value"
+    };
+
+    private static IReadOnlyList<Candidate> BuildCandidates(
         DslArgumentSpec spec,
         GameState state)
     {
-        var candidates = new List<Candidate>();
-
-        if (spec.Kind.HasFlag(DslArgKind.Item))
-            candidates.AddRange(BuildItemCandidates(state));
-
-        if (spec.Kind.HasFlag(DslArgKind.Enum))
-            candidates.AddRange(BuildEnumCandidates(spec));
-
-        if (spec.Kind.HasFlag(DslArgKind.System))
-            candidates.AddRange(BuildSystemCandidates(action, state));
-
-        return candidates;
+        return spec.Type switch
+        {
+            DslArgType.ItemId => BuildItemCandidates(state),
+            DslArgType.SystemId => BuildSystemCandidates(state),
+            DslArgType.PoiId => BuildPoiCandidates(state),
+            DslArgType.GoTarget => BuildGoTargetCandidates(state),
+            DslArgType.ShipId => BuildShipCandidates(state),
+            DslArgType.ListingId => BuildListingCandidates(state),
+            DslArgType.MissionId => BuildMissionCandidates(state),
+            DslArgType.ModuleId => BuildModuleCandidates(state),
+            DslArgType.RecipeId => BuildRecipeCandidates(state),
+            DslArgType.Enum => BuildEnumCandidates(spec, state),
+            _ => Array.Empty<Candidate>()
+        };
     }
 
     private static IReadOnlyList<Candidate> BuildItemCandidates(GameState state)
@@ -162,48 +157,153 @@ internal static class DslFuzzyMatcher
         foreach (var itemId in state.StorageItems.Keys)
             AddAlias(map, itemId, itemId);
 
-        return ToCandidates(map, "item");
+        return ToCandidates(map);
     }
 
-    private static IReadOnlyList<Candidate> BuildEnumCandidates(DslArgumentSpec spec)
+    private static IReadOnlyList<Candidate> BuildSystemCandidates(GameState state)
+    {
+        var map = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        AddAlias(map, state.System, state.System);
+
+        foreach (var system in state.Systems)
+            AddAlias(map, system, system);
+
+        AddMapCandidates(LoadMapCache(), map, poiMap: null);
+        AddMapCandidates(state.Galaxy?.Map, map, poiMap: null);
+
+        return ToCandidates(map);
+    }
+
+    private static IReadOnlyList<Candidate> BuildPoiCandidates(GameState state)
+    {
+        var map = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+
+        AddAlias(map, state.CurrentPOI?.Id, state.CurrentPOI?.Id);
+        AddAlias(map, state.CurrentPOI?.Id, state.CurrentPOI?.Name);
+
+        foreach (var poi in state.POIs)
+        {
+            AddAlias(map, poi.Id, poi.Id);
+            AddAlias(map, poi.Id, poi.Name);
+        }
+
+        AddMapCandidates(LoadMapCache(), systemMap: null, map);
+        AddMapCandidates(state.Galaxy?.Map, systemMap: null, map);
+
+        return ToCandidates(map);
+    }
+
+    private static IReadOnlyList<Candidate> BuildGoTargetCandidates(GameState state)
+    {
+        var systems = BuildSystemCandidates(state).ToDictionary(c => c.Canonical, c => c.Aliases.ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
+        var pois = BuildPoiCandidates(state);
+
+        foreach (var poi in pois)
+        {
+            if (!systems.TryGetValue(poi.Canonical, out var aliases))
+            {
+                systems[poi.Canonical] = poi.Aliases.ToHashSet(StringComparer.Ordinal);
+                continue;
+            }
+
+            foreach (var alias in poi.Aliases)
+                aliases.Add(alias);
+        }
+
+        return systems
+            .Select(kvp => new Candidate(kvp.Key, kvp.Value.ToList()))
+            .ToList();
+    }
+
+    private static IReadOnlyList<Candidate> BuildShipCandidates(GameState state)
+    {
+        var map = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+
+        foreach (var ship in state.OwnedShips ?? Array.Empty<OwnedShipInfo>())
+            AddAlias(map, ship?.ShipId, ship?.ShipId);
+
+        return ToCandidates(map);
+    }
+
+    private static IReadOnlyList<Candidate> BuildListingCandidates(GameState state)
+    {
+        var map = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var listing in state.ShipyardListings ?? Array.Empty<ShipyardListingEntry>())
+            AddAlias(map, listing?.ListingId, listing?.ListingId);
+        return ToCandidates(map);
+    }
+
+    private static IReadOnlyList<Candidate> BuildMissionCandidates(GameState state)
+    {
+        var map = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+
+        foreach (var mission in state.ActiveMissions ?? Array.Empty<MissionInfo>())
+        {
+            AddAlias(map, mission?.Id, mission?.Id);
+            AddAlias(map, mission?.MissionId, mission?.MissionId);
+            AddAlias(map, mission?.TemplateId, mission?.TemplateId);
+        }
+
+        foreach (var mission in state.AvailableMissions ?? Array.Empty<MissionInfo>())
+        {
+            AddAlias(map, mission?.Id, mission?.Id);
+            AddAlias(map, mission?.MissionId, mission?.MissionId);
+            AddAlias(map, mission?.TemplateId, mission?.TemplateId);
+        }
+
+        return ToCandidates(map);
+    }
+
+    private static IReadOnlyList<Candidate> BuildModuleCandidates(GameState state)
+    {
+        var map = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var moduleId in state.Ship.InstalledModules ?? Array.Empty<string>())
+            AddAlias(map, moduleId, moduleId);
+        return ToCandidates(map);
+    }
+
+    private static IReadOnlyList<Candidate> BuildRecipeCandidates(GameState state)
+    {
+        var map = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var recipe in state.AvailableRecipes ?? Array.Empty<CatalogueEntry>())
+        {
+            AddAlias(map, recipe?.Id, recipe?.Id);
+            AddAlias(map, recipe?.Id, recipe?.Name);
+        }
+
+        return ToCandidates(map);
+    }
+
+    private static IReadOnlyList<Candidate> BuildEnumCandidates(DslArgumentSpec spec, GameState state)
     {
         var map = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         foreach (var value in spec.EnumValues ?? Array.Empty<string>())
             AddAlias(map, value, value);
-        return ToCandidates(map, "enum");
-    }
 
-    private static IReadOnlyList<Candidate> BuildSystemCandidates(string action, GameState state)
-    {
-        var systemMap = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        var poiMap = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-
-        AddAlias(systemMap, state.System, state.System);
-        foreach (var system in state.Systems)
-            AddAlias(systemMap, system, system);
-
-        // `go` accepts POI IDs in addition to system IDs.
-        if (string.Equals(action, "go", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(spec.EnumType, "ship_class", StringComparison.OrdinalIgnoreCase))
         {
-            AddAlias(poiMap, state.CurrentPOI?.Id, state.CurrentPOI?.Id);
-            foreach (var poi in state.POIs)
-                AddAlias(poiMap, poi.Id, poi.Id);
+            foreach (var ship in state.ShipCatalogue?.Ships ?? Array.Empty<CatalogueEntry>())
+            {
+                AddAlias(map, ship?.ClassId, ship?.ClassId);
+                AddAlias(map, ship?.ClassId, ship?.Id);
+                AddAlias(map, ship?.ClassId, ship?.Name);
+            }
 
-            // Merge both in-memory and persisted map snapshots; runtime map can be partial.
-            AddMapCandidates(state.Galaxy?.Map, systemMap, poiMap);
-            AddMapCandidates(LoadMapCache(), systemMap, poiMap);
+            foreach (var ship in state.Galaxy?.Catalog?.ShipsById?.Values ?? Enumerable.Empty<ShipCatalogueEntry>())
+            {
+                AddAlias(map, ship?.ClassId, ship?.ClassId);
+                AddAlias(map, ship?.ClassId, ship?.Id);
+                AddAlias(map, ship?.ClassId, ship?.Name);
+            }
         }
 
-        var candidates = new List<Candidate>();
-        candidates.AddRange(ToCandidates(systemMap, "system"));
-        candidates.AddRange(ToCandidates(poiMap, "poi"));
-        return candidates;
+        return ToCandidates(map);
     }
 
     private static void AddMapCandidates(
         GalaxyMapSnapshot? map,
-        Dictionary<string, HashSet<string>> systemMap,
-        Dictionary<string, HashSet<string>> poiMap)
+        Dictionary<string, HashSet<string>>? systemMap,
+        Dictionary<string, HashSet<string>>? poiMap)
     {
         if (map == null)
             return;
@@ -222,20 +322,21 @@ internal static class DslFuzzyMatcher
         }
     }
 
-    private static IReadOnlyList<Candidate> ToCandidates(
-        Dictionary<string, HashSet<string>> aliasesByCanonical,
-        string argType)
+    private static IReadOnlyList<Candidate> ToCandidates(Dictionary<string, HashSet<string>> aliasesByCanonical)
     {
         return aliasesByCanonical
-            .Select(kvp => new Candidate(kvp.Key, kvp.Value.ToList(), argType))
+            .Select(kvp => new Candidate(kvp.Key, kvp.Value.ToList()))
             .ToList();
     }
 
     private static void AddAlias(
-        Dictionary<string, HashSet<string>> map,
+        Dictionary<string, HashSet<string>>? map,
         string? canonicalRaw,
         string? aliasRaw)
     {
+        if (map == null)
+            return;
+
         var canonical = Normalize(canonicalRaw ?? string.Empty);
         if (string.IsNullOrWhiteSpace(canonical))
             return;
@@ -257,12 +358,11 @@ internal static class DslFuzzyMatcher
     private static bool TryFindBestMatch(
         string query,
         IReadOnlyList<Candidate> candidates,
-        DslArgumentSpec spec,
-        out MatchResult match)
+        out string bestCanonical,
+        out double bestScore)
     {
-        string bestCanonical = string.Empty;
-        string bestArgType = string.Empty;
-        double bestScore = -1d;
+        bestCanonical = string.Empty;
+        bestScore = -1d;
         int bestDistance = int.MaxValue;
 
         foreach (var candidate in candidates)
@@ -283,57 +383,16 @@ internal static class DslFuzzyMatcher
                 }
             }
 
-            candidateScore = ApplyTypeWeight(spec, candidate.ArgType, candidateScore);
-
             if (candidateScore > bestScore ||
                 (Math.Abs(candidateScore - bestScore) < 0.0001d && candidateDistance < bestDistance))
             {
                 bestScore = candidateScore;
                 bestCanonical = candidate.Canonical;
-                bestArgType = candidate.ArgType;
                 bestDistance = candidateDistance;
             }
         }
 
-        if (string.IsNullOrWhiteSpace(bestCanonical))
-        {
-            match = new MatchResult("", -1d, "");
-            return false;
-        }
-
-        match = new MatchResult(bestCanonical, bestScore, bestArgType);
-        return true;
-    }
-
-    private static double ApplyTypeWeight(
-        DslArgumentSpec spec,
-        string argType,
-        double baseScore)
-    {
-        double weight = GetArgTypeWeight(spec, argType);
-        return baseScore * weight;
-    }
-
-    private static double GetArgTypeWeight(DslArgumentSpec spec, string argType)
-    {
-        if (spec.ArgTypeWeights == null ||
-            spec.ArgTypeWeights.Count == 0 ||
-            string.IsNullOrWhiteSpace(argType))
-        {
-            return 1d;
-        }
-
-        foreach (var (key, weight) in spec.ArgTypeWeights)
-        {
-            if (!string.Equals(key, argType, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            return weight > 0d
-                ? weight
-                : 1d;
-        }
-
-        return 1d;
+        return !string.IsNullOrWhiteSpace(bestCanonical);
     }
 
     private static double ComputeScore(string query, string candidateAlias)
@@ -346,92 +405,5 @@ internal static class DslFuzzyMatcher
         return GalaxyMapSnapshotFile.LoadWithKnownPois(
             AppPaths.GalaxyMapFile,
             AppPaths.GalaxyKnownPoisFile);
-    }
-
-    private static void LogGoValidationFailureDiagnostics(
-        string action,
-        int argIndex,
-        string rawArg,
-        string normalizedArg,
-        GameState state,
-        IReadOnlyList<Candidate> candidates,
-        string? bestCanonical,
-        double? bestScore)
-    {
-        if (!string.Equals(action, "go", StringComparison.OrdinalIgnoreCase))
-            return;
-
-        try
-        {
-            var stateMap = state.Galaxy?.Map;
-            var diskMap = LoadMapCache();
-
-            bool inStateCurrent = string.Equals(Normalize(state.System), normalizedArg, StringComparison.Ordinal);
-            bool inStateNeighbors = state.Systems.Any(s => string.Equals(Normalize(s), normalizedArg, StringComparison.Ordinal));
-            bool inStateLivePois = state.POIs.Any(p => string.Equals(Normalize(p.Id), normalizedArg, StringComparison.Ordinal));
-            bool inStateMapSystems = (stateMap?.Systems ?? new List<GalaxySystemInfo>())
-                .Any(s => string.Equals(Normalize(s.Id), normalizedArg, StringComparison.Ordinal));
-            bool inStateMapPois = (stateMap?.KnownPois ?? new List<GalaxyKnownPoiInfo>())
-                .Any(p => string.Equals(Normalize(p.Id), normalizedArg, StringComparison.Ordinal) ||
-                          string.Equals(Normalize(p.Name), normalizedArg, StringComparison.Ordinal));
-            bool inDiskMapSystems = diskMap.Systems
-                .Any(s => string.Equals(Normalize(s.Id), normalizedArg, StringComparison.Ordinal));
-            bool inDiskMapPois = diskMap.KnownPois
-                .Any(p => string.Equals(Normalize(p.Id), normalizedArg, StringComparison.Ordinal) ||
-                          string.Equals(Normalize(p.Name), normalizedArg, StringComparison.Ordinal));
-            bool inCandidateAliases = candidates.Any(c =>
-                c.Aliases.Any(alias => string.Equals(alias, normalizedArg, StringComparison.Ordinal)));
-
-            var sb = new StringBuilder();
-            sb.Append('[').Append(DateTime.UtcNow.ToString("O")).Append("] ");
-            sb.Append("go-arg-validation-fail ");
-            sb.Append("arg_index=").Append(argIndex).Append(' ');
-            sb.Append("raw='").Append(rawArg).Append("' ");
-            sb.Append("normalized='").Append(normalizedArg).Append("' ");
-            sb.Append("candidate_count=").Append(candidates.Count).Append(' ');
-            sb.Append("state.system='").Append(state.System ?? "").Append("' ");
-            sb.Append("state.systems_count=").Append(state.Systems?.Length ?? 0).Append(' ');
-            sb.Append("state.pois_count=").Append(state.POIs?.Length ?? 0).Append(' ');
-            sb.Append("state.map.systems_count=").Append(stateMap?.Systems?.Count ?? 0).Append(' ');
-            sb.Append("state.map.known_pois_count=").Append(stateMap?.KnownPois?.Count ?? 0).Append(' ');
-            sb.Append("disk.map.systems_count=").Append(diskMap.Systems.Count).Append(' ');
-            sb.Append("disk.map.known_pois_count=").Append(diskMap.KnownPois.Count).Append(' ');
-            sb.Append("found_in_state_current=").Append(inStateCurrent).Append(' ');
-            sb.Append("found_in_state_neighbors=").Append(inStateNeighbors).Append(' ');
-            sb.Append("found_in_state_live_pois=").Append(inStateLivePois).Append(' ');
-            sb.Append("found_in_state_map_systems=").Append(inStateMapSystems).Append(' ');
-            sb.Append("found_in_state_map_pois=").Append(inStateMapPois).Append(' ');
-            sb.Append("found_in_disk_map_systems=").Append(inDiskMapSystems).Append(' ');
-            sb.Append("found_in_disk_map_pois=").Append(inDiskMapPois).Append(' ');
-            sb.Append("found_in_candidates=").Append(inCandidateAliases).Append(' ');
-            if (!string.IsNullOrWhiteSpace(bestCanonical) && bestScore.HasValue)
-            {
-                sb.Append("best='").Append(bestCanonical).Append("' ");
-                sb.Append("best_score=").Append(bestScore.Value.ToString("0.000"));
-            }
-
-            sb.AppendLine();
-            LogSink.Instance.Enqueue(new LogEvent(
-                DateTime.UtcNow, LogKind.GoArgValidation, sb.ToString(), AppPaths.GoArgValidationLogFile));
-
-            var dump = new StringBuilder();
-            dump.AppendLine($"[{DateTime.UtcNow:O}] go-arg-validation-mapdump");
-            dump.AppendLine($"raw='{rawArg}' normalized='{normalizedArg}' arg_index={argIndex}");
-            dump.AppendLine("state_galaxy_map:");
-            dump.AppendLine(JsonSerializer.Serialize(
-                stateMap ?? new GalaxyMapSnapshot(),
-                new JsonSerializerOptions { WriteIndented = true }));
-            dump.AppendLine("disk_loaded_map:");
-            dump.AppendLine(JsonSerializer.Serialize(
-                diskMap,
-                new JsonSerializerOptions { WriteIndented = true }));
-            dump.AppendLine();
-            LogSink.Instance.Enqueue(new LogEvent(
-                DateTime.UtcNow, LogKind.GoArgValidationMapDump, dump.ToString(), AppPaths.GoArgValidationMapDumpLogFile));
-        }
-        catch
-        {
-            // Diagnostics must never block command validation.
-        }
     }
 }

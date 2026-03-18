@@ -18,7 +18,7 @@ public class SetHomeCommand : AutoDockSingleTurnCommand
         CommandResult cmd,
         GameState state)
     {
-        if (!string.IsNullOrWhiteSpace(cmd.Arg1) || cmd.Quantity.HasValue)
+        if (cmd.Args.Count > 0)
         {
             return new CommandExecutionResult
             {

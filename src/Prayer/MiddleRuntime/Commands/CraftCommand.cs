@@ -10,8 +10,8 @@ public class CraftCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
     public override DslCommandSyntax GetDslSyntax() => new(
         ArgSpecs: new[]
         {
-            new DslArgumentSpec(DslArgKind.Any, Required: true),
-            new DslArgumentSpec(DslArgKind.Integer, Required: false, DefaultValue: "1"),
+            new DslArgumentSpec(DslArgType.RecipeId, Required: true),
+            new DslArgumentSpec(DslArgType.Integer, Required: false, DefaultValue: "1"),
         });
 
     protected override bool IsAvailableWhenDocked(GameState state)

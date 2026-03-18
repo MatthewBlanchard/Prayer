@@ -112,10 +112,7 @@ public static class DslScriptTransformer
         return new CommandResult
         {
             Action = parts.ElementAtOrDefault(0) ?? "",
-            Arg1 = parts.ElementAtOrDefault(1),
-            Quantity = int.TryParse(parts.ElementAtOrDefault(2), out int n)
-                ? n
-                : null,
+            Args = parts.Skip(1).ToList(),
             SourceLine = null
         };
     }

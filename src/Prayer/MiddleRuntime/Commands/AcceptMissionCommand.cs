@@ -8,7 +8,7 @@ public class AcceptMissionCommand : AutoDockSingleTurnCommand, IDslCommandGramma
     public override string Name => "accept_mission";
     protected override bool RequiresStation => true;
     public override DslCommandSyntax GetDslSyntax() => new(
-        DslArgKind.Any,
+        DslArgType.MissionId,
         ArgRequired: true);
 
     protected override bool IsAvailableWhenDocked(GameState state)

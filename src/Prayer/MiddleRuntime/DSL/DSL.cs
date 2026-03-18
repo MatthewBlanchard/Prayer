@@ -702,10 +702,8 @@ public static class DslParser
         var steps = commands.Select(c =>
         {
             var parts = new List<string> { c.Action };
-            if (!string.IsNullOrWhiteSpace(c.Arg1))
-                parts.Add(c.Arg1!);
-            if (c.Quantity.HasValue)
-                parts.Add(c.Quantity.Value.ToString());
+            if (c.Args.Count > 0)
+                parts.AddRange(c.Args.Where(a => !string.IsNullOrWhiteSpace(a)));
             return string.Join(" ", parts);
         });
         return new DslProgram(steps);
@@ -1118,7 +1116,7 @@ public static class DslParser
         {
             var parts = new List<string> { nameLiteral };
             for (int i = 0; i < count; i++)
-                parts.Add($"ws {ArgKindPattern(specs[i].Kind)}");
+                parts.Add($"ws {ArgKindPattern(specs[i].Type)}");
             patterns.Add(string.Join(" ", parts));
         }
 
@@ -1132,10 +1130,10 @@ public static class DslParser
         if (syntax.ArgSpecs != null && syntax.ArgSpecs.Count > 0)
             return syntax.ArgSpecs;
 
-        if (syntax.ArgKind == DslArgKind.None)
+        if (syntax.ArgType == DslArgType.None)
             return Array.Empty<DslArgumentSpec>();
 
-        return new[] { new DslArgumentSpec(syntax.ArgKind, syntax.ArgRequired, syntax.DefaultArg) };
+        return new[] { new DslArgumentSpec(syntax.ArgType, syntax.ArgRequired, syntax.DefaultArg) };
     }
 
     private static string BuildPromptCommandSignature(string commandName, DslCommandSyntax syntax)
@@ -1196,40 +1194,26 @@ public static class DslParser
 
     private static string DescribePromptArgType(DslArgumentSpec spec)
     {
-        if (spec.Kind.HasFlag(DslArgKind.Integer) &&
-            !spec.Kind.HasFlag(DslArgKind.Any) &&
-            !spec.Kind.HasFlag(DslArgKind.Item) &&
-            !spec.Kind.HasFlag(DslArgKind.System) &&
-            !spec.Kind.HasFlag(DslArgKind.Enum))
+        return spec.Type switch
         {
-            return "int";
-        }
-
-        if (spec.Kind.HasFlag(DslArgKind.Enum))
-        {
-            if (!string.IsNullOrWhiteSpace(spec.EnumType))
-                return $"enum:{spec.EnumType}";
-            if (spec.EnumValues != null && spec.EnumValues.Count > 0)
-                return $"enum[{string.Join("|", spec.EnumValues)}]";
-            return "enum";
-        }
-
-        if (spec.Kind.HasFlag(DslArgKind.System) && spec.Kind.HasFlag(DslArgKind.Item))
-            return "system_or_item";
-        if (spec.Kind.HasFlag(DslArgKind.System) && spec.Kind.HasFlag(DslArgKind.Any))
-            return "system_or_identifier";
-        if (spec.Kind.HasFlag(DslArgKind.Item) && spec.Kind.HasFlag(DslArgKind.Any))
-            return "item_or_identifier";
-        if (spec.Kind.HasFlag(DslArgKind.System))
-            return "system";
-        if (spec.Kind.HasFlag(DslArgKind.Item))
-            return "item";
-        if (spec.Kind.HasFlag(DslArgKind.Any))
-            return "identifier";
-        if (spec.Kind.HasFlag(DslArgKind.Integer))
-            return "int";
-
-        return "value";
+            DslArgType.Integer => "int",
+            DslArgType.ItemId => "item_id",
+            DslArgType.SystemId => "system_id",
+            DslArgType.PoiId => "poi_id",
+            DslArgType.GoTarget => "go_target",
+            DslArgType.ShipId => "ship_id",
+            DslArgType.ListingId => "listing_id",
+            DslArgType.MissionId => "mission_id",
+            DslArgType.ModuleId => "module_id",
+            DslArgType.RecipeId => "recipe_id",
+            DslArgType.Enum => !string.IsNullOrWhiteSpace(spec.EnumType)
+                ? $"enum:{spec.EnumType}"
+                : (spec.EnumValues != null && spec.EnumValues.Count > 0
+                    ? $"enum[{string.Join("|", spec.EnumValues)}]"
+                    : "enum"),
+            DslArgType.Any => "identifier",
+            _ => "value"
+        };
     }
 
     private static string BuildPromptCommandDescription(ICommand command)
@@ -1272,7 +1256,7 @@ public static class DslParser
                 i < overrideNames.Length &&
                 !string.IsNullOrWhiteSpace(overrideNames[i])
                     ? overrideNames[i]
-                    : InferPromptArgBaseName(spec.Kind);
+                    : InferPromptArgBaseName(spec.Type);
 
             used.TryGetValue(baseName, out var seenCount);
             var tokenName = seenCount == 0 ? baseName : $"{baseName}{seenCount + 1}";
@@ -1284,18 +1268,20 @@ public static class DslParser
         return tokens;
     }
 
-    private static string InferPromptArgBaseName(DslArgKind kind)
+    private static string InferPromptArgBaseName(DslArgType kind)
         => kind switch
         {
-            _ when kind.HasFlag(DslArgKind.Integer) &&
-                   !kind.HasFlag(DslArgKind.Item) &&
-                   !kind.HasFlag(DslArgKind.System) &&
-                   !kind.HasFlag(DslArgKind.Enum) &&
-                   !kind.HasFlag(DslArgKind.Any) => "count",
-            _ when kind.HasFlag(DslArgKind.Item) && kind.HasFlag(DslArgKind.System) => "target",
-            _ when kind.HasFlag(DslArgKind.Item) => "item",
-            _ when kind.HasFlag(DslArgKind.System) => "system",
-            _ when kind.HasFlag(DslArgKind.Enum) => "option",
+            DslArgType.Integer => "count",
+            DslArgType.ItemId => "item",
+            DslArgType.SystemId => "system",
+            DslArgType.PoiId => "poi",
+            DslArgType.GoTarget => "target",
+            DslArgType.ShipId => "ship",
+            DslArgType.ListingId => "listing",
+            DslArgType.MissionId => "mission",
+            DslArgType.ModuleId => "mod",
+            DslArgType.RecipeId => "recipe",
+            DslArgType.Enum => "option",
             _ => "value"
         };
 
@@ -1304,21 +1290,9 @@ public static class DslParser
             ? $"{name}()"
             : $"{name}({string.Join(", ", paramNames.Select(p => $"<{p}>"))})";
 
-    private static string ArgKindPattern(DslArgKind kind)
+    private static string ArgKindPattern(DslArgType kind)
     {
-        bool allowsInteger = kind.HasFlag(DslArgKind.Integer);
-        bool allowsIdentifier = kind.HasFlag(DslArgKind.Any) ||
-                                kind.HasFlag(DslArgKind.Item) ||
-                                kind.HasFlag(DslArgKind.System) ||
-                                kind.HasFlag(DslArgKind.Enum);
-
-        if (allowsInteger && allowsIdentifier)
-            return "(integer | identifier)";
-
-        if (allowsInteger)
-            return "integer";
-
-        return "identifier";
+        return kind == DslArgType.Integer ? "integer" : "identifier";
     }
 
     private static string RuleToken(string value)
@@ -1374,11 +1348,8 @@ public static class DslParser
             var specs = ResolveArgSpecs(syntax);
             if (specs.Count != 1)
                 continue;
-            var firstKind = specs[0].Kind;
-            bool allowsIdentifier = firstKind.HasFlag(DslArgKind.Any) ||
-                                    firstKind.HasFlag(DslArgKind.Item) ||
-                                    firstKind.HasFlag(DslArgKind.System) ||
-                                    firstKind.HasFlag(DslArgKind.Enum);
+            var firstKind = specs[0].Type;
+            bool allowsIdentifier = firstKind != DslArgType.Integer && firstKind != DslArgType.None;
             if (!allowsIdentifier)
                 continue;
 
@@ -1496,32 +1467,21 @@ public static class DslParser
             if (!IsArgValueValid(args[i], specs[i]))
             {
                 throw new FormatException(
-                    $"Command '{commandName}' argument {i + 1} must be {specs[i].Kind.ToString().ToLowerInvariant()}.");
+                    $"Command '{commandName}' argument {i + 1} must be {specs[i].Type.ToString().ToLowerInvariant()}.");
             }
         }
     }
 
     private static bool IsArgValueValid(string value, DslArgumentSpec spec)
     {
-        var kind = spec.Kind;
-        if (kind == DslArgKind.None)
+        var type = spec.Type;
+        if (type == DslArgType.None)
             return false;
 
-        if (kind.HasFlag(DslArgKind.Integer) && int.TryParse(value, out _))
+        if (type == DslArgType.Integer && int.TryParse(value, out _))
             return true;
 
-        if (kind.HasFlag(DslArgKind.Enum) && IsValidIdentifier(value))
-            return true;
-
-        if ((kind.HasFlag(DslArgKind.Any) ||
-             kind.HasFlag(DslArgKind.Item) ||
-             kind.HasFlag(DslArgKind.System)) &&
-            IsValidIdentifier(value))
-        {
-            return true;
-        }
-
-        return false;
+        return IsValidIdentifier(value);
     }
 
     private static string ExpandMacroArg(string? arg, GameState? state)

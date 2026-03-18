@@ -73,7 +73,7 @@ The block includes these rule lines exactly:
 Current condition tokens:
 
 - Boolean: `MISSION_COMPLETE(mission_id)`
-- Numeric: `FUEL()`, `CREDITS()`, `CARGO(item_id)`, `STASH(poi_id, item_id)`
+- Numeric: `FUEL()`, `CREDITS()`, `CARGO_PCT()`, `CARGO(item_id)`, `STASH(poi_id, item_id)`
 
 ## Current command surface (catalog)
 

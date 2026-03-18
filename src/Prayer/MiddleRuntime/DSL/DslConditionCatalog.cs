@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 
 public sealed record DslBooleanPredicate(
     string Name,
@@ -22,6 +23,7 @@ public static class DslConditionCatalog
     {
         new("FUEL",    [],           (state, _)    => ResolveFuelPercent(state)),
         new("CREDITS", [],           (state, _)    => state.Credits),
+        new("CARGO_PCT", [],         (state, _)    => ResolveCargoPercent(state)),
         new("CARGO",   ["item_id"],  (state, args) => ResolveItemCount(state.Ship.Cargo, args)),
         new("STASH",   ["poi_id", "item_id"],  (state, args) => ResolveStashCount(state, args)),
     };
@@ -35,16 +37,54 @@ public static class DslConditionCatalog
         foreach (var mission in state.ActiveMissions ?? Array.Empty<MissionInfo>())
         {
             if (mission == null) continue;
-            if (MatchesPrefix(mission.Id, prefix) || MatchesPrefix(mission.MissionId, prefix))
+            if (MatchesMissionPrefix(mission, prefix))
                 return mission.Completed;
         }
-        return false;
+
+        throw new InvalidOperationException(
+            $"MISSION_COMPLETE({prefix}) could not find a matching active mission. " +
+            "Use mission UUID, mission_id/template_id, or underscored title token.");
+    }
+
+    private static bool MatchesMissionPrefix(MissionInfo mission, string prefix)
+    {
+        return MatchesPrefix(mission.Id, prefix) ||
+               MatchesPrefix(mission.MissionId, prefix) ||
+               MatchesPrefix(mission.TemplateId, prefix) ||
+               MatchesPrefix(ToSnakeCaseToken(mission.Title), prefix);
     }
 
     private static bool MatchesPrefix(string? id, string prefix)
     {
         var s = (id ?? string.Empty).Trim();
         return s.Length > 0 && s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ToSnakeCaseToken(string? value)
+    {
+        var input = (value ?? string.Empty).Trim();
+        if (input.Length == 0)
+            return string.Empty;
+
+        var sb = new StringBuilder(input.Length);
+        bool lastWasUnderscore = false;
+        foreach (var ch in input)
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                sb.Append(char.ToLowerInvariant(ch));
+                lastWasUnderscore = false;
+                continue;
+            }
+
+            if (!lastWasUnderscore)
+            {
+                sb.Append('_');
+                lastWasUnderscore = true;
+            }
+        }
+
+        return sb.ToString().Trim('_');
     }
 
     private static int ResolveItemCount(Dictionary<string, ItemStack> dict, IReadOnlyList<string> args)
@@ -73,5 +113,12 @@ public static class DslConditionCatalog
         var maxFuel = state.Ship.MaxFuel;
         if (maxFuel <= 0) return 0;
         return Math.Clamp((state.Ship.Fuel * 100) / maxFuel, 0, 100);
+    }
+
+    private static int ResolveCargoPercent(GameState state)
+    {
+        var cargoCapacity = state.Ship.CargoCapacity;
+        if (cargoCapacity <= 0) return 0;
+        return Math.Clamp((state.Ship.CargoUsed * 100) / cargoCapacity, 0, 100);
     }
 }

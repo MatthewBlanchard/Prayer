@@ -304,7 +304,7 @@ public sealed class AutonomousDriver
             else
             {
                 conversation += $"\n<|start_header_id|>assistant<|end_header_id|>\n{response}<|eot_id|>";
-                conversation += $"\n<|start_header_id|>user<|end_header_id|>\nRespond with state(\"<path>\") or do(\"<instruction>\"). do(...) is action-only (no inspection). Keep instruction 1-2 sentences max.<|eot_id|>";
+                conversation += $"\n<|start_header_id|>user<|end_header_id|>\nRespond with state(\"<path>\") or do(\"<instruction>\"). do(...) is action-only (no inspection) and must focus on one sequence only (no multi-quest or multi-objective plans). Keep instruction 1-2 sentences max.<|eot_id|>";
             }
         }
 
@@ -328,7 +328,7 @@ public sealed class AutonomousDriver
             $"  state(\"market\")    — trade economy and prices (only when docked)\n" +
             $"  state(\"space\")     — location, POIs, connected systems\n" +
             $"  do(\"<instruction>\") — decide your next action (e.g. 'mine iron at current asteroid')\n\n" +
-            $"Rules: call state(...) at most 3 times, then output exactly one do(...). do(...) must contain only an action plan and must never ask for or perform state inspection; use state(...) for all inspection. Instruction must be 1-2 sentences max. Be concise and in-character.\n" +
+            $"Rules: call state(...) at most 3 times, then output exactly one do(...). do(...) must contain only an action plan and must never ask for or perform state inspection; use state(...) for all inspection. do(...) must focus on one sequence only; do not combine multiple quests or objectives in one instruction. Instruction must be 1-2 sentences max. Be concise and in-character.\n" +
             $"<|eot_id|>";
 
         var user =
@@ -363,6 +363,31 @@ public sealed class AutonomousDriver
         int activeMissions = state.ActiveMissions?.Length ?? 0;
         int availableMissions = state.AvailableMissions?.Length ?? 0;
         sb.Append("Missions: ").Append(activeMissions).Append(" active, ").Append(availableMissions).AppendLine(" available");
+        sb.AppendLine("Active mission details:");
+        if (state.ActiveMissions?.Length > 0)
+        {
+            foreach (var mission in state.ActiveMissions.Take(5))
+            {
+                if (mission == null)
+                    continue;
+
+                var missionId = string.IsNullOrWhiteSpace(mission.Id)
+                    ? (string.IsNullOrWhiteSpace(mission.MissionId) ? "(unknown)" : mission.MissionId)
+                    : mission.Id;
+                var objective = FirstNonEmpty(
+                    mission.ObjectivesSummary,
+                    mission.ProgressText,
+                    mission.ProgressSummary,
+                    mission.Description,
+                    "(no objective text)");
+
+                sb.Append("- ").Append(missionId).Append(": ").AppendLine(objective);
+            }
+        }
+        else
+        {
+            sb.AppendLine("- (none)");
+        }
         sb.Append("Last result: ").AppendLine(lastResult);
 
         if (runtime.ExecutionStatusLines?.Count > 0)
@@ -519,6 +544,17 @@ public sealed class AutonomousDriver
         if (!state.Docked && state.Ship?.Fuel < (state.Ship?.MaxFuel / 3))
             return "Find a station to refuel.";
         return "Explore the area and look for opportunities.";
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                return value.Trim();
+        }
+
+        return string.Empty;
     }
 
     // ── Halt detection ────────────────────────────────────────────────────────

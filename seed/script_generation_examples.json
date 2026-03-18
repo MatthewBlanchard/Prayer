@@ -43,5 +43,10 @@
     "Prompt": "mine iron and stash it at nexus prime until 50 are stored there",
     "Script": "until STASH(nexus_prime_station, iron_ore) >= 50 {\n  mine iron_ore;\n  go nexus_prime;\n  stash;\n}",
     "CreatedUtc": "2026-03-11T00:00:00.0000000Z"
+  },
+  {
+    "Prompt": "accept_mission copper_requisition, accept_mission deep_core_prospecting, accept_mission iron_supply_run",
+    "Script": "accept_mission copper_requisition;\naccept_mission deep_core_prospecting;\naccept_mission iron_supply_run;",
+    "CreatedUtc": "2026-03-17T00:00:00.0000000Z"
   }
 ]

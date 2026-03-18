@@ -15,7 +15,8 @@ internal static class DslFuzzyMatcher
         string action,
         IReadOnlyList<string> args,
         IReadOnlyList<DslArgumentSpec> argSpecs,
-        GameState state)
+        GameState state,
+        IReadOnlyList<string>? rawArgs = null)
     {
         var casted = new List<string>(args.Count);
 
@@ -25,7 +26,10 @@ internal static class DslFuzzyMatcher
                 ? argSpecs[i]
                 : new DslArgumentSpec(DslArgType.Any, Required: false);
 
-            casted.Add(CastTypedArg(action, i + 1, args[i], spec, state));
+            string rawSourceArg = rawArgs != null && i < rawArgs.Count
+                ? rawArgs[i]
+                : args[i];
+            casted.Add(CastTypedArg(action, i + 1, args[i], rawSourceArg, spec, state));
         }
 
         return casted;
@@ -65,6 +69,7 @@ internal static class DslFuzzyMatcher
         string action,
         int argIndex,
         string rawArg,
+        string rawSourceArg,
         DslArgumentSpec spec,
         GameState state)
     {
@@ -91,6 +96,11 @@ internal static class DslFuzzyMatcher
         var exact = candidates.FirstOrDefault(c => c.Aliases.Any(a => string.Equals(a, normalized, StringComparison.Ordinal)));
         if (exact != null)
             return exact.Canonical;
+
+        bool cameFromMacro = !string.IsNullOrWhiteSpace(rawSourceArg) &&
+                             rawSourceArg.TrimStart().StartsWith("$", StringComparison.Ordinal);
+        if (spec.Type == DslArgType.GoTarget && cameFromMacro)
+            return trimmed;
 
         if (TryFindBestMatch(normalized, candidates, out var bestCanonical, out var bestScore) &&
             bestScore >= MinDidYouMeanScore)
@@ -337,13 +347,17 @@ internal static class DslFuzzyMatcher
         if (map == null)
             return;
 
-        var canonical = Normalize(canonicalRaw ?? string.Empty);
+        var canonical = (canonicalRaw ?? string.Empty).Trim();
         if (string.IsNullOrWhiteSpace(canonical))
             return;
 
-        var alias = Normalize(aliasRaw ?? string.Empty);
-        if (string.IsNullOrWhiteSpace(alias))
-            alias = canonical;
+        var canonicalNormalized = Normalize(canonical);
+        if (string.IsNullOrWhiteSpace(canonicalNormalized))
+            return;
+
+        var aliasNormalized = Normalize(aliasRaw ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(aliasNormalized))
+            aliasNormalized = canonicalNormalized;
 
         if (!map.TryGetValue(canonical, out var aliases))
         {
@@ -351,8 +365,8 @@ internal static class DslFuzzyMatcher
             map[canonical] = aliases;
         }
 
-        aliases.Add(canonical);
-        aliases.Add(alias);
+        aliases.Add(canonicalNormalized);
+        aliases.Add(aliasNormalized);
     }
 
     private static bool TryFindBestMatch(

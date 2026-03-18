@@ -23,7 +23,7 @@ public class DslCommand
         if (state != null && !string.IsNullOrWhiteSpace(action) && args.Count > 0)
         {
             var specs = DslParser.GetArgSpecsForCommand(action);
-            args = DslFuzzyMatcher.CastArguments(action, args, specs, state).ToList();
+            args = DslFuzzyMatcher.CastArguments(action, args, specs, state, self.Args).ToList();
         }
 
         return new CommandResult

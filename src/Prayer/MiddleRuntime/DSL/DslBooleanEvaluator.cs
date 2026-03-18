@@ -62,8 +62,17 @@ internal static class DslBooleanEvaluator
         {
             if (!BooleanPredicateByName.TryGetValue(call.Name.ToUpperInvariant(), out var predicate))
                 return false;
-            value = predicate.Evaluate(state, call.Args);
-            return true;
+            try
+            {
+                value = predicate.Evaluate(state, call.Args);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                throw new FormatException(
+                    $"Condition evaluation failed for '{RenderCall(call.Name, call.Args)}': {ex.Message}",
+                    ex);
+            }
         }
 
         if (condition is DslComparisonConditionAstNode comparison)

@@ -43,9 +43,9 @@ public static class DslConditionCatalog
                 return mission.Completed;
         }
 
-        throw new InvalidOperationException(
-            $"MISSION_COMPLETE({prefix}) could not find a matching active mission. " +
-            "Use mission UUID, mission_id/template_id, or underscored title token.");
+        // Completed missions are typically removed from ActiveMissions after turn-in.
+        // If we can't find a matching active mission, treat it as complete.
+        return true;
     }
 
     private static bool MatchesMissionPrefix(MissionInfo mission, string prefix)

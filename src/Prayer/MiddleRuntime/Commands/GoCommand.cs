@@ -189,6 +189,25 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
         if (localPoi != null)
             return (true, state.System, target);
 
+        var localPoiFromBaseId = state.POIs.FirstOrDefault(p => string.Equals(p.BaseId, target, StringComparison.Ordinal));
+        if (localPoiFromBaseId != null)
+            return (true, state.System, localPoiFromBaseId.Id);
+
+        if (string.Equals(state.CurrentPOI?.BaseId, target, StringComparison.Ordinal) &&
+            !string.IsNullOrWhiteSpace(state.CurrentPOI?.Id))
+        {
+            return (true, state.System, state.CurrentPOI.Id);
+        }
+
+        foreach (var poiKnowledge in state.Galaxy?.Knowledge?.PoisById?.Values ?? Enumerable.Empty<GalaxyPoiKnowledge>())
+        {
+            if (string.IsNullOrWhiteSpace(poiKnowledge?.Id) || string.IsNullOrWhiteSpace(poiKnowledge?.SystemId))
+                continue;
+
+            if (string.Equals(poiKnowledge.BaseId, target, StringComparison.Ordinal))
+                return (true, poiKnowledge.SystemId, poiKnowledge.Id);
+        }
+
         GalaxyMapSnapshot map = await client.GetMapSnapshotAsync();
         foreach (var systemObj in map.Systems)
         {
@@ -210,6 +229,15 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
                 if (string.Equals(poiId, target, StringComparison.Ordinal))
                     return (true, systemId, poiId);
             }
+        }
+
+        foreach (var knownPoi in map.KnownPois)
+        {
+            if (string.IsNullOrWhiteSpace(knownPoi?.Id) || string.IsNullOrWhiteSpace(knownPoi.SystemId))
+                continue;
+
+            if (string.Equals(knownPoi.BaseId, target, StringComparison.Ordinal))
+                return (true, knownPoi.SystemId, knownPoi.Id);
         }
 
         return (false, null, null);

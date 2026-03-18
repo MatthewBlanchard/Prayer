@@ -23,6 +23,7 @@ public partial class GameState
     public PlayerShip Ship { get; set; } = new();
     public int Credits { get; set; }
     public bool Docked { get; set; }
+    public string HomeBase { get; set; } = "";
     public ShipyardShowroomEntry[] ShipyardShowroom { get; set; } = Array.Empty<ShipyardShowroomEntry>();
     public ShipyardListingEntry[] ShipyardListings { get; set; } = Array.Empty<ShipyardListingEntry>();
     public Catalogue ShipCatalogue { get; set; } = new();

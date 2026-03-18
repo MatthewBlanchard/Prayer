@@ -45,6 +45,14 @@ public sealed record DslUntilAstNode(DslConditionAstNode Condition, IReadOnlyLis
 public static class DslParser
 {
     private const string HaltKeyword = "halt";
+    private readonly record struct DslMacroDefinition(
+        string Description,
+        Func<GameState, string?> Resolver);
+
+    private static readonly GameState PromptHelpState = new()
+    {
+        CurrentPOI = new POIInfo()
+    };
 
     private static readonly IReadOnlyDictionary<string, string[]> PromptArgNameOverrides =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
@@ -76,6 +84,16 @@ public static class DslParser
         BuildCommandNameSet(Commands);
     private static readonly IReadOnlyDictionary<string, DslCommandSyntax> CommandSyntaxByName =
         BuildCommandSyntaxByName(Commands);
+    private static readonly IReadOnlyDictionary<string, DslMacroDefinition> Macros =
+        new Dictionary<string, DslMacroDefinition>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["home"] = new(
+                "your home base id",
+                state => state.HomeBase),
+            ["here"] = new(
+                "your current system id",
+                state => state.System),
+        };
     private static readonly TextParser<Unit> Ws =
         Character.WhiteSpace.Many().Value(Unit.Value);
 
@@ -96,7 +114,7 @@ public static class DslParser
     // Command args must support ids like mission UUID fragments that can start
     // with digits and then include letters/hyphens (e.g. "6a1b-...").
     private static readonly TextParser<string> ArgIdentifier =
-        Span.Regex("[A-Za-z0-9_][A-Za-z0-9_-]*").Select(x => x.ToStringValue());
+        Span.Regex("\\$?[A-Za-z0-9_][A-Za-z0-9_-]*").Select(x => x.ToStringValue());
 
     private static readonly TextParser<string> ArgumentToken =
         ArgIdentifier.Try().Or(Integer);
@@ -697,7 +715,7 @@ public static class DslParser
 
         sb.AppendLine("root ::= ws script ws");
         sb.AppendLine("ws ::= [ \\t\\n\\r]*");
-        sb.AppendLine("identifier ::= [A-Za-z_][A-Za-z0-9_-]*");
+        sb.AppendLine("identifier ::= [\\$]?[A-Za-z_][A-Za-z0-9_-]*");
         sb.AppendLine("integer ::= [0-9]+");
         sb.AppendLine();
         BuildGrammar(sb);
@@ -715,19 +733,19 @@ public static class DslParser
             .Select(c => (Command: c, Syntax: CommandSyntaxByName[c.Name]))
             .ToList();
 
-        var commandSignatures = entries
-            .Select(e => BuildPromptCommandSignature(e.Command.Name, e.Syntax))
+        var commandReferences = entries
+            .Select(e => BuildPromptCommandReferenceLine(e.Command, e.Syntax))
             .ToList();
-        commandSignatures.Add("halt;");
+        commandReferences.Add("halt; (args: none) -> stop script execution");
 
         var sb = new StringBuilder();
         sb.AppendLine("DSL command reference (terminate commands with ;):");
 
-        if (commandSignatures.Count > 0)
+        if (commandReferences.Count > 0)
         {
             sb.AppendLine("Commands:");
-            foreach (var signature in commandSignatures)
-                sb.AppendLine($"- {signature}");
+            foreach (var commandReference in commandReferences)
+                sb.AppendLine($"- {commandReference}");
         }
 
         sb.AppendLine();
@@ -741,6 +759,13 @@ public static class DslParser
         sb.AppendLine("- Blocks are supported via: repeat { ... }");
         sb.AppendLine("- Conditional blocks are supported via: if <CONDITION> { ... }");
         sb.AppendLine("- Until blocks are supported via: until <CONDITION> { ... }");
+        if (Macros.Count > 0)
+        {
+            var macroReferences = Macros
+                .OrderBy(m => m.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(m => $"`${m.Key}` expands to {m.Value.Description}");
+            sb.AppendLine($"- Text macros: {string.Join(", ", macroReferences)}.");
+        }
         var booleanSigs = DslConditionCatalog.BooleanPredicates
             .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
             .Select(p => FormatPredicateSig(p.Name, p.ParamNames))
@@ -779,10 +804,13 @@ public static class DslParser
 
     internal static string NormalizeCommandStep(
         string commandName,
-        IReadOnlyList<string>? commandArgs)
+        IReadOnlyList<string>? commandArgs,
+        GameState? state = null)
     {
         var token = commandName.ToLowerInvariant();
-        var args = (commandArgs ?? Array.Empty<string>()).ToList();
+        var args = (commandArgs ?? Array.Empty<string>())
+            .Select(arg => ExpandMacroArg(arg, state))
+            .ToList();
         string normalizedName;
         DslCommandSyntax syntax;
 
@@ -970,6 +998,112 @@ public static class DslParser
         return $"{commandName} {string.Join(" ", argTokens)};";
     }
 
+    private static string BuildPromptCommandReferenceLine(ICommand command, DslCommandSyntax syntax)
+    {
+        var signature = BuildPromptCommandSignature(command.Name, syntax);
+        var specs = ResolveArgSpecs(syntax);
+        var argsSummary = BuildPromptArgsSummary(command.Name, specs);
+        var description = BuildPromptCommandDescription(command);
+
+        if (string.IsNullOrWhiteSpace(argsSummary))
+        {
+            return string.IsNullOrWhiteSpace(description)
+                ? signature
+                : $"{signature} -> {description}";
+        }
+
+        return string.IsNullOrWhiteSpace(description)
+            ? $"{signature} (args: {argsSummary})"
+            : $"{signature} (args: {argsSummary}) -> {description}";
+    }
+
+    private static string BuildPromptArgsSummary(
+        string commandName,
+        IReadOnlyList<DslArgumentSpec> specs)
+    {
+        if (specs.Count == 0)
+            return "none";
+
+        var tokens = BuildPromptArgTokens(commandName, specs);
+        var details = new List<string>(specs.Count);
+
+        for (int i = 0; i < specs.Count; i++)
+        {
+            var token = tokens[i].Trim();
+            var trimmed = token.Trim('<', '>');
+            bool optional = trimmed.EndsWith("?", StringComparison.Ordinal);
+            var argName = optional
+                ? trimmed[..^1]
+                : trimmed;
+            var typeLabel = DescribePromptArgType(specs[i]);
+            var requiredLabel = optional ? "optional" : "required";
+            details.Add($"{argName}:{typeLabel} ({requiredLabel})");
+        }
+
+        return string.Join(", ", details);
+    }
+
+    private static string DescribePromptArgType(DslArgumentSpec spec)
+    {
+        if (spec.Kind.HasFlag(DslArgKind.Integer) &&
+            !spec.Kind.HasFlag(DslArgKind.Any) &&
+            !spec.Kind.HasFlag(DslArgKind.Item) &&
+            !spec.Kind.HasFlag(DslArgKind.System) &&
+            !spec.Kind.HasFlag(DslArgKind.Enum))
+        {
+            return "int";
+        }
+
+        if (spec.Kind.HasFlag(DslArgKind.Enum))
+        {
+            if (!string.IsNullOrWhiteSpace(spec.EnumType))
+                return $"enum:{spec.EnumType}";
+            if (spec.EnumValues != null && spec.EnumValues.Count > 0)
+                return $"enum[{string.Join("|", spec.EnumValues)}]";
+            return "enum";
+        }
+
+        if (spec.Kind.HasFlag(DslArgKind.System) && spec.Kind.HasFlag(DslArgKind.Item))
+            return "system_or_item";
+        if (spec.Kind.HasFlag(DslArgKind.System) && spec.Kind.HasFlag(DslArgKind.Any))
+            return "system_or_identifier";
+        if (spec.Kind.HasFlag(DslArgKind.Item) && spec.Kind.HasFlag(DslArgKind.Any))
+            return "item_or_identifier";
+        if (spec.Kind.HasFlag(DslArgKind.System))
+            return "system";
+        if (spec.Kind.HasFlag(DslArgKind.Item))
+            return "item";
+        if (spec.Kind.HasFlag(DslArgKind.Any))
+            return "identifier";
+        if (spec.Kind.HasFlag(DslArgKind.Integer))
+            return "int";
+
+        return "value";
+    }
+
+    private static string BuildPromptCommandDescription(ICommand command)
+    {
+        var help = (command.BuildHelp(PromptHelpState) ?? "").Trim();
+        if (help.Length == 0)
+            return "";
+
+        if (help.StartsWith("-", StringComparison.Ordinal))
+            help = help[1..].TrimStart();
+
+        int arrowIndex = help.IndexOf("→", StringComparison.Ordinal);
+        if (arrowIndex < 0)
+            arrowIndex = help.IndexOf("->", StringComparison.Ordinal);
+
+        if (arrowIndex >= 0)
+        {
+            var description = help[(arrowIndex + (help[arrowIndex] == '→' ? 1 : 2))..].Trim();
+            if (description.Length > 0)
+                return description;
+        }
+
+        return help;
+    }
+
     private static IReadOnlyList<string> BuildPromptArgTokens(
         string commandName,
         IReadOnlyList<DslArgumentSpec> specs)
@@ -1047,10 +1181,18 @@ public static class DslParser
         if (string.IsNullOrWhiteSpace(value))
             return false;
 
-        if (!(char.IsLetterOrDigit(value[0]) || value[0] == '_'))
+        int start = 0;
+        if (value[0] == '$')
+        {
+            if (value.Length == 1)
+                return false;
+            start = 1;
+        }
+
+        if (!(char.IsLetterOrDigit(value[start]) || value[start] == '_'))
             return false;
 
-        for (int i = 1; i < value.Length; i++)
+        for (int i = start + 1; i < value.Length; i++)
         {
             var ch = value[i];
             if (!(char.IsLetterOrDigit(ch) || ch == '_' || ch == '-'))
@@ -1229,6 +1371,30 @@ public static class DslParser
         }
 
         return false;
+    }
+
+    private static string ExpandMacroArg(string? arg, GameState? state)
+    {
+        if (string.IsNullOrWhiteSpace(arg))
+            return arg ?? string.Empty;
+
+        var trimmed = arg.Trim();
+        if (!trimmed.StartsWith("$", StringComparison.Ordinal))
+            return trimmed;
+
+        var macroName = trimmed[1..];
+        if (!Macros.TryGetValue(macroName, out var macro))
+            throw new FormatException($"Unknown macro '{trimmed}'.");
+
+        // Parse-only contexts can keep unresolved macros verbatim.
+        if (state == null)
+            return trimmed;
+
+        var resolved = macro.Resolver(state)?.Trim();
+        if (string.IsNullOrWhiteSpace(resolved))
+            throw new FormatException($"Macro '{trimmed}' is not available in current state.");
+
+        return resolved;
     }
 
 }

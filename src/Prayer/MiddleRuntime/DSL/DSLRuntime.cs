@@ -15,7 +15,7 @@ public class DslCommand
 
     public virtual CommandResult ToValidCommand(GameState? state, DslCommand self)
     {
-        var normalized = DslParser.NormalizeCommandStep(self.Name, self.Args);
+        var normalized = DslParser.NormalizeCommandStep(self.Name, self.Args, state);
         var parts = normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var action = parts.ElementAtOrDefault(0) ?? "";
         var args = parts.Skip(1).ToList();

@@ -366,10 +366,21 @@ public sealed class CommandExecutionEngine
                 next = _requeuedSteps.First!.Value;
                 _requeuedSteps.RemoveFirst();
             }
-            else if (!TryGetNextScriptCommand(state, out next))
+            else
             {
-                Halt("Script complete: waiting for input");
-                return Task.FromResult<CommandResult?>(null);
+                try
+                {
+                    if (!TryGetNextScriptCommand(state, out next))
+                    {
+                        Halt("Script complete: waiting for input");
+                        return Task.FromResult<CommandResult?>(null);
+                    }
+                }
+                catch (InvalidOperationException ex)
+                {
+                    Halt($"Script condition error: {ex.Message}");
+                    return Task.FromResult<CommandResult?>(null);
+                }
             }
 
             if (!IsExecutableAction(next.Action))
@@ -421,7 +432,7 @@ public sealed class CommandExecutionEngine
             switch (node)
             {
                 case DslCommandAstNode commandNode:
-                    result = BuildCommandResult(commandNode);
+                    result = BuildCommandResult(commandNode, state);
                     LogAstWalker(
                         "emit_command",
                         $"Selected command line={result.SourceLine?.ToString() ?? "?"} cmd={FormatCommand(result)} path={frame.Path}/{nodeIndex}.");
@@ -576,13 +587,13 @@ public sealed class CommandExecutionEngine
         return !evaluated;
     }
 
-    private static CommandResult BuildCommandResult(DslCommandAstNode commandNode)
+    private static CommandResult BuildCommandResult(DslCommandAstNode commandNode, GameState state)
     {
         var command = new DslCommand(commandNode.Name, commandNode.Args);
         CommandResult result;
         try
         {
-            result = command.ToValidCommand(state: null, command);
+            result = command.ToValidCommand(state, command);
         }
         catch (FormatException ex) when (commandNode.SourceLine > 0)
         {

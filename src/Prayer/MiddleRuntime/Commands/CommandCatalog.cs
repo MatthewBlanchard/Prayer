@@ -15,6 +15,7 @@ public static class CommandCatalog
         new AcceptMissionCommand(),
         new AbandonMissionCommand(),
         new DockCommand(),
+        new SetHomeCommand(),
         new RepairCommand(),
         new RefuelCommand(),
         new SellCommand(),

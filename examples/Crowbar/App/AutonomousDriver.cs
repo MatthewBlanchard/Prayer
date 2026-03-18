@@ -115,14 +115,21 @@ public sealed class AutonomousDriver
                     continue;
                 }
 
+                bool allowSameTickReplan = HasScriptFailureStatus(state);
                 if (state.CurrentTick.HasValue &&
                     lastPlannedTick.HasValue &&
-                    state.CurrentTick.Value == lastPlannedTick.Value)
+                    state.CurrentTick.Value == lastPlannedTick.Value &&
+                    !allowSameTickReplan)
                 {
                     SetStatus($"Waiting for next tick (current={state.CurrentTick.Value})...");
                     _log($"[{_botLabel}] cycle={cycle} skip_replan_same_tick | tick={state.CurrentTick.Value}");
                     await Task.Delay(PollWaitMs, ct);
                     continue;
+                }
+                if (allowSameTickReplan && state.CurrentTick.HasValue && lastPlannedTick.HasValue &&
+                    state.CurrentTick.Value == lastPlannedTick.Value)
+                {
+                    _log($"[{_botLabel}] cycle={cycle} replan_same_tick_after_failure | tick={state.CurrentTick.Value}");
                 }
 
                 // 3. Run the state/do tool loop.
@@ -133,7 +140,6 @@ public sealed class AutonomousDriver
                 try
                 {
                     prayerInstruction = await RunToolLoopAsync(persona, state, lastResult, cycle, ct);
-                    lastPlannedTick = state.CurrentTick;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -198,6 +204,7 @@ public sealed class AutonomousDriver
                     await _api.SendRuntimeCommandAsync(_prayerSessionId, RuntimeCommandNames.SetScript, script);
                     await _api.SendRuntimeCommandAsync(_prayerSessionId, RuntimeCommandNames.ExecuteScript);
                     lastResult = $"Script executed (cycle {cycle})";
+                    lastPlannedTick = state.CurrentTick;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -276,6 +283,21 @@ public sealed class AutonomousDriver
                 return prayerInstruction.Trim();
             }
 
+            // Check for domission("mission_id_or_title_prefix"), then build a do(...) instruction
+            // from mission objective text + mission_id.
+            var doMissionSelector = ExtractToolCallArgument(response, "domission");
+            if (doMissionSelector != null)
+            {
+                var missionInstruction = BuildDoMissionInstruction(gameState, doMissionSelector);
+                if (!string.IsNullOrWhiteSpace(missionInstruction))
+                {
+                    _generationLog(
+                        $"[{_botLabel}] cycle={cycle} tool_turn={turn} domission_selected selector={doMissionSelector}{Environment.NewLine}" +
+                        $"---INSTRUCTION---{Environment.NewLine}{missionInstruction.Trim()}{Environment.NewLine}---END_INSTRUCTION---");
+                    return missionInstruction.Trim();
+                }
+            }
+
             // Check for state("path") drill-down.
             var statePath = ExtractToolCallArgument(response, "state");
             if (!string.IsNullOrWhiteSpace(statePath) && stateCallsUsed < MaxStateCalls)
@@ -304,7 +326,7 @@ public sealed class AutonomousDriver
             else
             {
                 conversation += $"\n<|start_header_id|>assistant<|end_header_id|>\n{response}<|eot_id|>";
-                conversation += $"\n<|start_header_id|>user<|end_header_id|>\nRespond with state(\"<path>\") or do(\"<instruction>\"). do(...) is action-only (no inspection) and must focus on one sequence only (no multi-quest or multi-objective plans). Keep instruction 1-2 sentences max.<|eot_id|>";
+                conversation += $"\n<|start_header_id|>user<|end_header_id|>\nRespond with state(\"<path>\"), do(\"<instruction>\"), or domission(\"<active_mission_id_or_title_prefix>\"). IMPORTANT: DoMission is only for already accepted active missions. If a mission is only in Available, accept it first before DoMission. do(...) is action-only (no inspection) and must focus on one sequence only (no multi-quest or multi-objective plans). Keep instruction 1-2 sentences max.<|eot_id|>";
             }
         }
 
@@ -327,8 +349,9 @@ public sealed class AutonomousDriver
             $"  state(\"missions\")  — active and available missions\n" +
             $"  state(\"market\")    — trade economy and prices (only when docked)\n" +
             $"  state(\"space\")     — location, POIs, connected systems\n" +
-            $"  do(\"<instruction>\") — decide your next action (e.g. 'mine iron at current asteroid')\n\n" +
-            $"Rules: call state(...) at most 3 times, then output exactly one do(...). do(...) must contain only an action plan and must never ask for or perform state inspection; use state(...) for all inspection. do(...) must focus on one sequence only; do not combine multiple quests or objectives in one instruction. Instruction must be 1-2 sentences max. Be concise and in-character.\n" +
+            $"  do(\"<instruction>\") — decide your next action (e.g. 'mine iron at current asteroid')\n" +
+            $"  DoMission(\"<active_mission_id_or_title_prefix>\") — only for accepted active missions; builds a do-instruction with mission text + mission_id\n\n" +
+            $"Rules: call state(...) at most 3 times, then output exactly one do(...) or DoMission(...). DoMission requires the mission to already be accepted and present in Active missions. If a mission is only in Available missions, first accept it (e.g. via a do-instruction that accepts the mission), then use DoMission on a later turn. do(...) must contain only an action plan and must never ask for or perform state inspection; use state(...) for all inspection. do(...) must focus on one sequence only; do not combine multiple quests or objectives in one instruction. Instruction must be 1-2 sentences max. Be concise and in-character.\n" +
             $"<|eot_id|>";
 
         var user =
@@ -398,8 +421,66 @@ public sealed class AutonomousDriver
         }
 
         sb.AppendLine();
-        sb.AppendLine("Respond with state(\"<path>\") to inspect, or do(\"<instruction>\") to act. Keep instruction 1-2 sentences max.");
+        sb.AppendLine("Respond with state(\"<path>\") to inspect, do(\"<instruction>\") to act, or DoMission(\"<active_mission_id_or_title_prefix>\") to execute an accepted mission objective. Available missions must be accepted before DoMission. Keep instruction 1-2 sentences max.");
         return sb.ToString();
+    }
+
+    private static string? BuildDoMissionInstruction(GameState state, string selector)
+    {
+        var mission = ResolveMissionForDoMission(state, selector);
+        if (mission == null)
+            return null;
+
+        var missionId = FirstNonEmpty(
+            mission.Id,
+            mission.MissionId,
+            mission.TemplateId,
+            selector)?.Trim();
+        if (string.IsNullOrWhiteSpace(missionId))
+            return null;
+
+        var missionText = FirstNonEmpty(
+            mission.ObjectivesSummary,
+            mission.ProgressText,
+            mission.ProgressSummary,
+            mission.Description,
+            mission.Title,
+            "Complete the mission objectives.");
+
+        return $"{missionText.Trim()}\nmission_id={missionId}";
+    }
+
+    private static MissionInfo? ResolveMissionForDoMission(GameState state, string selector)
+    {
+        var key = (selector ?? string.Empty).Trim();
+        var active = state.ActiveMissions ?? Array.Empty<MissionInfo>();
+
+        if (key.Length == 0)
+            return active.FirstOrDefault(m => m != null);
+
+        foreach (var mission in active)
+        {
+            if (mission == null)
+                continue;
+            if (MissionMatchesSelector(mission, key))
+                return mission;
+        }
+
+        return null;
+    }
+
+    private static bool MissionMatchesSelector(MissionInfo mission, string selector)
+    {
+        return StartsWithIgnoreCase(mission.Id, selector) ||
+               StartsWithIgnoreCase(mission.MissionId, selector) ||
+               StartsWithIgnoreCase(mission.TemplateId, selector) ||
+               StartsWithIgnoreCase(mission.Title, selector);
+    }
+
+    private static bool StartsWithIgnoreCase(string? value, string prefix)
+    {
+        var input = (value ?? string.Empty).Trim();
+        return input.Length > 0 && input.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildStateResult(GameState state, string topic)
@@ -611,6 +692,23 @@ public sealed class AutonomousDriver
 
         // Script is running if CurrentScriptLine has a value.
         return state.CurrentScriptLine == null;
+    }
+
+    private static bool HasScriptFailureStatus(AppPrayerRuntimeState state)
+    {
+        var lines = state.ExecutionStatusLines;
+        if (lines == null || lines.Count == 0)
+            return false;
+
+        var last = lines[^1];
+        if (string.IsNullOrWhiteSpace(last))
+            return false;
+
+        var text = last.Trim();
+        return text.Contains("Script step failed", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("Script condition error", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("Script halted", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("timed out after", StringComparison.OrdinalIgnoreCase);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

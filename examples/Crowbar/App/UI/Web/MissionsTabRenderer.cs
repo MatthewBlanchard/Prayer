@@ -50,7 +50,7 @@ internal static class MissionsTabRenderer
                         .AppendLine("</div>");
                 }
                 sb.AppendLine("<div class='mission-actions'>");
-                AppendUsePromptButton(sb, mission.Prompt, mission.MissionId, mission.IssuingPoiId);
+                AppendUsePromptButton(sb, mission.Prompt, mission.MissionId);
                 if (!string.IsNullOrWhiteSpace(mission.IssuingPoiId))
                 {
                     sb.Append("<form class='space-chip-form' hx-post='api/control-input' hx-swap='none' hx-on::after-request='window.executeIfOk(event)'>")
@@ -116,8 +116,7 @@ internal static class MissionsTabRenderer
     private static void AppendUsePromptButton(
         StringBuilder sb,
         string? prompt,
-        string? missionId,
-        string? returnPoiId)
+        string? missionId)
     {
         if (string.IsNullOrWhiteSpace(prompt))
             return;
@@ -127,8 +126,6 @@ internal static class MissionsTabRenderer
             .Append(E(prompt))
             .Append("' data-mission-id='")
             .Append(E(shortMissionId))
-            .Append("' data-return-poi='")
-            .Append(E(returnPoiId ?? string.Empty))
             .AppendLine("'>Use Prompt</button>");
     }
 

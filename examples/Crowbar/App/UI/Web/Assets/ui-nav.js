@@ -1,12 +1,10 @@
 
-  window.useMissionPrompt = function (promptText, missionId, returnPoi) {
+  window.useMissionPrompt = function (promptText, missionId) {
     var lines = [];
     var text = (promptText || '').toString().trim();
     if (text.length > 0) lines.push(text);
     var mid = (missionId || '').toString().trim();
     if (mid.length > 0) lines.push('mission_id=' + mid);
-    var poi = (returnPoi || '').toString().trim();
-    if (poi.length > 0) lines.push('return_poi=' + poi);
     if (lines.length === 0) return;
     var finalPrompt = lines.join('\n');
     var promptInput = document.querySelector("#prompt-form textarea[name='prompt']");
@@ -170,8 +168,7 @@
     if (promptBtn) {
       window.useMissionPrompt(
         promptBtn.getAttribute('data-mission-prompt') || '',
-        promptBtn.getAttribute('data-mission-id') || '',
-        promptBtn.getAttribute('data-return-poi') || '');
+        promptBtn.getAttribute('data-mission-id') || '');
       return;
     }
 

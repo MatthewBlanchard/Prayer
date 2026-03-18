@@ -15,6 +15,11 @@
     refreshEditors();
   };
 
+  window.setScriptItemSymbols = function (itemSymbols) {
+    window._scriptItemRegex = buildNameRegex(itemSymbols || [], false);
+    refreshEditors();
+  };
+
   window.setScriptSymbols = function (nextSymbols) {
     window._scriptSymbolRegex = buildNameRegex(nextSymbols || [], false);
     refreshEditors();
@@ -28,6 +33,7 @@
       .then(function (data) {
         if (!data) return;
         if (Array.isArray(data.commandNames)) setCommandRegex(data.commandNames);
+        if (Array.isArray(data.itemHighlightNames)) window.setScriptItemSymbols(data.itemHighlightNames);
         if (Array.isArray(data.scriptHighlightNames)) window.setScriptSymbols(data.scriptHighlightNames);
         window.setScriptLocationSymbols(data.systemHighlightNames || [], data.poiHighlightNames || []);
         if (data.galaxyMap) window._galaxyMap = data.galaxyMap;
@@ -96,6 +102,10 @@
             if (window._scriptPoiRegex && stream.match(window._scriptPoiRegex, true, true)) {
               state.lineStart = false;
               return 'string-2';
+            }
+            if (window._scriptItemRegex && stream.match(window._scriptItemRegex, true, true)) {
+              state.lineStart = false;
+              return 'string';
             }
             if (window._scriptSymbolRegex && stream.match(window._scriptSymbolRegex, true, true)) {
               state.lineStart = false;

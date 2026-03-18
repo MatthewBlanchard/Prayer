@@ -881,6 +881,9 @@ public sealed partial class HtmxBotWindow : IAppUi
         var highlightNames = LoadScriptHighlightNamesFromCache()
             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToList();
+        var itemHighlightNames = LoadItemHighlightNamesFromCache()
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToList();
         var (systemNames, poiNames) = LoadMapNameHintsFromCache();
         var payload = new Dictionary<string, object?>
         {
@@ -888,6 +891,7 @@ public sealed partial class HtmxBotWindow : IAppUi
                 .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
                 .ToList(),
             ["scriptHighlightNames"] = highlightNames,
+            ["itemHighlightNames"] = itemHighlightNames,
             ["systemHighlightNames"] = systemNames,
             ["poiHighlightNames"] = poiNames.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList()
         };
@@ -935,6 +939,13 @@ public sealed partial class HtmxBotWindow : IAppUi
         return names;
     }
 
+    private static IReadOnlyCollection<string> LoadItemHighlightNamesFromCache()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddCatalogueNamesFromCache(AppPaths.ItemCatalogByIdCacheFile, names);
+        return names;
+    }
+
     private static void AddCatalogueNamesFromCache(string path, HashSet<string> names)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
@@ -962,6 +973,10 @@ public sealed partial class HtmxBotWindow : IAppUi
             {
                 if (entry.Value.ValueKind != JsonValueKind.Object)
                     continue;
+
+                var idTrimmed = entry.Name.Trim();
+                if (idTrimmed.Length > 0)
+                    names.Add(idTrimmed);
 
                 if (!TryGetStringPropertyCaseInsensitive(entry.Value, "name", out var name))
                     continue;

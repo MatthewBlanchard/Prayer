@@ -97,6 +97,8 @@ public static class DslParser
     private static readonly TextParser<Unit> Ws =
         Character.WhiteSpace.Many().Value(Unit.Value);
 
+    public readonly record struct DslCommandPromptDoc(string Name, string Text);
+
     private static readonly TextParser<Unit> Ws1 =
         Character.WhiteSpace.AtLeastOnce().Value(Unit.Value);
 
@@ -725,11 +727,55 @@ public static class DslParser
 
     public static string BuildPromptDslReferenceBlock()
     {
-        var commands = Commands
+        return BuildPromptDslReferenceBlock(
+            userInput: null,
+            exampleScripts: null);
+    }
+
+    public static string BuildPromptDslReferenceBlock(
+        string? userInput,
+        IReadOnlyList<string>? exampleScripts)
+    {
+        var commands = SelectPromptCommands(
+            userInput,
+            exampleScripts,
+            preferredCommandNames: null);
+        return BuildPromptDslReferenceBlockCore(commands);
+    }
+
+    public static string BuildPromptDslReferenceBlock(
+        string? userInput,
+        IReadOnlyList<string>? exampleScripts,
+        IReadOnlyList<string>? preferredCommandNames)
+    {
+        var commands = SelectPromptCommands(
+            userInput,
+            exampleScripts,
+            preferredCommandNames);
+        return BuildPromptDslReferenceBlockCore(commands);
+    }
+
+    public static IReadOnlyList<DslCommandPromptDoc> GetPromptCommandDocs()
+    {
+        return Commands
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(c =>
+            {
+                var help = (c.BuildHelp(PromptHelpState) ?? string.Empty).Trim();
+                return new DslCommandPromptDoc(
+                    c.Name,
+                    $"{c.Name} {help}".Trim());
+            })
+            .ToList();
+    }
+
+    private static string BuildPromptDslReferenceBlockCore(IReadOnlyList<ICommand> commands)
+    {
+        var ordered = commands
             .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var entries = commands
+        var entries = ordered
             .Select(c => (Command: c, Syntax: CommandSyntaxByName[c.Name]))
             .ToList();
 
@@ -781,25 +827,130 @@ public static class DslParser
         sb.AppendLine("- All commands still end with ';' inside repeat blocks.");
         sb.AppendLine("- Do not add a trailing 'halt;' at script end unless user explicitly asks to stop/pause.");
         sb.AppendLine();
-        sb.AppendLine("Examples:");
-        sb.AppendLine("- if MISSION_COMPLETE(012345) {");
-        sb.AppendLine("    halt;");
-        sb.AppendLine("  }");
-        sb.AppendLine("- if FUEL() > 5 {");
-        sb.AppendLine("    go node_alpha;");
-        sb.AppendLine("  }");
-        sb.AppendLine("- until CARGO(iron_ore) >= 10 {");
-        sb.AppendLine("    mine iron_ore;");
-        sb.AppendLine("  }");
-        sb.AppendLine("- until STASH(nexus_prime_station, iron_ore) >= 50 {");
-        sb.AppendLine("    mine iron_ore;");
-        sb.AppendLine("    go nexus_prime;");
-        sb.AppendLine("    stash iron_ore;");
-        sb.AppendLine("  }");
-        sb.AppendLine("- explore;");
-        sb.AppendLine();
 
         return sb.ToString();
+    }
+
+    private static IReadOnlyList<ICommand> SelectPromptCommands(
+        string? userInput,
+        IReadOnlyList<string>? exampleScripts,
+        IReadOnlyList<string>? preferredCommandNames)
+    {
+        var selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var name in preferredCommandNames ?? Array.Empty<string>())
+        {
+            if (CommandNameSet.Contains(name))
+                selected.Add(name);
+        }
+
+        foreach (var name in ExtractCommandsFromExampleScripts(exampleScripts))
+            selected.Add(name);
+
+        foreach (var name in SelectCommandsByPromptSimilarity(userInput))
+            selected.Add(name);
+
+        if (selected.Count == 0)
+        {
+            return Commands
+                .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+                .Take(10)
+                .ToList();
+        }
+
+        return Commands
+            .Where(c => selected.Contains(c.Name))
+            .ToList();
+    }
+
+    private static IReadOnlyList<string> ExtractCommandsFromExampleScripts(
+        IReadOnlyList<string>? exampleScripts)
+    {
+        if (exampleScripts == null || exampleScripts.Count == 0)
+            return Array.Empty<string>();
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var script in exampleScripts)
+        {
+            if (string.IsNullOrWhiteSpace(script))
+                continue;
+
+            try
+            {
+                var tree = ParseTree(script);
+                CollectCommandNames(tree.Statements, names);
+            }
+            catch
+            {
+                // Best-effort extraction; invalid examples should not break prompt building.
+            }
+        }
+
+        return names.ToList();
+    }
+
+    private static void CollectCommandNames(
+        IReadOnlyList<DslAstNode> nodes,
+        HashSet<string> names)
+    {
+        foreach (var node in nodes ?? Array.Empty<DslAstNode>())
+        {
+            switch (node)
+            {
+                case DslCommandAstNode commandNode:
+                {
+                    var normalized = (commandNode.Name ?? string.Empty).Trim().ToLowerInvariant();
+                    if (CommandNameSet.Contains(normalized))
+                        names.Add(normalized);
+                    break;
+                }
+                case DslRepeatAstNode repeatNode:
+                    CollectCommandNames(repeatNode.Body ?? Array.Empty<DslAstNode>(), names);
+                    break;
+                case DslIfAstNode ifNode:
+                    CollectCommandNames(ifNode.Body ?? Array.Empty<DslAstNode>(), names);
+                    break;
+                case DslUntilAstNode untilNode:
+                    CollectCommandNames(untilNode.Body ?? Array.Empty<DslAstNode>(), names);
+                    break;
+            }
+        }
+    }
+
+    private static IReadOnlyList<string> SelectCommandsByPromptSimilarity(string? userInput)
+    {
+        var terms = BuildPromptTerms(userInput);
+        if (terms.Count == 0)
+            return Array.Empty<string>();
+
+        var matches = new List<string>();
+        foreach (var command in Commands)
+        {
+            var haystack =
+                $"{command.Name} {(command.BuildHelp(PromptHelpState) ?? string.Empty)}"
+                .ToLowerInvariant();
+            if (terms.Any(t => haystack.Contains(t, StringComparison.Ordinal)))
+                matches.Add(command.Name);
+        }
+
+        return matches;
+    }
+
+    private static IReadOnlyList<string> BuildPromptTerms(string? userInput)
+    {
+        if (string.IsNullOrWhiteSpace(userInput))
+            return Array.Empty<string>();
+
+        var tokens = userInput
+            .ToLowerInvariant()
+            .Split(new[] { ' ', '\t', '\r', '\n', ',', '.', ';', ':', '!', '?', '(', ')', '[', ']', '{', '}', '"', '\'' },
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(t => t.Trim())
+            .Where(t => t.Length >= 3)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        return tokens;
     }
 
     internal static string NormalizeCommandStep(

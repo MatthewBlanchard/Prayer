@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -16,6 +19,10 @@ public sealed class ScriptGenerationService
     private readonly IAgentLogger _logger;
     private readonly string _baseSystemPrompt;
     private readonly Action<string>? _setStatus;
+    private readonly HttpClient? _embeddingHttp;
+    private readonly string _embeddingModel = "text-embedding-3-small";
+    private readonly SemaphoreSlim _commandEmbeddingGate = new(1, 1);
+    private Dictionary<string, float[]>? _commandEmbeddingsByName;
 
     public ScriptGenerationService(
         ILLMClient plannerLlm,
@@ -29,6 +36,17 @@ public sealed class ScriptGenerationService
         _logger = logger;
         _baseSystemPrompt = baseSystemPrompt;
         _setStatus = setStatus;
+
+        var embeddingApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        if (!string.IsNullOrWhiteSpace(embeddingApiKey))
+        {
+            _embeddingHttp = new HttpClient
+            {
+                BaseAddress = new Uri("https://api.openai.com")
+            };
+            _embeddingHttp.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", embeddingApiKey);
+        }
     }
 
     public async Task<ScriptGenerationResult> GenerateScriptFromUserInputAsync(
@@ -40,7 +58,15 @@ public sealed class ScriptGenerationService
         var attempts = Math.Max(1, maxAttempts);
         var generationInput = (userInput ?? string.Empty).Trim();
         var stateContextBlock = BuildScriptGenerationStateContextBlock(state, generationInput);
-        var examplesBlock = await BuildScriptGenerationExamplesBlockAsync(generationInput);
+        var (examplesBlock, exampleScripts) = await BuildScriptGenerationExamplesBlockAsync(generationInput);
+        var cosineCommands = await SelectCommandsByCosineSimilarityAsync(
+            generationInput,
+            maxMatches: 12,
+            cancellationToken);
+        var dslCommandReferenceBlock = DslParser.BuildPromptDslReferenceBlock(
+            generationInput,
+            exampleScripts,
+            cosineCommands);
         string? previousScript = null;
         string? previousError = null;
 
@@ -50,6 +76,7 @@ public sealed class ScriptGenerationService
                 baseSystemPrompt: _baseSystemPrompt,
                 userInput: generationInput,
                 stateContextBlock: stateContextBlock,
+                dslCommandReferenceBlock: dslCommandReferenceBlock,
                 examplesBlock: examplesBlock,
                 attemptNumber: attempt,
                 previousScript: previousScript,
@@ -108,7 +135,8 @@ public sealed class ScriptGenerationService
             (previousError ?? "Unknown script error."));
     }
 
-    private async Task<string> BuildScriptGenerationExamplesBlockAsync(string generationInput)
+    private async Task<(string examplesBlock, IReadOnlyList<string> exampleScripts)> BuildScriptGenerationExamplesBlockAsync(
+        string generationInput)
     {
         var sb = new StringBuilder();
         IReadOnlyList<PromptScriptMatch> matches = await _exampleStore.FindTopMatchesAsync(generationInput, maxMatches: 5);
@@ -116,16 +144,167 @@ public sealed class ScriptGenerationService
         if (matches.Count == 0)
             matches = _exampleStore.GetRecentMatches(5);
 
+        var scripts = new List<string>(matches.Count);
+
         for (int i = 0; i < matches.Count; i++)
         {
             var example = matches[i];
             sb.Append(example.Prompt.Trim());
             sb.Append(" ->\n");
-            sb.Append(NormalizeScriptExampleForPrompt(example.Script));
+            var normalizedScript = NormalizeScriptExampleForPrompt(example.Script);
+            sb.Append(normalizedScript);
             sb.Append("\n\n");
+            if (!string.IsNullOrWhiteSpace(normalizedScript))
+                scripts.Add(normalizedScript);
         }
 
-        return sb.ToString().TrimEnd();
+        return (sb.ToString().TrimEnd(), scripts);
+    }
+
+    private async Task<IReadOnlyList<string>> SelectCommandsByCosineSimilarityAsync(
+        string generationInput,
+        int maxMatches,
+        CancellationToken ct)
+    {
+        if (_embeddingHttp == null ||
+            string.IsNullOrWhiteSpace(generationInput) ||
+            maxMatches <= 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        try
+        {
+            var docs = DslParser.GetPromptCommandDocs();
+            if (docs.Count == 0)
+                return Array.Empty<string>();
+
+            await _commandEmbeddingGate.WaitAsync(ct);
+            try
+            {
+                if (_commandEmbeddingsByName == null || _commandEmbeddingsByName.Count == 0)
+                {
+                    var docVectors = await EmbedBatchAsync(
+                        docs.Select(d => d.Text).ToList(),
+                        ct);
+
+                    var map = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
+                    for (int i = 0; i < docs.Count && i < docVectors.Count; i++)
+                    {
+                        var vec = docVectors[i];
+                        if (vec.Length > 0)
+                            map[docs[i].Name] = vec;
+                    }
+
+                    _commandEmbeddingsByName = map;
+                }
+            }
+            finally
+            {
+                _commandEmbeddingGate.Release();
+            }
+
+            var queryVectors = await EmbedBatchAsync(new[] { generationInput }, ct);
+            if (queryVectors.Count == 0 || queryVectors[0].Length == 0)
+                return Array.Empty<string>();
+
+            var query = queryVectors[0];
+            var ranked = new List<(string Name, double Score)>();
+            foreach (var doc in docs)
+            {
+                if (_commandEmbeddingsByName == null ||
+                    !_commandEmbeddingsByName.TryGetValue(doc.Name, out var vec))
+                {
+                    continue;
+                }
+
+                var score = CosineSimilarity(query, vec);
+                if (score > 0d)
+                    ranked.Add((doc.Name, score));
+            }
+
+            return ranked
+                .OrderByDescending(v => v.Score)
+                .Take(maxMatches)
+                .Select(v => v.Name)
+                .ToList();
+        }
+        catch
+        {
+            // Embedding retrieval should never block script generation.
+            return Array.Empty<string>();
+        }
+    }
+
+    private async Task<IReadOnlyList<float[]>> EmbedBatchAsync(
+        IReadOnlyList<string> inputs,
+        CancellationToken ct)
+    {
+        if (_embeddingHttp == null || inputs.Count == 0)
+            return Array.Empty<float[]>();
+
+        var payload = new
+        {
+            model = _embeddingModel,
+            input = inputs
+        };
+
+        var json = JsonSerializer.Serialize(payload);
+        using var response = await _embeddingHttp.PostAsync(
+            "/v1/embeddings",
+            new StringContent(json, Encoding.UTF8, "application/json"),
+            ct);
+
+        var raw = await response.Content.ReadAsStringAsync(ct);
+        if (!response.IsSuccessStatusCode)
+            return Array.Empty<float[]>();
+
+        using var doc = JsonDocument.Parse(raw);
+        if (!doc.RootElement.TryGetProperty("data", out var data) ||
+            data.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<float[]>();
+        }
+
+        var vectors = new List<float[]>(data.GetArrayLength());
+        foreach (var item in data.EnumerateArray())
+        {
+            if (!item.TryGetProperty("embedding", out var emb) ||
+                emb.ValueKind != JsonValueKind.Array)
+            {
+                vectors.Add(Array.Empty<float>());
+                continue;
+            }
+
+            var vec = new float[emb.GetArrayLength()];
+            int idx = 0;
+            foreach (var n in emb.EnumerateArray())
+                vec[idx++] = n.GetSingle();
+            vectors.Add(vec);
+        }
+
+        return vectors;
+    }
+
+    private static double CosineSimilarity(float[] a, float[] b)
+    {
+        if (a.Length == 0 || b.Length == 0 || a.Length != b.Length)
+            return -1d;
+
+        double dot = 0d;
+        double normA = 0d;
+        double normB = 0d;
+        for (int i = 0; i < a.Length; i++)
+        {
+            dot += a[i] * b[i];
+            normA += a[i] * a[i];
+            normB += b[i] * b[i];
+        }
+
+        if (normA <= 0d || normB <= 0d)
+            return -1d;
+
+        return dot / (Math.Sqrt(normA) * Math.Sqrt(normB));
     }
 
     private static string NormalizeScriptExampleForPrompt(string script)

@@ -10,12 +10,11 @@ public static class AgentPrompt
         "For mine quests, plan to stash cargo at station and use stash; (no item argument) to deposit all cargo when needed. " +
         "Do not append a trailing halt; unless the user explicitly asks to stop or pause.";
 
-    private static readonly string DslCommandReferenceBlock = DslParser.BuildPromptDslReferenceBlock();
-
     public static string BuildScriptFromUserInputPrompt(
         string baseSystemPrompt,
         string userInput,
         string stateContextBlock,
+        string dslCommandReferenceBlock,
         string examplesBlock,
         int attemptNumber = 1,
         string? previousScript = null,
@@ -28,6 +27,10 @@ public static class AgentPrompt
                 "Error:\n" + previousError.Trim() + "\n\n" +
                 "Previous script:\n" + (previousScript ?? "") + "\n\n" +
                 "Fix the script and return a corrected version.\n\n";
+        var trimmedExamples = (examplesBlock ?? string.Empty).Trim();
+        var examplesSection = string.IsNullOrWhiteSpace(trimmedExamples)
+            ? string.Empty
+            : "Prompt -> script examples:\n" + trimmedExamples + "\n\n";
 
         return
             "<|start_header_id|>system<|end_header_id|>\n" +
@@ -42,8 +45,8 @@ public static class AgentPrompt
             "Attempt: " + attemptNumber + "\n\n" +
             "User request:\n" + userInput + "\n\n" +
             stateContextBlock + "\n\n" +
-            DslCommandReferenceBlock +
-            "Prompt -> script examples:\n" + examplesBlock + "\n\n" +
+            dslCommandReferenceBlock +
+            examplesSection +
             retryContext +
             "Generate a DSL script now.\n" +
             "Checklist:\n" +

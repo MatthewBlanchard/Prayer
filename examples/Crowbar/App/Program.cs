@@ -380,6 +380,66 @@ class Program
             return Array.Empty<string>();
         });
 
+        htmxUi.SetGetSkillLibraryHandler(async botId =>
+        {
+            string? prayerSessionId;
+            lock (botLock)
+                prayerSessionId = botSessions.TryGetValue(botId, out var s) ? s.PrayerSessionId : null;
+
+            if (string.IsNullOrWhiteSpace(prayerSessionId))
+                throw new InvalidOperationException("Prayer session is not available.");
+
+            return await prayerApi.GetSkillLibraryAsync(prayerSessionId);
+        });
+
+        htmxUi.SetAppendSkillBlockHandler(async (botId, blockText) =>
+        {
+            string? prayerSessionId;
+            lock (botLock)
+                prayerSessionId = botSessions.TryGetValue(botId, out var s) ? s.PrayerSessionId : null;
+
+            if (string.IsNullOrWhiteSpace(prayerSessionId))
+                throw new InvalidOperationException("Prayer session is not available.");
+
+            return await prayerApi.AppendSkillBlockAsync(prayerSessionId, blockText);
+        });
+
+        htmxUi.SetToggleOverrideHandler(async (botId, name) =>
+        {
+            string? prayerSessionId;
+            lock (botLock)
+                prayerSessionId = botSessions.TryGetValue(botId, out var s) ? s.PrayerSessionId : null;
+
+            if (string.IsNullOrWhiteSpace(prayerSessionId))
+                throw new InvalidOperationException("Prayer session is not available.");
+
+            return await prayerApi.ToggleOverrideAsync(prayerSessionId, name);
+        });
+
+        htmxUi.SetDeleteSkillItemHandler(async (botId, kind, name) =>
+        {
+            string? prayerSessionId;
+            lock (botLock)
+                prayerSessionId = botSessions.TryGetValue(botId, out var s) ? s.PrayerSessionId : null;
+
+            if (string.IsNullOrWhiteSpace(prayerSessionId))
+                throw new InvalidOperationException("Prayer session is not available.");
+
+            return await prayerApi.DeleteSkillItemAsync(prayerSessionId, kind, name);
+        });
+
+        htmxUi.SetReorderOverrideHandler(async (botId, name, direction) =>
+        {
+            string? prayerSessionId;
+            lock (botLock)
+                prayerSessionId = botSessions.TryGetValue(botId, out var s) ? s.PrayerSessionId : null;
+
+            if (string.IsNullOrWhiteSpace(prayerSessionId))
+                throw new InvalidOperationException("Prayer session is not available.");
+
+            return await prayerApi.ReorderOverrideAsync(prayerSessionId, name, direction);
+        });
+
         var snapshotPublisher = new UiSnapshotPublisher(
             channels.UiSnapshots.Writer,
             GetAllBots,

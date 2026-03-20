@@ -262,6 +262,53 @@ public sealed class PrayerApiClient
         await EnsureSuccessWithDetailsAsync(response);
     }
 
+    public async Task<Contracts.SkillLibraryResponse> GetSkillLibraryAsync(string sessionId)
+    {
+        var result = await _http.GetFromJsonAsync<Contracts.SkillLibraryResponse>(
+            $"api/runtime/sessions/{sessionId}/skills");
+        return result ?? new Contracts.SkillLibraryResponse(
+            Array.Empty<Contracts.SkillEntryDto>(),
+            Array.Empty<Contracts.OverrideEntryDto>(),
+            string.Empty);
+    }
+
+    public async Task<Contracts.SkillLibraryResponse> AppendSkillBlockAsync(string sessionId, string blockText)
+    {
+        var response = await _http.PostAsJsonAsync(
+            $"api/runtime/sessions/{sessionId}/skills/append",
+            new Contracts.AppendSkillBlockRequest(blockText));
+        await EnsureSuccessWithDetailsAsync(response);
+        var result = await response.Content.ReadFromJsonAsync<Contracts.SkillLibraryResponse>();
+        return result!;
+    }
+
+    public async Task<Contracts.SkillLibraryResponse> ToggleOverrideAsync(string sessionId, string name)
+    {
+        var response = await _http.PostAsJsonAsync(
+            $"api/runtime/sessions/{sessionId}/skills/toggle-override",
+            new Contracts.ToggleOverrideRequest(name));
+        await EnsureSuccessWithDetailsAsync(response);
+        return (await response.Content.ReadFromJsonAsync<Contracts.SkillLibraryResponse>())!;
+    }
+
+    public async Task<Contracts.SkillLibraryResponse> DeleteSkillItemAsync(string sessionId, string kind, string name)
+    {
+        var response = await _http.PostAsJsonAsync(
+            $"api/runtime/sessions/{sessionId}/skills/delete",
+            new Contracts.DeleteSkillItemRequest(kind, name));
+        await EnsureSuccessWithDetailsAsync(response);
+        return (await response.Content.ReadFromJsonAsync<Contracts.SkillLibraryResponse>())!;
+    }
+
+    public async Task<Contracts.SkillLibraryResponse> ReorderOverrideAsync(string sessionId, string name, string direction)
+    {
+        var response = await _http.PostAsJsonAsync(
+            $"api/runtime/sessions/{sessionId}/skills/reorder-override",
+            new Contracts.ReorderOverrideRequest(name, direction));
+        await EnsureSuccessWithDetailsAsync(response);
+        return (await response.Content.ReadFromJsonAsync<Contracts.SkillLibraryResponse>())!;
+    }
+
     private static string EnsureTrailingSlash(string url)
     {
         return url.EndsWith("/", StringComparison.Ordinal) ? url : url + "/";

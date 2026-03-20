@@ -185,10 +185,11 @@ public sealed partial class HtmxBotWindow
     {
         sb.AppendLine("<div class='card script-column'>");
 
-        // Tab bar: Script | Roleplay
+        // Tab bar: Script | Roleplay | Skills
         sb.AppendLine("<div class='tabs' role='tablist' aria-label='Right Column'>");
         sb.AppendLine("<button id='right-tab-script' type='button' class='tab-btn' role='tab' data-right-tab='script' aria-selected='true' aria-controls='right-pane-script' tabindex='0'>Script</button>");
         sb.AppendLine("<button id='right-tab-roleplay' type='button' class='tab-btn' role='tab' data-right-tab='roleplay' aria-selected='false' aria-controls='right-pane-roleplay' tabindex='-1'>Roleplay</button>");
+        sb.AppendLine("<button id='right-tab-skills' type='button' class='tab-btn' role='tab' data-right-tab='skills' aria-selected='false' aria-controls='right-pane-skills' tabindex='-1'>Skills</button>");
         sb.AppendLine("</div>");
 
         // Script pane
@@ -211,6 +212,11 @@ public sealed partial class HtmxBotWindow
         sb.AppendLine("<div id='right-pane-roleplay' class='tab-pane' role='tabpanel' aria-labelledby='right-tab-roleplay' hidden>");
         sb.AppendLine("<div hx-get='partial/roleplay' hx-trigger='load' hx-swap='innerHTML'></div>");
         sb.AppendLine("</div>"); // end right-pane-roleplay
+
+        // Skills pane
+        sb.AppendLine("<div id='right-pane-skills' class='tab-pane' role='tabpanel' aria-labelledby='right-tab-skills' hidden>");
+        sb.AppendLine("<div id='skills-library' hx-get='partial/skills-library' hx-trigger='revealed' hx-swap='innerHTML'></div>");
+        sb.AppendLine("</div>"); // end right-pane-skills
 
         sb.AppendLine("</div>"); // end script-column
     }

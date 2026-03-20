@@ -28,6 +28,7 @@ public static class AppPaths
     public static readonly string ScriptCommandFailuresLogFile = Path.Combine(LogDir, "script_command_failures.log");
     public static readonly string RuntimeHostLogFile = Path.Combine(LogDir, "runtime_host.log");
     public static readonly string AutonomousGenerationLogFile = Path.Combine(LogDir, "autonomous_generation.log");
+    public static readonly string AutonomousDriverLogFile = Path.Combine(LogDir, "autodriver.log");
     public static readonly string GoArgValidationLogFile = Path.Combine(LogDir, "go_arg_validation.log");
     public static readonly string GoArgValidationMapDumpLogFile = Path.Combine(LogDir, "go_arg_validation_mapdump.log");
     public static readonly string UiHttpErrorLogFile = Path.Combine(LogDir, "ui_http_errors.log");
@@ -46,12 +47,18 @@ public static class AppPaths
     public static readonly string GalaxyMapFile = Path.Combine(CacheDir, "galaxy_map.json");
     public static readonly string GalaxyKnownPoisFile = Path.Combine(CacheDir, "known_pois.json");
 
-    private static readonly string[] DebugLogsToResetOnStartup =
+    private static readonly string[] LogsToResetOnStartup =
     {
         LlmLogFile,
         PlannerPromptLogFile,
+        OpenAiErrorsLogFile,
+        HttpBadRequestLogFile,
         PathfindLogFile,
         SpaceMoltApiLogFile,
+        SpaceMoltApiStatsLogFile,
+        AuthFlowLogFile,
+        AnalyzeMarketLogFile,
+        ItemCatalogLogFile,
         CommandExecutionLogFile,
         ScriptNormalizationLogFile,
         ScriptWriterContextLogFile,
@@ -60,8 +67,11 @@ public static class AppPaths
         ScriptCommandFailuresLogFile,
         RuntimeHostLogFile,
         AutonomousGenerationLogFile,
+        AutonomousDriverLogFile,
         GoArgValidationLogFile,
-        GoArgValidationMapDumpLogFile
+        GoArgValidationMapDumpLogFile,
+        UiHttpErrorLogFile,
+        UiHttpTraceLogFile
     };
 
     public static void EnsureDirectories()
@@ -76,10 +86,12 @@ public static class AppPaths
 
     public static void ResetDebugLogsOnStartup()
     {
-        foreach (var path in DebugLogsToResetOnStartup)
+        foreach (var path in LogsToResetOnStartup)
         {
             try
             {
+                if (File.Exists(path))
+                    File.Delete(path);
                 File.WriteAllText(path, string.Empty);
             }
             catch

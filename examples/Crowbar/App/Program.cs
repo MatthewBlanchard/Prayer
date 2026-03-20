@@ -198,6 +198,16 @@ class Program
                 AppPaths.AutonomousGenerationLogFile));
         }
 
+        void LogAutonomousDriver(string message)
+        {
+            var line = $"[{DateTime.UtcNow:O}] {message}{Environment.NewLine}";
+            LogSink.Instance.Enqueue(new LogEvent(
+                DateTime.UtcNow,
+                LogKind.RuntimeHost,
+                line,
+                AppPaths.AutonomousDriverLogFile));
+        }
+
         IReadOnlyList<BotSession> GetAllBots()
         {
             lock (botLock)
@@ -321,7 +331,11 @@ class Program
                 target.PrayerSessionId!,
                 target.Label,
                 () => { lock (botLock) { botSessions.TryGetValue(botId, out var s); return s?.LastPrayerState; } },
-                msg => channels.Status.Writer.TryWrite(msg),
+                msg =>
+                {
+                    channels.Status.Writer.TryWrite(msg);
+                    LogAutonomousDriver(msg);
+                },
                 msg =>
                 {
                     LogAutonomousGeneration(msg);

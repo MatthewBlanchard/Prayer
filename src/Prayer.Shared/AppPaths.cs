@@ -101,6 +101,24 @@ public static class AppPaths
         }
     }
 
+    public static string GetSkillsFile(string botLabel)
+    {
+        var normalized = string.IsNullOrWhiteSpace(botLabel)
+            ? "default"
+            : botLabel.Trim().ToLowerInvariant();
+
+        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        var builder = new StringBuilder(normalized.Length);
+        foreach (var ch in normalized)
+            builder.Append(invalid.Contains(ch) ? '_' : ch);
+
+        var safeName = builder.ToString();
+        if (string.IsNullOrWhiteSpace(safeName))
+            safeName = "default";
+
+        return Path.Combine(AgentCheckpointsDir, $"{safeName}.skills.prayer");
+    }
+
     public static string GetAgentCheckpointFile(string botLabel)
     {
         var normalized = string.IsNullOrWhiteSpace(botLabel)

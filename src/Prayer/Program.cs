@@ -402,6 +402,122 @@ app.MapPost("/api/runtime/sessions/{id}/commands", (string id, Contracts.Runtime
     return Results.Ok(new Contracts.CommandAckResponse(session.Id, request.Command, message));
 });
 
+app.MapGet("/api/runtime/sessions/{id}/skills", (string id, RuntimeSessionStore store) =>
+{
+    if (!store.TryGet(id, out var session))
+        return Results.NotFound();
+
+    return Results.Ok(session.BuildSkillLibraryResponse());
+});
+
+app.MapPost("/api/runtime/sessions/{id}/skills", (string id, Contracts.SetSkillLibraryRequest request, RuntimeSessionStore store) =>
+{
+    if (!store.TryGet(id, out var session))
+        return Results.NotFound();
+
+    if (!session.TrySetSkillLibraryText(request.Text, out var error))
+        return Results.BadRequest(error);
+
+    return Results.Ok(session.BuildSkillLibraryResponse());
+});
+
+app.MapPost("/api/runtime/sessions/{id}/skills/append", (string id, Contracts.AppendSkillBlockRequest request, RuntimeSessionStore store) =>
+{
+    if (!store.TryGet(id, out var session))
+        return Results.NotFound();
+
+    var current = session.GetSkillLibraryText();
+    var combined = string.IsNullOrWhiteSpace(current)
+        ? (request.BlockText ?? string.Empty).Trim()
+        : current.TrimEnd() + "\n\n" + (request.BlockText ?? string.Empty).Trim();
+
+    if (!session.TrySetSkillLibraryText(combined, out var error))
+        return Results.BadRequest(error);
+
+    return Results.Ok(session.BuildSkillLibraryResponse());
+});
+
+app.MapPost("/api/runtime/sessions/{id}/skills/toggle-override", (string id, Contracts.ToggleOverrideRequest request, RuntimeSessionStore store) =>
+{
+    if (!store.TryGet(id, out var session))
+        return Results.NotFound();
+
+    var current = session.GetSkillLibraryText();
+    SkillLibrary library;
+    try { library = SkillLibrary.Parse(current); }
+    catch (FormatException ex) { return Results.BadRequest(ex.Message); }
+
+    var updatedOverrides = library.Overrides
+        .Select(ov => string.Equals(ov.Name, request.Name, StringComparison.OrdinalIgnoreCase)
+            ? ov.WithEnabled(!ov.Enabled)
+            : ov)
+        .ToList();
+    var updated = new SkillLibrary(library.Skills, updatedOverrides);
+
+    if (!session.TrySetSkillLibraryText(updated.Serialize(), out var error))
+        return Results.BadRequest(error);
+
+    return Results.Ok(session.BuildSkillLibraryResponse());
+});
+
+app.MapPost("/api/runtime/sessions/{id}/skills/delete", (string id, Contracts.DeleteSkillItemRequest request, RuntimeSessionStore store) =>
+{
+    if (!store.TryGet(id, out var session))
+        return Results.NotFound();
+
+    var current = session.GetSkillLibraryText();
+    SkillLibrary library;
+    try { library = SkillLibrary.Parse(current); }
+    catch (FormatException ex) { return Results.BadRequest(ex.Message); }
+
+    SkillLibrary updated;
+    if (string.Equals(request.Kind, "skill", StringComparison.OrdinalIgnoreCase))
+    {
+        var skills = library.Skills
+            .Where(s => !string.Equals(s.Name, request.Name, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        updated = new SkillLibrary(skills, library.Overrides);
+    }
+    else
+    {
+        var overrides = library.Overrides
+            .Where(ov => !string.Equals(ov.Name, request.Name, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        updated = new SkillLibrary(library.Skills, overrides);
+    }
+
+    if (!session.TrySetSkillLibraryText(updated.Serialize(), out var error))
+        return Results.BadRequest(error);
+
+    return Results.Ok(session.BuildSkillLibraryResponse());
+});
+
+app.MapPost("/api/runtime/sessions/{id}/skills/reorder-override", (string id, Contracts.ReorderOverrideRequest request, RuntimeSessionStore store) =>
+{
+    if (!store.TryGet(id, out var session))
+        return Results.NotFound();
+
+    var current = session.GetSkillLibraryText();
+    SkillLibrary library;
+    try { library = SkillLibrary.Parse(current); }
+    catch (FormatException ex) { return Results.BadRequest(ex.Message); }
+
+    var overrides = library.Overrides.ToList();
+    var idx = overrides.FindIndex(ov => string.Equals(ov.Name, request.Name, StringComparison.OrdinalIgnoreCase));
+    if (idx >= 0)
+    {
+        int swapIdx = string.Equals(request.Direction, "up", StringComparison.OrdinalIgnoreCase) ? idx - 1 : idx + 1;
+        if (swapIdx >= 0 && swapIdx < overrides.Count)
+            (overrides[idx], overrides[swapIdx]) = (overrides[swapIdx], overrides[idx]);
+    }
+
+    var updated = new SkillLibrary(library.Skills, overrides);
+    if (!session.TrySetSkillLibraryText(updated.Serialize(), out var error))
+        return Results.BadRequest(error);
+
+    return Results.Ok(session.BuildSkillLibraryResponse());
+});
+
 app.MapPost("/api/runtime/sessions/{id}/spacemolt/passthrough",
     async (string id, Contracts.SpaceMoltPassthroughRequest request, RuntimeSessionStore store, CancellationToken cancellationToken) =>
     {
@@ -615,6 +731,7 @@ internal sealed class PrayerRuntimeSession : IDisposable
     private readonly object _stateLock = new();
     private readonly List<string> _executionStatus = new();
     private readonly ILogger<PrayerRuntimeSession> _logger;
+    private readonly string _skillsFilePath;
     private string? _latestRequestedScript;
     private long _stateVersion = 1;
     private TaskCompletionSource<long> _stateChanged = NewStateChangedSignal();
@@ -636,6 +753,7 @@ internal sealed class PrayerRuntimeSession : IDisposable
         Label = label;
         CreatedUtc = createdUtc;
         _logger = logger;
+        _skillsFilePath = AppPaths.GetSkillsFile(label);
 
         Agent = agent;
         Client = client;
@@ -644,6 +762,9 @@ internal sealed class PrayerRuntimeSession : IDisposable
         CurrentLlmModel = llmModel;
         RuntimeTransport = runtimeTransport;
         RuntimeStateProvider = runtimeStateProvider;
+
+        // Load persisted skill library if one exists.
+        LoadSkillLibraryFromDisk();
 
         RuntimeHost = new RuntimeHost(
             label,
@@ -897,6 +1018,113 @@ internal sealed class PrayerRuntimeSession : IDisposable
         {
             message = ex.Message;
             return false;
+        }
+    }
+
+    public string GetSkillLibraryText()
+    {
+        if (!System.IO.File.Exists(_skillsFilePath))
+            return string.Empty;
+
+        try
+        {
+            return System.IO.File.ReadAllText(_skillsFilePath);
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    public Contracts.SkillLibraryResponse BuildSkillLibraryResponse()
+    {
+        var rawText = GetSkillLibraryText();
+        SkillLibrary library;
+        try { library = SkillLibrary.Parse(rawText); }
+        catch { library = SkillLibrary.Empty; }
+
+        var skills = library.Skills.Select(s => new Contracts.SkillEntryDto(
+            s.Name,
+            s.Params.Select(p => new Contracts.SkillParamDto(p.Name, ArgTypeName(p.Type))).ToList(),
+            RenderSingle(s))).ToList();
+
+        var overrides = library.Overrides.Select(ov => new Contracts.OverrideEntryDto(
+            ov.Name,
+            DslBooleanEvaluator.RenderCondition(ov.Condition),
+            RenderSingle(ov),
+            ov.Enabled)).ToList();
+
+        return new Contracts.SkillLibraryResponse(skills, overrides, rawText);
+    }
+
+    public bool TrySetSkillLibraryText(string text, out string error)
+    {
+        SkillLibrary library;
+        try
+        {
+            library = SkillLibrary.Parse(text ?? string.Empty);
+        }
+        catch (FormatException ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+
+        Agent.SetSkillLibrary(library);
+
+        try
+        {
+            var canonical = library.Serialize();
+            System.IO.File.WriteAllText(_skillsFilePath, canonical);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to persist skill library for session {SessionId}", Id);
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static string ArgTypeName(DslArgType type) => type switch
+    {
+        DslArgType.PoiId     => "poi_id",
+        DslArgType.SystemId  => "system_id",
+        DslArgType.ItemId    => "item_id",
+        DslArgType.ShipId    => "ship_id",
+        DslArgType.MissionId => "mission_id",
+        DslArgType.ModuleId  => "module_id",
+        DslArgType.RecipeId  => "recipe_id",
+        DslArgType.Integer   => "integer",
+        _                    => "any",
+    };
+
+    private static string RenderSingle(DslSkillAstNode skill) =>
+        new SkillLibrary(new[] { skill }, Array.Empty<DslOverrideAstNode>()).Serialize().Trim();
+
+    private static string RenderSingle(DslOverrideAstNode ov) =>
+        new SkillLibrary(Array.Empty<DslSkillAstNode>(), new[] { ov }).Serialize().Trim();
+
+    private void LoadSkillLibraryFromDisk()
+    {
+        if (!System.IO.File.Exists(_skillsFilePath))
+            return;
+
+        try
+        {
+            var text = System.IO.File.ReadAllText(_skillsFilePath);
+            if (string.IsNullOrWhiteSpace(text))
+                return;
+
+            var library = SkillLibrary.Parse(text);
+            Agent.SetSkillLibrary(library);
+            _logger.LogInformation(
+                "Loaded skill library for session {SessionId} ({Label}): {SkillCount} skill(s), {OverrideCount} override(s)",
+                Id, Label, library.Skills.Count, library.Overrides.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load skill library for session {SessionId} ({Label})", Id, Label);
         }
     }
 

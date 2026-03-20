@@ -112,3 +112,24 @@ public sealed record SpaceMoltPassthroughResponse(bool Succeeded, JsonElement Re
 public sealed record GenerateRequest(string Prompt, int MaxTokens = 512, float Temperature = 0.7f);
 
 public sealed record GenerateResponse(string Text);
+
+public sealed record SkillParamDto(string Name, string TypeName);
+
+public sealed record SkillEntryDto(string Name, IReadOnlyList<SkillParamDto> Params, string RawText);
+
+public sealed record OverrideEntryDto(string Name, string Condition, string RawText, bool Enabled);
+
+public sealed record SkillLibraryResponse(
+    IReadOnlyList<SkillEntryDto> Skills,
+    IReadOnlyList<OverrideEntryDto> Overrides,
+    string RawText);
+
+public sealed record SetSkillLibraryRequest(string Text);
+
+public sealed record AppendSkillBlockRequest(string BlockText);
+
+public sealed record ToggleOverrideRequest(string Name);
+
+public sealed record DeleteSkillItemRequest(string Kind, string Name);
+
+public sealed record ReorderOverrideRequest(string Name, string Direction);

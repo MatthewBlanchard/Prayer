@@ -32,14 +32,9 @@ internal static class RoleplayTabRenderer
         // Controls
         sb.AppendLine("<div class='space-panel script-block'>");
         sb.AppendLine("<div class='row script-actions'>");
-        if (isRunning)
-        {
-            sb.AppendLine("<form hx-post='api/roleplay-stop' hx-swap='none'><button type='submit' title='Stop roleplay'>⏹️ Stop</button></form>");
-        }
-        else
-        {
+        sb.AppendLine("<form hx-post='api/roleplay-stop' hx-swap='none'><button type='submit' title='Stop roleplay'>⏹️ Stop</button></form>");
+        if (!isRunning)
             sb.AppendLine("<span class='small'>Roleplay is not active.</span>");
-        }
         sb.AppendLine("</div>");
         sb.AppendLine("</div>");
 

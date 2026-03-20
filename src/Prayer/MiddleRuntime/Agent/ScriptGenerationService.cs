@@ -379,8 +379,6 @@ public sealed class ScriptGenerationService
             cargoPrimary,
             topItemMatches,
             match => match);
-        var missionIssuingPoiLines = BuildMissionIssuingPoiLines(state);
-
         string currentPoiId = state.CurrentPOI?.Id ?? "-";
         string currentPoiType = state.CurrentPOI?.Type ?? "-";
 
@@ -390,66 +388,7 @@ public sealed class ScriptGenerationService
             $"- poi: {currentPoiId} ({currentPoiType})\n\n" +
             "POIs:\n" + FormatPromptSectionLines(poiLines) + "\n\n" +
             "Systems:\n" + FormatPromptSectionLines(systemLines) + "\n\n" +
-            "Items:\n" + FormatPromptSectionLines(cargoLines) + "\n\n" +
-            "Mission issuing POI IDs:\n" + FormatPromptSectionLines(missionIssuingPoiLines);
-    }
-
-    private static IReadOnlyList<string> BuildMissionIssuingPoiLines(GameState state)
-    {
-        var lines = new List<string>();
-        foreach (var mission in state.ActiveMissions ?? Array.Empty<MissionInfo>())
-        {
-            if (mission == null)
-                continue;
-
-            var missionName = string.IsNullOrWhiteSpace(mission.Title)
-                ? (!string.IsNullOrWhiteSpace(mission.MissionId) ? mission.MissionId : mission.Id)
-                : mission.Title.Trim();
-            var issuingPoiId = ResolveIssuingPoiId(state, mission);
-            if (string.IsNullOrWhiteSpace(issuingPoiId))
-                continue;
-
-            lines.Add($"{missionName} -> {issuingPoiId}");
-        }
-
-        return lines.Count == 0
-            ? Array.Empty<string>()
-            : lines;
-    }
-
-    private static string ResolveIssuingPoiId(GameState state, MissionInfo mission)
-    {
-        var directBaseId = (mission.IssuingBaseId ?? string.Empty).Trim();
-        if (!string.IsNullOrWhiteSpace(directBaseId))
-        {
-            var poiFromBaseId = (state.POIs ?? Array.Empty<POIInfo>())
-                .FirstOrDefault(p => string.Equals(p.BaseId ?? "", directBaseId, StringComparison.OrdinalIgnoreCase));
-            if (poiFromBaseId != null && !string.IsNullOrWhiteSpace(poiFromBaseId.Id))
-                return poiFromBaseId.Id.Trim();
-        }
-
-        var issuingBase = (mission.IssuingBase ?? string.Empty).Trim();
-        if (string.IsNullOrWhiteSpace(issuingBase))
-            return directBaseId;
-
-        var pois = state.POIs ?? Array.Empty<POIInfo>();
-        var byPoiId = pois.FirstOrDefault(p =>
-            string.Equals(p.Id ?? "", issuingBase, StringComparison.OrdinalIgnoreCase));
-        if (byPoiId != null && !string.IsNullOrWhiteSpace(byPoiId.Id))
-            return byPoiId.Id.Trim();
-
-        var byBaseId = pois.FirstOrDefault(p =>
-            string.Equals(p.BaseId ?? "", issuingBase, StringComparison.OrdinalIgnoreCase));
-        if (byBaseId != null && !string.IsNullOrWhiteSpace(byBaseId.Id))
-            return byBaseId.Id.Trim();
-
-        var byName = pois.FirstOrDefault(p =>
-            string.Equals(p.Name ?? "", issuingBase, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(p.BaseName ?? "", issuingBase, StringComparison.OrdinalIgnoreCase));
-        if (byName != null && !string.IsNullOrWhiteSpace(byName.Id))
-            return byName.Id.Trim();
-
-        return directBaseId;
+            "Items:\n" + FormatPromptSectionLines(cargoLines);
     }
 
     private static IReadOnlyList<string> BuildPromptSearchTerms(string userInput)

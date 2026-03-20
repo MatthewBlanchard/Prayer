@@ -19,7 +19,7 @@ public class AcceptMissionCommand : AutoDockSingleTurnCommand, IDslCommandGramma
     }
 
     public override string BuildHelp(GameState state)
-        => "- accept_mission <missionId> → accept a mission from the board";
+        => "- accept_mission <missionId> → accept a mission from the board; use only when explicitly asked to accept a mission, never for missions already active";
 
     protected override async Task<CommandExecutionResult?> ExecuteDockedAsync(
         IRuntimeTransport client,

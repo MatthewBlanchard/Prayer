@@ -92,6 +92,9 @@ public static class DslParser
             ["here"] = new(
                 "your current system id",
                 state => state.System),
+            ["nearest_station"] = new(
+                "the id of the nearest station by jump count",
+                ResolveNearestStation),
         };
     private static readonly TextParser<Unit> Ws =
         Character.WhiteSpace.Many().Value(Unit.Value);
@@ -1406,6 +1409,9 @@ public static class DslParser
 
         return IsValidIdentifier(value);
     }
+
+    private static string? ResolveNearestStation(GameState state)
+        => GalaxyStateHub.GetNearestStationId(state.System);
 
     private static string ExpandMacroArg(string? arg, GameState? state)
     {

@@ -15,6 +15,8 @@ internal static class GalaxyStateHub
     private static readonly Dictionary<string, HashSet<string>> MiningCheckedPoisByResource = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, HashSet<string>> MiningExploredSystemsByResource = new(StringComparer.OrdinalIgnoreCase);
     private static GalaxyState _snapshot = new();
+    private static readonly Dictionary<string, string> NearestStationBySystem = new(StringComparer.Ordinal);
+    private static bool _nearestStationDirty = true;
 
     static GalaxyStateHub()
     {
@@ -336,6 +338,54 @@ internal static class GalaxyStateHub
                 .ToList();
     }
 
+    public static string? GetNearestStationId(string systemId)
+    {
+        lock (Sync)
+        {
+            if (_nearestStationDirty)
+                RebuildNearestStationIndexNoLock();
+
+            return NearestStationBySystem.TryGetValue(systemId, out var stationId)
+                ? stationId
+                : null;
+        }
+    }
+
+    private static void RebuildNearestStationIndexNoLock()
+    {
+        NearestStationBySystem.Clear();
+
+        var systemMap = _map.Systems.ToDictionary(s => s.Id, StringComparer.Ordinal);
+
+        // Seed with all known stations sorted alphabetically for tie-breaking.
+        var queue = new Queue<(string SystemId, string StationId)>();
+        foreach (var poi in PoiKnowledgeById.Values
+            .Where(p => string.Equals(p.Type, "station", StringComparison.OrdinalIgnoreCase)
+                     && !string.IsNullOrWhiteSpace(p.SystemId))
+            .OrderBy(p => p.Id, StringComparer.Ordinal))
+        {
+            if (NearestStationBySystem.TryAdd(poi.SystemId, poi.Id))
+                queue.Enqueue((poi.SystemId, poi.Id));
+        }
+
+        // Multi-source BFS — each system is claimed by the nearest station,
+        // alphabetically first in case of a tie.
+        while (queue.Count > 0)
+        {
+            var (systemId, stationId) = queue.Dequeue();
+            if (!systemMap.TryGetValue(systemId, out var sysInfo))
+                continue;
+
+            foreach (var neighbor in sysInfo.Connections)
+            {
+                if (NearestStationBySystem.TryAdd(neighbor, stationId))
+                    queue.Enqueue((neighbor, stationId));
+            }
+        }
+
+        _nearestStationDirty = false;
+    }
+
     private static void RebuildSnapshotNoLock()
     {
         var marketsClone = MarketsByStation.ToDictionary(
@@ -617,6 +667,8 @@ internal static class GalaxyStateHub
             changed = true;
         }
 
+        bool wasStation = string.Equals(knowledge.Type, "station", StringComparison.OrdinalIgnoreCase);
+
         if (!string.IsNullOrWhiteSpace(systemId) && !string.Equals(knowledge.SystemId, systemId, StringComparison.Ordinal))
         {
             knowledge.SystemId = systemId;
@@ -688,6 +740,9 @@ internal static class GalaxyStateHub
                 changed = true;
             }
         }
+
+        if (!wasStation && string.Equals(knowledge.Type, "station", StringComparison.OrdinalIgnoreCase))
+            _nearestStationDirty = true;
 
         return changed;
     }

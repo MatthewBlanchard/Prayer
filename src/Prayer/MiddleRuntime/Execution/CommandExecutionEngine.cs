@@ -14,6 +14,9 @@ public sealed class CommandExecutionEngine
     private readonly Dictionary<string, int> _minedByItem = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _stashedByItem = new(StringComparer.OrdinalIgnoreCase);
 
+    // Skill library — provides named skills and always-on overrides.
+    private SkillLibrary? _skillLibrary;
+
     private const int MaxMemory = 12;
 
     private string? _script;
@@ -51,13 +54,23 @@ public sealed class CommandExecutionEngine
     public int? CurrentScriptLine => _currentScriptLine;
     public string? CurrentScript => string.IsNullOrWhiteSpace(_script) ? null : _script;
 
+    /// <summary>
+    /// Sets or replaces the skill library. Skills become valid commands in subsequently
+    /// loaded scripts, and overrides are evaluated before each script step.
+    /// </summary>
+    public void SetSkillLibrary(SkillLibrary? library)
+    {
+        _skillLibrary = library;
+    }
+
     public string SetScript(string script, GameState? state = null)
     {
         EnsureActiveCommandInvariant();
         var rawScript = script ?? string.Empty;
         _currentScriptLine = null;
 
-        var tree = DslParser.ParseTree(rawScript);
+        var skillNames = _skillLibrary?.SkillNames;
+        var tree = DslParser.ParseTree(rawScript, skillNames);
         if (state != null)
             ValidateCommandNodes(tree.Statements, state);
 
@@ -320,7 +333,13 @@ public sealed class CommandExecutionEngine
     {
         EnsureActiveCommandInvariant();
         ObserveStateAndApplyCounters(state);
-        if (_isHalted)
+
+        // Overrides are hard safety mechanisms — check them unconditionally,
+        // even while halted or between scripts.
+        if (!HasActiveCommand)
+            TryTriggerOverride(state);
+
+        if (_isHalted && _frames.Count == 0)
         {
             _setStatus("Halted: waiting for user input");
             return Task.FromResult<CommandResult?>(null);
@@ -401,7 +420,7 @@ public sealed class CommandExecutionEngine
                 continue;
             }
 
-            _currentScriptLine = next.SourceLine;
+            _currentScriptLine = next.SourceLine ?? GetCallSiteSourceLine();
             _setStatus($"Executing: script {FormatCommand(next)}");
             PersistCheckpoint();
             return Task.FromResult<CommandResult?>(next);
@@ -443,11 +462,26 @@ public sealed class CommandExecutionEngine
             switch (node)
             {
                 case DslCommandAstNode commandNode:
-                    result = BuildCommandResult(commandNode, state);
+                {
+                    // Skill call: push a new Skill frame instead of emitting a command.
+                    if (_skillLibrary != null &&
+                        _skillLibrary.TryGetSkill(commandNode.Name, out var skillDef))
+                    {
+                        var bindings = BuildSkillBindings(skillDef!, commandNode.Args, state);
+                        PushSkillFrame(skillDef!, bindings, $"{frame.Path}/{nodeIndex}", commandNode.SourceLine);
+                        LogAstWalker(
+                            "skill_call",
+                            $"Pushed skill frame skill={skillDef!.Name} path={frame.Path}/{nodeIndex}.");
+                        continue;
+                    }
+
+                    var substituted = SubstituteBindings(commandNode);
+                    result = BuildCommandResult(substituted, state);
                     LogAstWalker(
                         "emit_command",
                         $"Selected command line={result.SourceLine?.ToString() ?? "?"} cmd={FormatCommand(result)} path={frame.Path}/{nodeIndex}.");
                     return true;
+                }
 
                 case DslIfAstNode ifNode:
                 {
@@ -524,7 +558,7 @@ public sealed class CommandExecutionEngine
         if (!frame.UntilConditionKnown || frame.UntilCondition == null)
             return false;
 
-        if (!DslBooleanEvaluator.TryEvaluate(frame.UntilCondition, state, out var conditionValue))
+        if (!DslBooleanEvaluator.TryEvaluate(frame.UntilCondition, state, out var conditionValue, GetActiveFrameBindings()))
             return false;
 
         if (conditionValue)
@@ -534,13 +568,13 @@ public sealed class CommandExecutionEngine
         return true;
     }
 
-    private static bool ShouldEnterIf(
+    private bool ShouldEnterIf(
         DslConditionAstNode condition,
         GameState state,
         out bool conditionKnown,
         out bool conditionValue)
     {
-        if (!DslBooleanEvaluator.TryEvaluate(condition, state, out var evaluated))
+        if (!DslBooleanEvaluator.TryEvaluate(condition, state, out var evaluated, GetActiveFrameBindings()))
         {
             conditionKnown = false;
             conditionValue = false;
@@ -552,13 +586,13 @@ public sealed class CommandExecutionEngine
         return evaluated;
     }
 
-    private static bool ShouldEnterUntil(
+    private bool ShouldEnterUntil(
         DslConditionAstNode condition,
         GameState state,
         out bool conditionKnown,
         out bool conditionValue)
     {
-        if (!DslBooleanEvaluator.TryEvaluate(condition, state, out var evaluated))
+        if (!DslBooleanEvaluator.TryEvaluate(condition, state, out var evaluated, GetActiveFrameBindings()))
         {
             conditionKnown = false;
             conditionValue = false;
@@ -589,7 +623,7 @@ public sealed class CommandExecutionEngine
         return result;
     }
 
-    private static void ValidateCommandNodes(IReadOnlyList<DslAstNode> nodes, GameState state)
+    private void ValidateCommandNodes(IReadOnlyList<DslAstNode> nodes, GameState state)
     {
         foreach (var node in nodes ?? Array.Empty<DslAstNode>())
         {
@@ -597,6 +631,11 @@ public sealed class CommandExecutionEngine
             {
                 case DslCommandAstNode commandNode:
                 {
+                    // Skill calls are validated at runtime when the frame is pushed; skip here.
+                    if (_skillLibrary != null &&
+                        _skillLibrary.TryGetSkill(commandNode.Name, out _))
+                        break;
+
                     var command = new DslCommand(commandNode.Name, commandNode.Args);
                     try
                     {
@@ -972,10 +1011,20 @@ public sealed class CommandExecutionEngine
         if (_lastObservedState != null &&
             !string.IsNullOrWhiteSpace(_pendingDeltaAction))
         {
+            // Accumulate into the innermost scoped frame's counters when inside a skill/override,
+            // otherwise accumulate into the root script counters.
+            var scopedFrame = GetInnermostScopedFrame();
+
             if (string.Equals(_pendingDeltaAction, "mine", StringComparison.OrdinalIgnoreCase))
-                AccumulatePositiveDelta(_minedByItem, _lastObservedState.CargoByItem, current.CargoByItem);
+            {
+                var target = scopedFrame?.FrameMinedByItem ?? _minedByItem;
+                AccumulatePositiveDelta(target, _lastObservedState.CargoByItem, current.CargoByItem);
+            }
             else if (string.Equals(_pendingDeltaAction, "stash", StringComparison.OrdinalIgnoreCase))
-                AccumulatePositiveDelta(_stashedByItem, _lastObservedState.StorageByItem, current.StorageByItem);
+            {
+                var target = scopedFrame?.FrameStashedByItem ?? _stashedByItem;
+                AccumulatePositiveDelta(target, _lastObservedState.StorageByItem, current.StorageByItem);
+            }
         }
 
         _lastObservedState = current;
@@ -993,8 +1042,21 @@ public sealed class CommandExecutionEngine
 
     private void ApplyCountersToState(GameState state)
     {
-        state.ScriptMinedByItem = new Dictionary<string, int>(_minedByItem, StringComparer.OrdinalIgnoreCase);
-        state.ScriptStashedByItem = new Dictionary<string, int>(_stashedByItem, StringComparer.OrdinalIgnoreCase);
+        // Inside a Skill/Override frame, expose that frame's counters so MINED()/STASHED()
+        // conditions reflect only what the current subscript has done.
+        var scopedFrame = GetInnermostScopedFrame();
+        if (scopedFrame != null)
+        {
+            state.ScriptMinedByItem = new Dictionary<string, int>(
+                scopedFrame.FrameMinedByItem!, StringComparer.OrdinalIgnoreCase);
+            state.ScriptStashedByItem = new Dictionary<string, int>(
+                scopedFrame.FrameStashedByItem!, StringComparer.OrdinalIgnoreCase);
+        }
+        else
+        {
+            state.ScriptMinedByItem = new Dictionary<string, int>(_minedByItem, StringComparer.OrdinalIgnoreCase);
+            state.ScriptStashedByItem = new Dictionary<string, int>(_stashedByItem, StringComparer.OrdinalIgnoreCase);
+        }
     }
 
     private static StateSnapshot CaptureStateSnapshot(GameState state)
@@ -1040,6 +1102,196 @@ public sealed class CommandExecutionEngine
         }
     }
 
+    // ─── Skill / Override helpers ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the innermost frame that carries scoped counters (Skill or Override kind).
+    /// Null when the current stack has no Skill/Override frames active.
+    /// </summary>
+    private ExecutionFrame? GetInnermostScopedFrame()
+    {
+        for (int i = _frames.Count - 1; i >= 0; i--)
+        {
+            var f = _frames[i];
+            if (f.Kind == ExecutionFrameKind.Skill || f.Kind == ExecutionFrameKind.Override)
+                return f;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Returns the call-site source line from the innermost Skill frame, or null if none.
+    /// Used to display the parent script line number while a skill body is executing.
+    /// </summary>
+    private int? GetCallSiteSourceLine()
+    {
+        for (int i = _frames.Count - 1; i >= 0; i--)
+        {
+            if (_frames[i].Kind == ExecutionFrameKind.Skill && _frames[i].SourceLine > 0)
+                return _frames[i].SourceLine;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Returns the bindings from the innermost Skill frame on the stack, or null if none.
+    /// </summary>
+    private IReadOnlyDictionary<string, string>? GetActiveFrameBindings()
+    {
+        for (int i = _frames.Count - 1; i >= 0; i--)
+        {
+            if (_frames[i].Kind == ExecutionFrameKind.Skill && _frames[i].Bindings != null)
+                return _frames[i].Bindings;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Returns a copy of <paramref name="node"/> with any $param tokens in its args
+    /// replaced by values from the active Skill frame bindings.
+    /// Global macros ($home, $here, etc.) are left as-is for runtime resolution.
+    /// </summary>
+    private DslCommandAstNode SubstituteBindings(DslCommandAstNode node)
+    {
+        var bindings = GetActiveFrameBindings();
+        if (bindings == null || bindings.Count == 0)
+            return node;
+
+        bool changed = false;
+        var newArgs = new List<string>(node.Args.Count);
+        foreach (var arg in node.Args)
+        {
+            if (arg.StartsWith("$", StringComparison.Ordinal) &&
+                bindings.TryGetValue(arg[1..], out var bound))
+            {
+                newArgs.Add(bound);
+                changed = true;
+            }
+            else
+            {
+                newArgs.Add(arg);
+            }
+        }
+
+        return changed ? node with { Args = newArgs } : node;
+    }
+
+    /// <summary>
+    /// Resolves a call-site arg token, checking the active frame bindings first,
+    /// then falling through to global macro expansion.
+    /// </summary>
+    private string ResolveCallSiteArg(string arg, GameState state)
+    {
+        if (!arg.StartsWith("$", StringComparison.Ordinal))
+            return arg;
+
+        var name = arg[1..];
+        var bindings = GetActiveFrameBindings();
+        if (bindings != null && bindings.TryGetValue(name, out var bound))
+            return bound;
+
+        // Fall through to global macro resolution.
+        return DslParser.ExpandMacroArg(arg, state);
+    }
+
+    /// <summary>
+    /// Builds a bindings dictionary by mapping skill parameter names to resolved call-site arg values.
+    /// </summary>
+    private Dictionary<string, string> BuildSkillBindings(
+        DslSkillAstNode skill,
+        IReadOnlyList<string> callSiteArgs,
+        GameState state)
+    {
+        var @params = skill.Params;
+
+        int requiredCount = @params.Count; // all params are required (no defaults in skills)
+        if (callSiteArgs.Count < requiredCount)
+            throw new FormatException(
+                $"Skill '{skill.Name}' requires {requiredCount} argument(s), got {callSiteArgs.Count}.");
+
+        if (callSiteArgs.Count > @params.Count)
+            throw new FormatException(
+                $"Skill '{skill.Name}' takes {requiredCount} argument(s), got {callSiteArgs.Count}.");
+
+        var bindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < @params.Count; i++)
+        {
+            var resolved = ResolveCallSiteArg(callSiteArgs[i], state);
+            bindings[@params[i].Name] = resolved;
+        }
+
+        return bindings;
+    }
+
+    /// <summary>Pushes a new Skill execution frame onto the stack.</summary>
+    private void PushSkillFrame(
+        DslSkillAstNode skill,
+        IReadOnlyDictionary<string, string> bindings,
+        string parentPath,
+        int callSiteSourceLine = 0)
+    {
+        _frames.Add(new ExecutionFrame(
+            skill.Body,
+            ExecutionFrameKind.Skill,
+            sourceLine: callSiteSourceLine,
+            untilCondition: null,
+            untilConditionKnown: false,
+            path: $"skill/{skill.Name}",
+            bindings: bindings));
+
+        LogAstWalker(
+            "frame_push",
+            $"Pushed skill frame skill={skill.Name} parent={parentPath}.");
+    }
+
+    /// <summary>
+    /// Checks registered overrides and pushes an Override frame for the first one whose
+    /// condition is true and whose frame is not already on the stack. At most one fires per tick.
+    /// </summary>
+    private void TryTriggerOverride(GameState state)
+    {
+        if (_skillLibrary == null)
+            return;
+
+        foreach (var ov in _skillLibrary.Overrides)
+        {
+            if (!ov.Enabled) continue;
+
+            // Don't re-trigger while the override's own frame is already executing.
+            bool alreadyActive = false;
+            for (int i = 0; i < _frames.Count; i++)
+            {
+                if (_frames[i].Kind == ExecutionFrameKind.Override &&
+                    string.Equals(_frames[i].OverrideName, ov.Name, StringComparison.OrdinalIgnoreCase))
+                {
+                    alreadyActive = true;
+                    break;
+                }
+            }
+            if (alreadyActive) continue;
+
+            if (!DslBooleanEvaluator.TryEvaluate(ov.Condition, state, out var fired) || !fired)
+                continue;
+
+            _frames.Add(new ExecutionFrame(
+                ov.Body,
+                ExecutionFrameKind.Override,
+                sourceLine: 0,
+                untilCondition: null,
+                untilConditionKnown: false,
+                path: $"override/{ov.Name}",
+                overrideName: ov.Name));
+
+            LogAstWalker(
+                "override_trigger",
+                $"Override '{ov.Name}' fired cond={DslBooleanEvaluator.RenderCondition(ov.Condition)}.");
+
+            break; // Only one override per tick.
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
     private sealed record StateSnapshot(
         Dictionary<string, int> CargoByItem,
         Dictionary<string, int> StorageByItem);
@@ -1052,7 +1304,9 @@ public sealed class CommandExecutionEngine
             int sourceLine,
             DslConditionAstNode? untilCondition,
             bool untilConditionKnown,
-            string path)
+            string path,
+            IReadOnlyDictionary<string, string>? bindings = null,
+            string? overrideName = null)
         {
             Nodes = nodes ?? Array.Empty<DslAstNode>();
             Kind = kind;
@@ -1060,6 +1314,15 @@ public sealed class CommandExecutionEngine
             UntilCondition = untilCondition;
             UntilConditionKnown = untilConditionKnown;
             Path = path;
+            Bindings = bindings;
+            OverrideName = overrideName;
+
+            // Skill and Override frames each carry their own isolated counters.
+            if (kind == ExecutionFrameKind.Skill || kind == ExecutionFrameKind.Override)
+            {
+                FrameMinedByItem = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                FrameStashedByItem = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            }
         }
 
         public IReadOnlyList<DslAstNode> Nodes { get; }
@@ -1069,13 +1332,27 @@ public sealed class CommandExecutionEngine
         public bool UntilConditionKnown { get; }
         public string Path { get; }
         public int Index { get; set; }
+
+        /// <summary>Skill parameter bindings ($param -> resolved value). Null for non-Skill frames.</summary>
+        public IReadOnlyDictionary<string, string>? Bindings { get; }
+
+        /// <summary>Name of the override this frame belongs to. Null for non-Override frames.</summary>
+        public string? OverrideName { get; }
+
+        /// <summary>Scoped MINED counter for Skill/Override frames. Null for other frame kinds.</summary>
+        public Dictionary<string, int>? FrameMinedByItem { get; }
+
+        /// <summary>Scoped STASHED counter for Skill/Override frames. Null for other frame kinds.</summary>
+        public Dictionary<string, int>? FrameStashedByItem { get; }
     }
 
     private enum ExecutionFrameKind
     {
         Root,
         If,
-        Until
+        Until,
+        Skill,
+        Override
     }
 
     private enum ActiveCommandState

@@ -50,6 +50,11 @@ public class SpaceMoltAgent
             saveCheckpoint);
     }
 
+    public void SetSkillLibrary(SkillLibrary? library)
+    {
+        _execution.SetSkillLibrary(library);
+    }
+
     public void SetStatusWriter(ChannelWriter<string> writer)
     {
         _statusWriter = writer;

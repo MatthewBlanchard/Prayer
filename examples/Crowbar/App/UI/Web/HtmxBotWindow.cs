@@ -1404,12 +1404,14 @@ public sealed partial class HtmxBotWindow : IAppUi
         var script = botState?.ControlInput ?? string.Empty;
         var currentScriptLine = botState?.CurrentScriptLine;
         var scriptRunning = botState?.ScriptRunning ?? false;
+        var activeOverrideName = botState?.ActiveOverrideName;
 
         return JsonSerializer.Serialize(new
         {
             script,
             currentScriptLine,
-            scriptRunning
+            scriptRunning,
+            activeOverrideName
         });
     }
 

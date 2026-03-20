@@ -194,6 +194,7 @@ public sealed partial class HtmxBotWindow
 
         // Script pane
         sb.AppendLine("<div id='right-pane-script' class='tab-pane active' role='tabpanel' aria-labelledby='right-tab-script'>");
+        sb.AppendLine("<div id='override-indicator' class='override-indicator' hidden></div>");
         sb.AppendLine("<section class='space-panel script-block'><div class='space-panel-title'>Current Script</div><div id='live-script-editor'><textarea id='current-script-input' rows='5' readonly>")
             .Append(E(currentScript))
             .AppendLine("</textarea></div></section>");

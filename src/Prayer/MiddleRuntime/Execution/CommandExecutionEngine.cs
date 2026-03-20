@@ -54,6 +54,19 @@ public sealed class CommandExecutionEngine
     public int? CurrentScriptLine => _currentScriptLine;
     public string? CurrentScript => string.IsNullOrWhiteSpace(_script) ? null : _script;
 
+    public string? ActiveOverrideName
+    {
+        get
+        {
+            for (int i = _frames.Count - 1; i >= 0; i--)
+            {
+                if (_frames[i].Kind == ExecutionFrameKind.Override)
+                    return _frames[i].OverrideName;
+            }
+            return null;
+        }
+    }
+
     /// <summary>
     /// Sets or replaces the skill library. Skills become valid commands in subsequently
     /// loaded scripts, and overrides are evaluated before each script step.

@@ -57,7 +57,8 @@ public sealed record RuntimeStateResponse(
     string? LastGenerationPrompt,
     int? CurrentTick,
     DateTime? LastSpaceMoltPostUtc,
-    ActiveGoRouteDto? ActiveRoute = null);
+    ActiveGoRouteDto? ActiveRoute = null,
+    string? ActiveOverrideName = null);
 
 public sealed record SessionSummary(
     string Id,

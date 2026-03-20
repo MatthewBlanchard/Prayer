@@ -40,6 +40,18 @@
     if (scriptInput) scriptInput.value = responseText;
   };
 
+  window.setActiveOverride = function (overrideName) {
+    var el = document.getElementById('override-indicator');
+    if (!el) return;
+    if (overrideName) {
+      el.textContent = '\u26A0\uFE0F Override: ' + overrideName;
+      el.removeAttribute('hidden');
+    } else {
+      el.setAttribute('hidden', '');
+      el.textContent = '';
+    }
+  };
+
   window.setExecuteButtonRunning = function (isRunning) {
     var executeBtn =
       document.getElementById('execute-btn') ||
@@ -213,6 +225,8 @@
             }
           }
           window.setExecuteButtonRunning(scriptRunning);
+          var overrideName = state.activeOverrideName || null;
+          window.setActiveOverride(overrideName);
           var lineChanged = window._liveScriptRunLineNumber !== nextLine;
           if (lineChanged) window.setLiveScriptRunLine(nextLine);
           var isActive = scriptRunning;

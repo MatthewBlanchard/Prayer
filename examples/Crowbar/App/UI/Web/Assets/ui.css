@@ -395,6 +395,7 @@ details.catalog-group > summary { cursor:pointer; color:#8eb8ff; }
 .CodeMirror { border:1px solid #2a2e38; border-radius:6px; height:190px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px; background:#0f1724; color:#d9e6fa; }
 #live-script-editor .CodeMirror { height:140px; }
 .CodeMirror .run-line-active { background: rgba(90, 201, 119, 0.12); }
+.override-indicator { padding: 4px 10px; font-size: 12px; font-weight: 600; color: #f5c842; background: rgba(245, 200, 66, 0.10); border-left: 3px solid #f5c842; border-radius: 4px; margin-bottom: 6px; }
 .cm-s-material-darker.CodeMirror,
 .cm-s-material-darker .CodeMirror-gutters { background:#0f1724; color:#d9e6fa; border-color:#2b3749; }
 .cm-s-material-darker .CodeMirror-linenumber { color:#6e829f; }

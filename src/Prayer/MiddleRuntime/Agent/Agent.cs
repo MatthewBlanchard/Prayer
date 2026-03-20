@@ -23,6 +23,7 @@ public class SpaceMoltAgent
     public string CurrentControlModeName => ControlModeName;
     public string? LastScriptGenerationPrompt => _lastScriptGenerationPrompt;
     public int? CurrentScriptLine => _execution.CurrentScriptLine;
+    public string? ActiveOverrideName => _execution.ActiveOverrideName;
     public string? CurrentControlInput => _execution.CurrentScript;
 
     private ChannelWriter<string>? _statusWriter;

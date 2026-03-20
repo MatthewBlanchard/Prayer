@@ -886,7 +886,8 @@ internal sealed class PrayerRuntimeSession : IDisposable
             Agent.LastScriptGenerationPrompt,
             telemetry.CurrentTick > 0 ? telemetry.CurrentTick : null,
             telemetry.LastMutationPostUtc,
-            routeDto);
+            routeDto,
+            Agent.ActiveOverrideName);
     }
 
     public async Task<bool> WaitForStateChangeAsync(long sinceVersion, int waitMs, CancellationToken cancellationToken)

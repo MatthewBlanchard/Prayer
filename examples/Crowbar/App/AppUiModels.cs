@@ -179,7 +179,8 @@ public sealed record BotStateEntry(
     DateTime? LastSpaceMoltPostUtc,
     Prayer.Contracts.ActiveGoRouteDto? ActiveRoute,
     CraftingUiModel? CraftingModel,
-    SkillsUiModel? SkillsModel);
+    SkillsUiModel? SkillsModel,
+    string? ActiveOverrideName = null);
 
 public sealed record BotRouteOverlay(
     string BotId,

@@ -7,6 +7,7 @@ using System.Threading.Channels;
 using Contracts = Prayer.Contracts;
 
 AppPaths.EnsureDirectories();
+AppPaths.ResetDebugLogsOnStartup();
 
 var sink = new ChannelLogSink();
 LogSink.SetInstance(sink);
@@ -327,6 +328,45 @@ app.MapPost("/api/runtime/sessions/{id}/script/execute", (string id, RuntimeSess
         return Results.BadRequest(message);
 
     return Results.Ok(new Contracts.CommandAckResponse(session.Id, PrayerRuntimeCommandNames.ExecuteScript, message));
+});
+
+app.MapGet("/api/runtime/sessions/{id}/halt/wait", async (string id, RuntimeSessionStore store, CancellationToken cancellationToken) =>
+{
+    if (!store.TryGet(id, out var session))
+        return Results.NotFound();
+
+    try
+    {
+        await session.WaitForHaltAsync(cancellationToken);
+        return Results.Ok();
+    }
+    catch (OperationCanceledException)
+    {
+        return Results.StatusCode(499);
+    }
+});
+
+app.MapPost("/api/runtime/sessions/{id}/script/run", async (string id, Contracts.RunScriptRequest request, RuntimeSessionStore store, CancellationToken cancellationToken) =>
+{
+    if (!store.TryGet(id, out var session))
+        return Results.NotFound();
+
+    if (string.IsNullOrWhiteSpace(request.Script))
+        return Results.BadRequest("script cannot be empty");
+
+    try
+    {
+        await session.RunScriptAsync(request.Script, cancellationToken);
+        return Results.Ok();
+    }
+    catch (OperationCanceledException)
+    {
+        return Results.StatusCode(499);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(ex.Message);
+    }
 });
 
 app.MapPost("/api/runtime/sessions/{id}/halt", (string id, RuntimeSessionStore store) =>
@@ -721,6 +761,7 @@ internal sealed class PrayerRuntimeSession : IDisposable
             GetStatusLines(),
             Agent.CurrentControlInput,
             Agent.CurrentScriptLine,
+            !Agent.IsHalted || Agent.HasActiveCommand || Agent.CurrentScriptLine != null,
             Agent.LastScriptGenerationPrompt,
             telemetry.CurrentTick > 0 ? telemetry.CurrentTick : null,
             telemetry.LastMutationPostUtc,
@@ -774,6 +815,44 @@ internal sealed class PrayerRuntimeSession : IDisposable
     public bool TryExecuteScript(out string message)
     {
         return TryApplyCommand(PrayerRuntimeCommandNames.ExecuteScript, string.Empty, out message);
+    }
+
+    public async Task WaitForHaltAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var signal = Volatile.Read(ref _stateChanged);
+            if (Agent.IsHalted && !Agent.HasActiveCommand)
+                return;
+            await signal.Task.WaitAsync(cancellationToken);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    public async Task RunScriptAsync(string script, CancellationToken cancellationToken)
+    {
+        if (!TrySetScript(script, out var setMsg))
+            throw new InvalidOperationException(setMsg);
+        if (!TryExecuteScript(out var execMsg))
+            throw new InvalidOperationException(execMsg);
+
+        var versionAfterExecute = StateVersion;
+        var sawRunning = false;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var signal = Volatile.Read(ref _stateChanged);
+            var halted = Agent.IsHalted && !Agent.HasActiveCommand;
+
+            if (!halted)
+                sawRunning = true;
+            if (halted && (sawRunning || StateVersion > versionAfterExecute))
+                break;
+
+            await signal.Task.WaitAsync(cancellationToken);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     public bool TryHalt(out string message)

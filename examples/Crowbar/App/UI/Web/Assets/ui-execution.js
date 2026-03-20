@@ -201,19 +201,21 @@
           var textChanged = current !== text;
           if (textChanged) window._liveScriptEditor.setValue(text);
           var nextLine = (typeof state.currentScriptLine === 'number') ? state.currentScriptLine : null;
+          var scriptRunning = !!state.scriptRunning;
           var now = Date.now();
           if (window._haltHighlightPending) {
             if (now < window._haltHighlightPendingUntil) {
               nextLine = null;
+              scriptRunning = false;
             } else {
               window._haltHighlightPending = false;
               window._haltHighlightPendingUntil = 0;
             }
           }
-          window.setExecuteButtonRunning(nextLine !== null);
+          window.setExecuteButtonRunning(scriptRunning);
           var lineChanged = window._liveScriptRunLineNumber !== nextLine;
           if (lineChanged) window.setLiveScriptRunLine(nextLine);
-          var isActive = nextLine !== null;
+          var isActive = scriptRunning;
           window._currentScriptIdlePollMs = (textChanged || lineChanged || isActive) ? 250 : 1500;
           if (window._uiPerf) {
             window._uiPerf.setGauge('current_script_poll_ms', window._currentScriptIdlePollMs);

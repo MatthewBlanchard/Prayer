@@ -21,7 +21,8 @@ public sealed class PrayerApiClient
 
         _http = new HttpClient
         {
-            BaseAddress = new Uri(EnsureTrailingSlash(baseUrl.Trim()))
+            BaseAddress = new Uri(EnsureTrailingSlash(baseUrl.Trim())),
+            Timeout = System.Threading.Timeout.InfiniteTimeSpan
         };
     }
 
@@ -71,6 +72,23 @@ public sealed class PrayerApiClient
         var response = await _http.PostAsJsonAsync(
             $"api/runtime/sessions/{sessionId}/commands",
             new Contracts.RuntimeCommandRequest(command, argument));
+        await EnsureSuccessWithDetailsAsync(response);
+    }
+
+    public async Task WaitForHaltAsync(string sessionId, CancellationToken cancellationToken = default)
+    {
+        var response = await _http.GetAsync(
+            $"api/runtime/sessions/{sessionId}/halt/wait",
+            cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response);
+    }
+
+    public async Task RunScriptAsync(string sessionId, string script, CancellationToken cancellationToken = default)
+    {
+        var response = await _http.PostAsJsonAsync(
+            $"api/runtime/sessions/{sessionId}/script/run",
+            new Contracts.RunScriptRequest(script),
+            cancellationToken);
         await EnsureSuccessWithDetailsAsync(response);
     }
 
@@ -288,6 +306,7 @@ public sealed class PrayerApiClient
             snapshot.ExecutionStatusLines,
             snapshot.ControlInput,
             snapshot.CurrentScriptLine,
+            snapshot.ScriptRunning,
             snapshot.LastGenerationPrompt,
             snapshot.CurrentTick,
             snapshot.LastSpaceMoltPostUtc,
@@ -301,6 +320,7 @@ public sealed record AppPrayerRuntimeState(
     IReadOnlyList<string> ExecutionStatusLines,
     string? ControlInput,
     int? CurrentScriptLine,
+    bool ScriptRunning,
     string? LastGenerationPrompt,
     int? CurrentTick,
     DateTime? LastSpaceMoltPostUtc,

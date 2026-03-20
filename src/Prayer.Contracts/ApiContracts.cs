@@ -17,6 +17,7 @@ public sealed record RegisterSessionResponse(string SessionId, string Password);
 public sealed record RuntimeCommandRequest(string Command, string? Argument = null);
 
 public sealed record SetScriptRequest(string Script);
+public sealed record RunScriptRequest(string Script);
 
 public sealed record GenerateScriptRequest(string Prompt);
 public sealed record GenerateScriptResponse(string Script);
@@ -52,6 +53,7 @@ public sealed record RuntimeStateResponse(
     IReadOnlyList<string> ExecutionStatusLines,
     string? ControlInput,
     int? CurrentScriptLine,
+    bool ScriptRunning,
     string? LastGenerationPrompt,
     int? CurrentTick,
     DateTime? LastSpaceMoltPostUtc,

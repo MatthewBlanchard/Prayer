@@ -1128,11 +1128,13 @@ public sealed partial class HtmxBotWindow : IAppUi
         var botState = GetBotState(snapshot, botId);
         var script = botState?.ControlInput ?? string.Empty;
         var currentScriptLine = botState?.CurrentScriptLine;
+        var scriptRunning = botState?.ScriptRunning ?? false;
 
         return JsonSerializer.Serialize(new
         {
             script,
-            currentScriptLine
+            currentScriptLine,
+            scriptRunning
         });
     }
 

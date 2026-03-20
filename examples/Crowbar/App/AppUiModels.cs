@@ -173,6 +173,7 @@ public sealed record BotStateEntry(
     IReadOnlyList<string> ExecutionStatusLines,
     string? ControlInput,
     int? CurrentScriptLine,
+    bool ScriptRunning,
     string? LastGenerationPrompt,
     int? CurrentTick,
     DateTime? LastSpaceMoltPostUtc,

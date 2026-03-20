@@ -23,6 +23,7 @@ public sealed class ScriptGenerationService
     private readonly string _embeddingModel = "text-embedding-3-small";
     private readonly SemaphoreSlim _commandEmbeddingGate = new(1, 1);
     private Dictionary<string, float[]>? _commandEmbeddingsByName;
+    private readonly Lazy<GalaxyMapSnapshot> _mapCache;
 
     public ScriptGenerationService(
         ILLMClient plannerLlm,
@@ -36,6 +37,8 @@ public sealed class ScriptGenerationService
         _logger = logger;
         _baseSystemPrompt = baseSystemPrompt;
         _setStatus = setStatus;
+        _mapCache = new Lazy<GalaxyMapSnapshot>(
+            () => GalaxyMapSnapshotFile.LoadWithKnownPois(AppPaths.GalaxyMapFile, AppPaths.GalaxyKnownPoisFile));
 
         var embeddingApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
         if (!string.IsNullOrWhiteSpace(embeddingApiKey))
@@ -339,17 +342,18 @@ public sealed class ScriptGenerationService
         return text.Substring(firstNewline + 1, lastFence - firstNewline - 1).Trim();
     }
 
-    private static string BuildScriptGenerationStateContextBlock(GameState state, string userInput)
+    private string BuildScriptGenerationStateContextBlock(GameState state, string userInput)
     {
         var searchTerms = BuildPromptSearchTerms(userInput);
+        var map = _mapCache.Value;
 
         var topPoiMatches = FindTopMatches(
             searchTerms,
-            BuildPoiAliasMap(state),
+            BuildPoiAliasMap(state, map),
             maxMatches: 3);
         var topSystemMatches = FindTopMatches(
             searchTerms,
-            BuildSystemAliasMap(state),
+            BuildSystemAliasMap(state, map),
             maxMatches: 3);
         var topItemMatches = FindTopMatches(
             searchTerms,
@@ -443,7 +447,7 @@ public sealed class ScriptGenerationService
         return terms;
     }
 
-    private static Dictionary<string, HashSet<string>> BuildSystemAliasMap(GameState state)
+    private static Dictionary<string, HashSet<string>> BuildSystemAliasMap(GameState state, GalaxyMapSnapshot mapCache)
     {
         var aliases = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 
@@ -451,16 +455,14 @@ public sealed class ScriptGenerationService
         foreach (var systemId in state.Systems)
             AddPromptAlias(aliases, systemId, systemId);
 
-        var map = state.Galaxy?.Map?.Systems?.Count > 0
-            ? state.Galaxy.Map
-            : LoadMapCache();
+        var map = state.Galaxy?.Map?.Systems?.Count > 0 ? state.Galaxy.Map : mapCache;
         foreach (var system in map.Systems)
             AddPromptAlias(aliases, system.Id, system.Id);
 
         return aliases;
     }
 
-    private static Dictionary<string, HashSet<string>> BuildPoiAliasMap(GameState state)
+    private static Dictionary<string, HashSet<string>> BuildPoiAliasMap(GameState state, GalaxyMapSnapshot mapCache)
     {
         var aliases = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 
@@ -471,9 +473,7 @@ public sealed class ScriptGenerationService
             AddPromptAlias(aliases, poi.Id, poi.Name);
         }
 
-        var map = state.Galaxy?.Map?.Systems?.Count > 0
-            ? state.Galaxy.Map
-            : LoadMapCache();
+        var map = state.Galaxy?.Map?.Systems?.Count > 0 ? state.Galaxy.Map : mapCache;
         foreach (var system in map.Systems)
         {
             foreach (var poi in system.Pois)
@@ -634,10 +634,5 @@ public sealed class ScriptGenerationService
         return FuzzyMatchScoring.ComputeScore(query, candidateAlias);
     }
 
-    private static GalaxyMapSnapshot LoadMapCache()
-    {
-        return GalaxyMapSnapshotFile.LoadWithKnownPois(
-            AppPaths.GalaxyMapFile,
-            AppPaths.GalaxyKnownPoisFile);
-    }
+
 }

@@ -147,9 +147,13 @@ public static class DslParser
         from args in MetricArgList
         select (name.ToUpperInvariant(), args);
 
+    private static readonly TextParser<string> ParamRef =
+        Span.Regex("\\$[A-Za-z_][A-Za-z0-9_-]*").Select(x => x.ToStringValue());
+
     private static readonly TextParser<DslNumericOperandAstNode> NumericOperand =
         MetricCall.Try()
             .Select(c => (DslNumericOperandAstNode)new DslMetricCallOperandAstNode(c.Name, c.Args))
+        .Or(ParamRef.Try().Select(r => (DslNumericOperandAstNode)new DslArgumentRefOperandAstNode(r)))
         .Or(Integer.Select(n => (DslNumericOperandAstNode)new DslIntegerOperandAstNode(int.Parse(n))));
 
     private static readonly TextParser<string> ComparisonOp =
@@ -280,6 +284,12 @@ public static class DslParser
     }
 
     public static DslAstProgram ParseTree(string text)
+        => ParseTree(text, extraCommandNames: null);
+
+    /// <summary>
+    /// Parses a DSL script, treating the given extra names (e.g. skill names) as valid commands.
+    /// </summary>
+    public static DslAstProgram ParseTree(string text, IReadOnlySet<string>? extraCommandNames)
     {
         if (string.IsNullOrWhiteSpace(text))
             return new DslAstProgram(Array.Empty<DslAstNode>());
@@ -290,12 +300,39 @@ public static class DslParser
         {
             var tree = ProgramAstParser.Parse(text);
             tree = AnnotateSourceLines(text, tree);
-            ValidateTree(tree);
+            ValidateTree(tree, extraCommandNames);
             return tree;
         }
         catch (ParseException ex)
         {
             throw new FormatException($"Invalid DSL script: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Parses a DSL body (statements only, no skill/override declarations) as used inside
+    /// skill and override blocks. Skill param tokens like $station pass validation because
+    /// they match the identifier grammar; global macro resolution happens at runtime.
+    /// </summary>
+    internal static DslAstProgram ParseBodyForSkillLibrary(
+        string bodyText,
+        IReadOnlySet<string>? allSkillNames)
+    {
+        if (string.IsNullOrWhiteSpace(bodyText))
+            return new DslAstProgram(Array.Empty<DslAstNode>());
+
+        RejectRemovedConstructs(bodyText);
+
+        try
+        {
+            var tree = ProgramAstParser.Parse(bodyText);
+            // Note: no source-line annotation needed for library bodies
+            ValidateTree(tree, allSkillNames, allowDollarArgs: true);
+            return tree;
+        }
+        catch (ParseException ex)
+        {
+            throw new FormatException($"Invalid skill/override body: {ex.Message}", ex);
         }
     }
 
@@ -1296,13 +1333,18 @@ public static class DslParser
         return false;
     }
 
-    private static void ValidateTree(DslAstProgram tree)
+    private static void ValidateTree(
+        DslAstProgram tree,
+        IReadOnlySet<string>? extraCommandNames = null,
+        bool allowDollarArgs = false)
     {
-        ValidateNodes(tree.Statements);
+        ValidateNodes(tree.Statements, extraCommandNames, allowDollarArgs);
     }
 
     private static void ValidateNodes(
-        IReadOnlyList<DslAstNode> nodes)
+        IReadOnlyList<DslAstNode> nodes,
+        IReadOnlySet<string>? extraCommandNames = null,
+        bool allowDollarArgs = false)
     {
         foreach (var node in nodes)
         {
@@ -1313,14 +1355,22 @@ public static class DslParser
                     var normalizedName = (commandNode.Name ?? "").Trim().ToLowerInvariant();
                     var args = commandNode.Args ?? Array.Empty<string>();
 
-                    if (!IsCommandAllowed(normalizedName, args))
+                    if (!IsCommandAllowed(normalizedName, args, extraCommandNames))
                     {
                         throw new FormatException(
                             $"Command '{commandNode.Name}' is not recognized.");
                     }
 
-                    if (CommandSyntaxByName.TryGetValue(normalizedName, out var commandSyntax))
-                        ValidateCommandArgs(normalizedName, args, commandSyntax);
+                    // Skill calls (extra commands) accept any arguments; validation
+                    // happens at runtime when the Skill frame is pushed.
+                    bool isExtraCommand = extraCommandNames != null &&
+                        extraCommandNames.Contains(commandNode.Name ?? string.Empty);
+
+                    if (!isExtraCommand &&
+                        CommandSyntaxByName.TryGetValue(normalizedName, out var commandSyntax))
+                    {
+                        ValidateCommandArgs(normalizedName, args, commandSyntax, allowDollarArgs);
+                    }
 
                     break;
                 }
@@ -1332,7 +1382,7 @@ public static class DslParser
                             $"Invalid condition '{DslBooleanEvaluator.RenderCondition(ifNode.Condition)}': {error}.");
                     }
 
-                    ValidateNodes(ifNode.Body ?? Array.Empty<DslAstNode>());
+                    ValidateNodes(ifNode.Body ?? Array.Empty<DslAstNode>(), extraCommandNames, allowDollarArgs);
                     break;
                 }
                 case DslUntilAstNode untilNode:
@@ -1343,7 +1393,7 @@ public static class DslParser
                             $"Invalid condition '{DslBooleanEvaluator.RenderCondition(untilNode.Condition)}': {error}.");
                     }
 
-                    ValidateNodes(untilNode.Body ?? Array.Empty<DslAstNode>());
+                    ValidateNodes(untilNode.Body ?? Array.Empty<DslAstNode>(), extraCommandNames, allowDollarArgs);
                     break;
                 }
                 default:
@@ -1354,13 +1404,18 @@ public static class DslParser
 
     private static bool IsCommandAllowed(
         string commandName,
-        IReadOnlyList<string>? commandArgs)
+        IReadOnlyList<string>? commandArgs,
+        IReadOnlySet<string>? extraCommandNames = null)
     {
         var normalized = commandName.ToLowerInvariant();
         if (normalized == HaltKeyword)
             return commandArgs == null || commandArgs.Count == 0;
 
         if (CommandNameSet.Contains(normalized))
+            return true;
+
+        // Skill names from the library are valid commands in mission scripts.
+        if (extraCommandNames != null && extraCommandNames.Contains(commandName))
             return true;
 
         return (commandArgs == null || commandArgs.Count == 0) &&
@@ -1371,7 +1426,8 @@ public static class DslParser
     private static void ValidateCommandArgs(
         string commandName,
         IReadOnlyList<string> args,
-        DslCommandSyntax syntax)
+        DslCommandSyntax syntax,
+        bool allowDollarArgs = false)
     {
         var specs = ResolveArgSpecs(syntax);
         if (specs.Count == 0)
@@ -1390,6 +1446,12 @@ public static class DslParser
 
         for (int i = 0; i < args.Count; i++)
         {
+            // Inside skill/override bodies, $param tokens are allowed for any typed arg.
+            if (allowDollarArgs &&
+                args[i].StartsWith("$", StringComparison.Ordinal) &&
+                args[i].Length > 1)
+                continue;
+
             if (!IsArgValueValid(args[i], specs[i]))
             {
                 throw new FormatException(
@@ -1413,7 +1475,12 @@ public static class DslParser
     private static string? ResolveNearestStation(GameState state)
         => GalaxyStateHub.GetNearestStationId(state.System);
 
-    private static string ExpandMacroArg(string? arg, GameState? state)
+    /// <summary>
+    /// Expands a single argument token, resolving $macro references.
+    /// Returns the token unchanged (including the leading $) if state is null.
+    /// Throws FormatException for unknown macros.
+    /// </summary>
+    internal static string ExpandMacroArg(string? arg, GameState? state)
     {
         if (string.IsNullOrWhiteSpace(arg))
             return arg ?? string.Empty;

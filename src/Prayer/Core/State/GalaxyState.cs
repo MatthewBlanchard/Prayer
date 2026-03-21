@@ -357,11 +357,13 @@ internal static class GalaxyStateHub
 
         var systemMap = _map.Systems.ToDictionary(s => s.Id, StringComparer.Ordinal);
 
-        // Seed with all known stations sorted alphabetically for tie-breaking.
+        // Seed with known stations in empire systems, sorted alphabetically for tie-breaking.
         var queue = new Queue<(string SystemId, string StationId)>();
         foreach (var poi in PoiKnowledgeById.Values
             .Where(p => string.Equals(p.Type, "station", StringComparison.OrdinalIgnoreCase)
-                     && !string.IsNullOrWhiteSpace(p.SystemId))
+                     && !string.IsNullOrWhiteSpace(p.SystemId)
+                     && systemMap.ContainsKey(p.SystemId)
+                     && !string.IsNullOrWhiteSpace(systemMap[p.SystemId].Empire))
             .OrderBy(p => p.Id, StringComparer.Ordinal))
         {
             if (NearestStationBySystem.TryAdd(poi.SystemId, poi.Id))

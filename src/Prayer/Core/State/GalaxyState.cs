@@ -14,6 +14,7 @@ internal static class GalaxyStateHub
     private static readonly Dictionary<string, GalaxySystemKnowledge> SystemKnowledgeById = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, HashSet<string>> MiningCheckedPoisByResource = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, HashSet<string>> MiningExploredSystemsByResource = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, WormholeLink> WormholeLinksById = new(StringComparer.Ordinal);
     private static GalaxyState _snapshot = new();
 
     static GalaxyStateHub()
@@ -190,9 +191,65 @@ internal static class GalaxyStateHub
 
             if (changed)
             {
+                DetectWormholeLinksNoLock();
                 PersistExplorationStateNoLock();
                 RebuildSnapshotNoLock();
             }
+        }
+    }
+
+    /// <summary>
+    /// Scan POI knowledge for wormhole entrance/exit pairs and auto-register links.
+    /// Entrance POI ID: wh_entrance_XXXX, Exit POI ID: wh_exit_XXXX — shared suffix pairs them.
+    /// </summary>
+    private static void DetectWormholeLinksNoLock()
+    {
+        const string entrancePrefix = "wh_entrance_";
+        const string exitPrefix = "wh_exit_";
+
+        var entrances = new Dictionary<string, GalaxyPoiKnowledge>(StringComparer.Ordinal);
+        var exits = new Dictionary<string, GalaxyPoiKnowledge>(StringComparer.Ordinal);
+
+        foreach (var poi in PoiKnowledgeById.Values)
+        {
+            if (poi == null || string.IsNullOrWhiteSpace(poi.Id) || string.IsNullOrWhiteSpace(poi.SystemId))
+                continue;
+
+            if (poi.Id.StartsWith(entrancePrefix, StringComparison.Ordinal))
+            {
+                string suffix = poi.Id.Substring(entrancePrefix.Length);
+                entrances[suffix] = poi;
+            }
+            else if (poi.Id.StartsWith(exitPrefix, StringComparison.Ordinal))
+            {
+                string suffix = poi.Id.Substring(exitPrefix.Length);
+                exits[suffix] = poi;
+            }
+        }
+
+        foreach (var (suffix, entrance) in entrances)
+        {
+            if (WormholeLinksById.ContainsKey(entrance.Id))
+                continue;
+
+            // Try to find matching exit to determine destination system
+            string toSystem = "";
+            string exitPoiId = "";
+            if (exits.TryGetValue(suffix, out var exit))
+            {
+                toSystem = exit.SystemId;
+                exitPoiId = exit.Id;
+            }
+
+            WormholeLinksById[entrance.Id] = new WormholeLink
+            {
+                Id = entrance.Id,
+                FromSystem = entrance.SystemId,
+                ToSystem = toSystem,
+                ExitPoiId = exitPoiId,
+                DiscoveredBy = "",
+                DiscoveredAtUtc = DateTime.UtcNow
+            };
         }
     }
 
@@ -313,6 +370,59 @@ internal static class GalaxyStateHub
             PersistExplorationStateNoLock();
             RebuildSnapshotNoLock();
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Record a discovered wormhole entrance.
+    /// Mechanic: jump(target_system=entrancePoiId) traverses the wormhole (1 fuel, 1 tick).
+    /// Wormholes are one-way (entrance→exit) and temporary (~3-4 day lifespan).
+    /// </summary>
+    public static bool RecordWormholeLink(
+        string entrancePoiId,
+        string fromSystem,
+        string toSystem,
+        string exitPoiId = "",
+        string discoveredBy = "",
+        DateTime? expiresAtUtc = null)
+    {
+        if (string.IsNullOrWhiteSpace(entrancePoiId) || string.IsNullOrWhiteSpace(fromSystem) || string.IsNullOrWhiteSpace(toSystem))
+            return false;
+
+        lock (Sync)
+        {
+            if (WormholeLinksById.ContainsKey(entrancePoiId))
+                return false;
+
+            WormholeLinksById[entrancePoiId] = new WormholeLink
+            {
+                Id = entrancePoiId,
+                FromSystem = fromSystem,
+                ToSystem = toSystem,
+                ExitPoiId = exitPoiId,
+                DiscoveredBy = discoveredBy,
+                DiscoveredAtUtc = DateTime.UtcNow,
+                ExpiresAtUtc = expiresAtUtc
+            };
+
+            PersistExplorationStateNoLock();
+            RebuildSnapshotNoLock();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Get active (non-expired) wormhole links from a specific system.
+    /// </summary>
+    public static List<WormholeLink> GetActiveWormholesFrom(string systemId)
+    {
+        lock (Sync)
+        {
+            var now = DateTime.UtcNow;
+            return WormholeLinksById.Values
+                .Where(w => string.Equals(w.FromSystem, systemId, StringComparison.Ordinal)
+                         && (w.ExpiresAtUtc == null || w.ExpiresAtUtc > now))
+                .ToList();
         }
     }
 
@@ -469,9 +579,24 @@ internal static class GalaxyStateHub
                     Id = kvp.Value.Id,
                     Surveyed = kvp.Value.Surveyed
                 },
+                StringComparer.Ordinal),
+            WormholeLinksById = WormholeLinksById.ToDictionary(
+                kvp => kvp.Key,
+                kvp => CloneWormholeLink(kvp.Value),
                 StringComparer.Ordinal)
         };
     }
+
+    private static WormholeLink CloneWormholeLink(WormholeLink source) => new()
+    {
+        Id = source.Id,
+        FromSystem = source.FromSystem,
+        ToSystem = source.ToSystem,
+        ExitPoiId = source.ExitPoiId,
+        DiscoveredBy = source.DiscoveredBy,
+        DiscoveredAtUtc = source.DiscoveredAtUtc,
+        ExpiresAtUtc = source.ExpiresAtUtc
+    };
 
     private static void HydrateExplorationStateNoLock()
     {
@@ -526,6 +651,17 @@ internal static class GalaxyStateHub
 
         MergeResourceIndexNoLock(legacy.MiningCheckedPoisByResource, MiningCheckedPoisByResource);
         MergeResourceIndexNoLock(legacy.MiningExploredSystemsByResource, MiningExploredSystemsByResource);
+
+        WormholeLinksById.Clear();
+        if (legacy.WormholeLinksById != null)
+        {
+            foreach (var (linkId, link) in legacy.WormholeLinksById)
+            {
+                if (string.IsNullOrWhiteSpace(linkId) || link == null)
+                    continue;
+                WormholeLinksById[linkId] = CloneWormholeLink(link);
+            }
+        }
     }
 
     private static void PersistExplorationStateNoLock()
@@ -543,7 +679,11 @@ internal static class GalaxyStateHub
                 .ToDictionary(
                     kvp => kvp.Key,
                     kvp => ClonePoiKnowledge(kvp.Value),
-                    StringComparer.Ordinal)
+                    StringComparer.Ordinal),
+            WormholeLinksById = WormholeLinksById.ToDictionary(
+                kvp => kvp.Key,
+                kvp => CloneWormholeLink(kvp.Value),
+                StringComparer.Ordinal)
         };
         ExplorationStateStore.Save(snapshot);
     }
@@ -988,6 +1128,12 @@ internal static class GalaxyStateHub
                         Id = kvp.Value.Id,
                         Surveyed = kvp.Value.Surveyed
                     },
+                    StringComparer.Ordinal),
+            WormholeLinksById = (source.WormholeLinksById ?? new Dictionary<string, WormholeLink>(StringComparer.Ordinal))
+                .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Key) && kvp.Value != null)
+                .ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => CloneWormholeLink(kvp.Value),
                     StringComparer.Ordinal)
         };
     }

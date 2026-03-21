@@ -5,6 +5,7 @@ public sealed class CommandResult
 {
     public string Action { get; set; } = string.Empty;
     public string? Arg1 { get; set; }
+    public string? Arg2 { get; set; }
     public int? Quantity { get; set; }
     public int? SourceLine { get; set; }
 }

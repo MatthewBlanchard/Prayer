@@ -43,5 +43,20 @@
     "Prompt": "mine iron and stash it at nexus prime until 50 are stored there",
     "Script": "until STASH(nexus_prime_station, iron_ore) >= 50 {\n  mine iron_ore;\n  go nexus_prime;\n  stash;\n}",
     "CreatedUtc": "2026-03-11T00:00:00.0000000Z"
+  },
+  {
+    "Prompt": "mine vanadium ore until cargo is 80 percent full, refuel if fuel drops below 20",
+    "Script": "until CARGO() >= 80 {\n  if FUEL() < 20 { refuel; }\n  mine vanadium_ore;\n}",
+    "CreatedUtc": "2026-03-17T00:00:00.0000000Z"
+  },
+  {
+    "Prompt": "mine energy crystals until cargo full",
+    "Script": "until CARGO() >= 70 {\n  mine energy_crystal;\n}",
+    "CreatedUtc": "2026-03-17T00:00:00.0000000Z"
+  },
+  {
+    "Prompt": "mine iron ore until cargo full then go sell at station and repeat",
+    "Script": "repeat {\n  until CARGO() >= 80 { mine iron_ore; }\n  go nexus_prime;\n  dock;\n  sell;\n}",
+    "CreatedUtc": "2026-03-17T00:00:00.0000000Z"
   }
 ]

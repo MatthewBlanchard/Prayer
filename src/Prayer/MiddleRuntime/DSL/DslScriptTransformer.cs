@@ -109,11 +109,13 @@ public static class DslScriptTransformer
         var parts = step
             .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
+        var arg2Raw = parts.ElementAtOrDefault(2);
         return new CommandResult
         {
             Action = parts.ElementAtOrDefault(0) ?? "",
             Arg1 = parts.ElementAtOrDefault(1),
-            Quantity = int.TryParse(parts.ElementAtOrDefault(2), out int n)
+            Arg2 = arg2Raw,
+            Quantity = int.TryParse(arg2Raw, out int n)
                 ? n
                 : null,
             SourceLine = null

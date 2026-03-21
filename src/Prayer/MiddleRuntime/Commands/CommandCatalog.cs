@@ -34,5 +34,11 @@ public static class CommandCatalog
         new WaitCommand(),
         new CraftCommand(),
         new SelfDestructCommand(),
+        new UseItemCommand(),
+        new UndockCommand(),
+        new AttackCommand(),
+        new ScanCommand(),
+        new ReloadCommand(),
+        new JettisonCommand(),
     };
 }

@@ -24,6 +24,7 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
     private string? _resolvedSystemTarget;
     private string? _resolvedPoiTarget;
     private bool _didMoveToTarget;
+    private WormholeLink? _pendingWormholeJump; // set when we need to jump through a wormhole after traveling to entrance
 
     public bool IsAvailable(GameState state)
     {
@@ -48,6 +49,7 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
         _resolvedSystemTarget = null;
         _resolvedPoiTarget = null;
         _didMoveToTarget = false;
+        _pendingWormholeJump = null;
         client.SetActiveRoute(null);
 
         if (string.IsNullOrWhiteSpace(_target))
@@ -94,6 +96,20 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
         IRuntimeTransport client,
         GameState state)
     {
+        // Step 2 of wormhole traversal: we traveled to the entrance last tick, now jump through it
+        if (_pendingWormholeJump != null)
+        {
+            var wh = _pendingWormholeJump;
+            _pendingWormholeJump = null;
+
+            // Wormhole traversal: jump(target_system=entrance_poi_id) — 1 fuel, 1 tick
+            await client.ExecuteCommandAsync(
+                "jump",
+                new { target_system = wh.Id });
+            _didMoveToTarget = true;
+            return (false, null);
+        }
+
         string target = _target!;
         string systemTarget = _resolvedSystemTarget ?? target;
         string? poiTarget = _resolvedPoiTarget;
@@ -168,6 +184,28 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
                 ResultMessage = $"No route found to {target}!",
                 HaltScript = true
             });
+        }
+
+        // Check if next hop requires wormhole traversal (not a standard jump connection)
+        bool isStandardJump = state.Systems?.Contains(nextHop) == true;
+        if (!isStandardJump)
+        {
+            var wormholeLinks = state.Galaxy?.Knowledge?.WormholeLinksById;
+            var now = DateTime.UtcNow;
+            var wormhole = wormholeLinks?.Values.FirstOrDefault(w =>
+                string.Equals(w.FromSystem, state.System, StringComparison.Ordinal) &&
+                string.Equals(w.ToSystem, nextHop, StringComparison.Ordinal) &&
+                (w.ExpiresAtUtc == null || w.ExpiresAtUtc > now));
+
+            if (wormhole != null)
+            {
+                // Step 1: travel to the wormhole entrance POI
+                // Step 2 (next tick): jump(target_system=entrance_poi_id)
+                _pendingWormholeJump = wormhole;
+                await client.ExecuteCommandAsync("travel", new { target_poi = wormhole.Id });
+                _didMoveToTarget = true;
+                return (false, null);
+            }
         }
 
         await client.ExecuteCommandAsync(

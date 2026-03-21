@@ -16,11 +16,15 @@ public static class DslConditionCatalog
     public static IReadOnlyList<DslBooleanPredicate> BooleanPredicates { get; } = new List<DslBooleanPredicate>
     {
         new("MISSION_COMPLETE", ["mission_id"], IsMissionComplete),
+        new("IS_DOCKED", [], (state, _) => state.Docked),
     };
 
     public static IReadOnlyList<DslNumericPredicate> NumericPredicates { get; } = new List<DslNumericPredicate>
     {
         new("FUEL",    [],           (state, _)    => ResolveFuelPercent(state)),
+        new("HULL",    [],           (state, _)    => ResolveHullPercent(state)),
+        new("SHIELD",  [],           (state, _)    => ResolveShieldPercent(state)),
+        new("ARMOR",   [],           (state, _)    => state.Ship.Armor),
         new("CREDITS", [],           (state, _)    => state.Credits),
         new("CARGO",   ["item_id"],  (state, args) => ResolveItemCount(state.Ship.Cargo, args)),
         new("STASH",   ["poi_id", "item_id"],  (state, args) => ResolveStashCount(state, args)),
@@ -73,5 +77,19 @@ public static class DslConditionCatalog
         var maxFuel = state.Ship.MaxFuel;
         if (maxFuel <= 0) return 0;
         return Math.Clamp((state.Ship.Fuel * 100) / maxFuel, 0, 100);
+    }
+
+    private static int ResolveHullPercent(GameState state)
+    {
+        var max = state.Ship.MaxHull;
+        if (max <= 0) return 0;
+        return Math.Clamp((state.Ship.Hull * 100) / max, 0, 100);
+    }
+
+    private static int ResolveShieldPercent(GameState state)
+    {
+        var max = state.Ship.MaxShield;
+        if (max <= 0) return 0;
+        return Math.Clamp((state.Ship.Shield * 100) / max, 0, 100);
     }
 }

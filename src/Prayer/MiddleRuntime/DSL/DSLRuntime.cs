@@ -26,11 +26,13 @@ public class DslCommand
             DslFuzzyMatcher.ValidateArguments(action, args, specs, state);
         }
 
+        var arg2Raw = args.ElementAtOrDefault(1);
         return new CommandResult
         {
             Action = action,
             Arg1 = args.ElementAtOrDefault(0),
-            Quantity = int.TryParse(args.ElementAtOrDefault(1), out int n) ? n : null
+            Arg2 = arg2Raw,
+            Quantity = int.TryParse(arg2Raw, out int n) ? n : null
         };
     }
 }

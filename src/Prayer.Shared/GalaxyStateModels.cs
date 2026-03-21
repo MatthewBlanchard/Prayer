@@ -45,6 +45,7 @@ public class GalaxyKnowledgeState
 {
     public Dictionary<string, GalaxyPoiKnowledge> PoisById { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, GalaxySystemKnowledge> SystemsById { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, WormholeLink> WormholeLinksById { get; set; } = new(StringComparer.Ordinal);
 }
 
 public class GalaxyPoiKnowledge
@@ -67,4 +68,15 @@ public class GalaxySystemKnowledge
 {
     public string Id { get; set; } = "";
     public bool Surveyed { get; set; }
+}
+
+public class WormholeLink
+{
+    public string Id { get; set; } = "";              // entrance POI ID (e.g. "wh_entrance_8fce7fef")
+    public string FromSystem { get; set; } = "";      // system containing the entrance
+    public string ToSystem { get; set; } = "";        // destination system (where exit POI is)
+    public string ExitPoiId { get; set; } = "";       // exit POI ID (e.g. "wh_exit_8fce7fef")
+    public string DiscoveredBy { get; set; } = "";
+    public DateTime DiscoveredAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime? ExpiresAtUtc { get; set; }       // wormholes are temporary (~3-4 day lifespan)
 }

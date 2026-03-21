@@ -16,4 +16,7 @@ public sealed class ExplorationStateSnapshot
 
     // Rich POI knowledge cache, including discovered resources, shared across bots/processes.
     public Dictionary<string, GalaxyPoiKnowledge> PoisById { get; set; } = new(StringComparer.Ordinal);
+
+    // Discovered wormhole links (POI travel that teleports to another system).
+    public Dictionary<string, WormholeLink> WormholeLinksById { get; set; } = new(StringComparer.Ordinal);
 }

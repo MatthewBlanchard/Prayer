@@ -245,6 +245,24 @@ public sealed class SpaceMoltRuntimeTransportAdapter : IRuntimeTransport
             }
         }
 
+        // Add discovered wormhole links as virtual edges (one-way, expiry-aware)
+        var wormholeLinks = state.Galaxy?.Knowledge?.WormholeLinksById;
+        if (wormholeLinks != null)
+        {
+            var now = DateTime.UtcNow;
+            foreach (var link in wormholeLinks.Values)
+            {
+                if (string.IsNullOrWhiteSpace(link?.FromSystem) || string.IsNullOrWhiteSpace(link?.ToSystem))
+                    continue;
+
+                // Skip expired wormholes
+                if (link.ExpiresAtUtc != null && link.ExpiresAtUtc <= now)
+                    continue;
+
+                AddEdge(link.FromSystem, link.ToSystem);
+            }
+        }
+
         return adjacency;
     }
 

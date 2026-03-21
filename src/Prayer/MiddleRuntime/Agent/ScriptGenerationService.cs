@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -187,19 +189,29 @@ public sealed class ScriptGenerationService
             {
                 if (_commandEmbeddingsByName == null || _commandEmbeddingsByName.Count == 0)
                 {
-                    var docVectors = await EmbedBatchAsync(
-                        docs.Select(d => d.Text).ToList(),
-                        ct);
+                    var docTexts = docs.Select(d => d.Text).ToList();
+                    var contentHash = ComputeEmbeddingCacheHash(_embeddingModel, docTexts);
+                    var cached = TryLoadCommandEmbeddingsCache(contentHash);
 
-                    var map = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
-                    for (int i = 0; i < docs.Count && i < docVectors.Count; i++)
+                    if (cached != null)
                     {
-                        var vec = docVectors[i];
-                        if (vec.Length > 0)
-                            map[docs[i].Name] = vec;
+                        _commandEmbeddingsByName = cached;
                     }
+                    else
+                    {
+                        var docVectors = await EmbedBatchAsync(docTexts, ct);
 
-                    _commandEmbeddingsByName = map;
+                        var map = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
+                        for (int i = 0; i < docs.Count && i < docVectors.Count; i++)
+                        {
+                            var vec = docVectors[i];
+                            if (vec.Length > 0)
+                                map[docs[i].Name] = vec;
+                        }
+
+                        _commandEmbeddingsByName = map;
+                        SaveCommandEmbeddingsCache(contentHash, map);
+                    }
                 }
             }
             finally
@@ -287,6 +299,78 @@ public sealed class ScriptGenerationService
         }
 
         return vectors;
+    }
+
+    private static string ComputeEmbeddingCacheHash(string model, IReadOnlyList<string> texts)
+    {
+        var sb = new StringBuilder();
+        sb.Append(model);
+        sb.Append('\n');
+        foreach (var t in texts)
+        {
+            sb.Append(t);
+            sb.Append('\n');
+        }
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    private static Dictionary<string, float[]>? TryLoadCommandEmbeddingsCache(string expectedHash)
+    {
+        try
+        {
+            var path = AppPaths.CommandEmbeddingsCacheFile;
+            if (!File.Exists(path))
+                return null;
+
+            using var stream = File.OpenRead(path);
+            using var doc = JsonDocument.Parse(stream);
+            var root = doc.RootElement;
+
+            if (!root.TryGetProperty("hash", out var hashProp) ||
+                hashProp.GetString() != expectedHash)
+                return null;
+
+            if (!root.TryGetProperty("entries", out var entriesProp) ||
+                entriesProp.ValueKind != JsonValueKind.Object)
+                return null;
+
+            var map = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
+            foreach (var prop in entriesProp.EnumerateObject())
+            {
+                if (prop.Value.ValueKind != JsonValueKind.Array)
+                    continue;
+                var vec = new float[prop.Value.GetArrayLength()];
+                int idx = 0;
+                foreach (var n in prop.Value.EnumerateArray())
+                    vec[idx++] = n.GetSingle();
+                map[prop.Name] = vec;
+            }
+
+            return map.Count > 0 ? map : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void SaveCommandEmbeddingsCache(string hash, Dictionary<string, float[]> entries)
+    {
+        try
+        {
+            var payload = new
+            {
+                hash,
+                entries
+            };
+            var json = JsonSerializer.Serialize(payload);
+            File.WriteAllText(AppPaths.CommandEmbeddingsCacheFile, json);
+        }
+        catch
+        {
+            // Cache save is best-effort.
+        }
     }
 
     private static double CosineSimilarity(float[] a, float[] b)

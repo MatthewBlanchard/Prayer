@@ -33,6 +33,7 @@ public static class AppPaths
     public static readonly string GoArgValidationMapDumpLogFile = Path.Combine(LogDir, "go_arg_validation_mapdump.log");
     public static readonly string UiHttpErrorLogFile = Path.Combine(LogDir, "ui_http_errors.log");
     public static readonly string UiHttpTraceLogFile = Path.Combine(LogDir, "ui_http_trace.log");
+    public static readonly string OverrideLogFile = Path.Combine(LogDir, "overrides.log");
     public static readonly string ScriptGenerationExamplesFile = Path.Combine(CacheDir, "script_generation_examples.json");
     public static readonly string SeedScriptGenerationExamplesFile = Path.Combine("seed", "script_generation_examples.json");
     public static readonly string SavedBotsFile = Path.Combine(CacheDir, "saved_bots.json");
@@ -46,6 +47,7 @@ public static class AppPaths
 
     public static readonly string GalaxyMapFile = Path.Combine(CacheDir, "galaxy_map.json");
     public static readonly string GalaxyKnownPoisFile = Path.Combine(CacheDir, "known_pois.json");
+    public static readonly string CommandEmbeddingsCacheFile = Path.Combine(CacheDir, "command_embeddings.json");
 
     private static readonly string[] LogsToResetOnStartup =
     {
@@ -71,7 +73,8 @@ public static class AppPaths
         GoArgValidationLogFile,
         GoArgValidationMapDumpLogFile,
         UiHttpErrorLogFile,
-        UiHttpTraceLogFile
+        UiHttpTraceLogFile,
+        OverrideLogFile
     };
 
     public static void EnsureDirectories()

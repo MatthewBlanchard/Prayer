@@ -9,7 +9,7 @@ public class CancelSellCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
     public override string Name => "cancel_sell";
     protected override bool RequiresStation => true;
     public override DslCommandSyntax GetDslSyntax() => new(
-        DslArgKind.Item,
+        DslArgType.ItemId,
         ArgRequired: true);
 
     protected override bool IsAvailableWhenDocked(GameState state)

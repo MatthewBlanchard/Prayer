@@ -35,6 +35,7 @@ internal static class ShipyardTabRenderer
         AppendStatCard(sb, "Cargo", model.Cargo);
         sb.AppendLine("</div>");
         sb.AppendLine("<div class='mission-actions' style='margin-bottom:8px;'>");
+        AppendScriptChip(sb, "set_home;", "Set Home");
         sb.AppendLine("<button type='button' class='space-chip mission-chip-danger' onclick='window.confirmSelfDestruct()'>Self Destruct</button>");
         sb.AppendLine("</div>");
 

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -11,20 +10,14 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
         ArgSpecs: new[]
         {
             new DslArgumentSpec(
-                DslArgKind.System | DslArgKind.Any,
-                Required: true,
-                ArgTypeWeights: new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["system"] = 1.08,
-                    ["poi"] = 1.00
-                })
+                DslArgType.GoTarget,
+                Required: true)
         });
 
     private string? _target;
     private string? _resolvedSystemTarget;
     private string? _resolvedPoiTarget;
     private bool _didMoveToTarget;
-    private WormholeLink? _pendingWormholeJump; // set when we need to jump through a wormhole after traveling to entrance
 
     public bool IsAvailable(GameState state)
     {
@@ -49,7 +42,6 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
         _resolvedSystemTarget = null;
         _resolvedPoiTarget = null;
         _didMoveToTarget = false;
-        _pendingWormholeJump = null;
         client.SetActiveRoute(null);
 
         if (string.IsNullOrWhiteSpace(_target))
@@ -96,20 +88,6 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
         IRuntimeTransport client,
         GameState state)
     {
-        // Step 2 of wormhole traversal: we traveled to the entrance last tick, now jump through it
-        if (_pendingWormholeJump != null)
-        {
-            var wh = _pendingWormholeJump;
-            _pendingWormholeJump = null;
-
-            // Wormhole traversal: jump(target_system=entrance_poi_id) — 1 fuel, 1 tick
-            await client.ExecuteCommandAsync(
-                "jump",
-                new { target_system = wh.Id });
-            _didMoveToTarget = true;
-            return (false, null);
-        }
-
         string target = _target!;
         string systemTarget = _resolvedSystemTarget ?? target;
         string? poiTarget = _resolvedPoiTarget;
@@ -186,28 +164,6 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
             });
         }
 
-        // Check if next hop requires wormhole traversal (not a standard jump connection)
-        bool isStandardJump = state.Systems?.Contains(nextHop) == true;
-        if (!isStandardJump)
-        {
-            var wormholeLinks = state.Galaxy?.Knowledge?.WormholeLinksById;
-            var now = DateTime.UtcNow;
-            var wormhole = wormholeLinks?.Values.FirstOrDefault(w =>
-                string.Equals(w.FromSystem, state.System, StringComparison.Ordinal) &&
-                string.Equals(w.ToSystem, nextHop, StringComparison.Ordinal) &&
-                (w.ExpiresAtUtc == null || w.ExpiresAtUtc > now));
-
-            if (wormhole != null)
-            {
-                // Step 1: travel to the wormhole entrance POI
-                // Step 2 (next tick): jump(target_system=entrance_poi_id)
-                _pendingWormholeJump = wormhole;
-                await client.ExecuteCommandAsync("travel", new { target_poi = wormhole.Id });
-                _didMoveToTarget = true;
-                return (false, null);
-            }
-        }
-
         await client.ExecuteCommandAsync(
             "jump",
             new { target_system = nextHop });
@@ -233,6 +189,25 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
         if (localPoi != null)
             return (true, state.System, target);
 
+        var localPoiFromBaseId = state.POIs.FirstOrDefault(p => string.Equals(p.BaseId, target, StringComparison.Ordinal));
+        if (localPoiFromBaseId != null)
+            return (true, state.System, localPoiFromBaseId.Id);
+
+        if (string.Equals(state.CurrentPOI?.BaseId, target, StringComparison.Ordinal) &&
+            !string.IsNullOrWhiteSpace(state.CurrentPOI?.Id))
+        {
+            return (true, state.System, state.CurrentPOI.Id);
+        }
+
+        foreach (var poiKnowledge in state.Galaxy?.Knowledge?.PoisById?.Values ?? Enumerable.Empty<GalaxyPoiKnowledge>())
+        {
+            if (string.IsNullOrWhiteSpace(poiKnowledge?.Id) || string.IsNullOrWhiteSpace(poiKnowledge?.SystemId))
+                continue;
+
+            if (string.Equals(poiKnowledge.BaseId, target, StringComparison.Ordinal))
+                return (true, poiKnowledge.SystemId, poiKnowledge.Id);
+        }
+
         GalaxyMapSnapshot map = await client.GetMapSnapshotAsync();
         foreach (var systemObj in map.Systems)
         {
@@ -254,6 +229,15 @@ public class GoCommand : IMultiTurnCommand, IDslCommandGrammar
                 if (string.Equals(poiId, target, StringComparison.Ordinal))
                     return (true, systemId, poiId);
             }
+        }
+
+        foreach (var knownPoi in map.KnownPois)
+        {
+            if (string.IsNullOrWhiteSpace(knownPoi?.Id) || string.IsNullOrWhiteSpace(knownPoi.SystemId))
+                continue;
+
+            if (string.Equals(knownPoi.BaseId, target, StringComparison.Ordinal))
+                return (true, knownPoi.SystemId, knownPoi.Id);
         }
 
         return (false, null, null);

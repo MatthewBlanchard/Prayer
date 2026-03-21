@@ -38,13 +38,20 @@ public sealed class DslAstProgram
 public abstract record DslAstNode;
 
 public sealed record DslCommandAstNode(string Name, IReadOnlyList<string> Args, int SourceLine = 0) : DslAstNode;
-public sealed record DslRepeatAstNode(IReadOnlyList<DslAstNode> Body, int SourceLine = 0) : DslAstNode;
 public sealed record DslIfAstNode(DslConditionAstNode Condition, IReadOnlyList<DslAstNode> Body, int SourceLine = 0) : DslAstNode;
 public sealed record DslUntilAstNode(DslConditionAstNode Condition, IReadOnlyList<DslAstNode> Body, int SourceLine = 0) : DslAstNode;
 
 public static class DslParser
 {
     private const string HaltKeyword = "halt";
+    private readonly record struct DslMacroDefinition(
+        string Description,
+        Func<GameState, string?> Resolver);
+
+    private static readonly GameState PromptHelpState = new()
+    {
+        CurrentPOI = new POIInfo()
+    };
 
     private static readonly IReadOnlyDictionary<string, string[]> PromptArgNameOverrides =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
@@ -76,8 +83,23 @@ public static class DslParser
         BuildCommandNameSet(Commands);
     private static readonly IReadOnlyDictionary<string, DslCommandSyntax> CommandSyntaxByName =
         BuildCommandSyntaxByName(Commands);
+    private static readonly IReadOnlyDictionary<string, DslMacroDefinition> Macros =
+        new Dictionary<string, DslMacroDefinition>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["home"] = new(
+                "your home base id",
+                state => state.HomeBase),
+            ["here"] = new(
+                "your current system id",
+                state => state.System),
+            ["nearest_station"] = new(
+                "the id of the nearest station by jump count",
+                ResolveNearestStation),
+        };
     private static readonly TextParser<Unit> Ws =
         Character.WhiteSpace.Many().Value(Unit.Value);
+
+    public readonly record struct DslCommandPromptDoc(string Name, string Text);
 
     private static readonly TextParser<Unit> Ws1 =
         Character.WhiteSpace.AtLeastOnce().Value(Unit.Value);
@@ -96,7 +118,7 @@ public static class DslParser
     // Command args must support ids like mission UUID fragments that can start
     // with digits and then include letters/hyphens (e.g. "6a1b-...").
     private static readonly TextParser<string> ArgIdentifier =
-        Span.Regex("[A-Za-z0-9_][A-Za-z0-9_-]*").Select(x => x.ToStringValue());
+        Span.Regex("\\$?[A-Za-z0-9_][A-Za-z0-9_-]*").Select(x => x.ToStringValue());
 
     private static readonly TextParser<string> ArgumentToken =
         ArgIdentifier.Try().Or(Integer);
@@ -125,9 +147,13 @@ public static class DslParser
         from args in MetricArgList
         select (name.ToUpperInvariant(), args);
 
+    private static readonly TextParser<string> ParamRef =
+        Span.Regex("\\$[A-Za-z_][A-Za-z0-9_-]*").Select(x => x.ToStringValue());
+
     private static readonly TextParser<DslNumericOperandAstNode> NumericOperand =
         MetricCall.Try()
             .Select(c => (DslNumericOperandAstNode)new DslMetricCallOperandAstNode(c.Name, c.Args))
+        .Or(ParamRef.Try().Select(r => (DslNumericOperandAstNode)new DslArgumentRefOperandAstNode(r)))
         .Or(Integer.Select(n => (DslNumericOperandAstNode)new DslIntegerOperandAstNode(int.Parse(n))));
 
     private static readonly TextParser<string> ComparisonOp =
@@ -157,16 +183,6 @@ public static class DslParser
         from _ in Ws
         from _semi in Character.EqualTo(';')
         select (DslAstNode)new DslCommandAstNode(commandName, commandArgs);
-
-    private static readonly TextParser<DslAstNode> RepeatAst =
-        from _repeat in Span.EqualToIgnoreCase("repeat").Value(Unit.Value)
-        from _ in Ws
-        from _open in Character.EqualTo('{')
-        from __ in Ws
-        from body in Superpower.Parse.Ref(() => StatementAst!).Many()
-        from ___ in Ws
-        from _close in Character.EqualTo('}')
-        select (DslAstNode)new DslRepeatAstNode(body);
 
     private static readonly TextParser<DslAstNode> IfAst =
         from _if in Span.EqualToIgnoreCase("if").Value(Unit.Value)
@@ -216,9 +232,6 @@ public static class DslParser
 
         if (StartsWithKeyword(input, "if", requireWhitespaceAfter: true))
             return IfAst(input);
-
-        if (StartsWithKeyword(input, "repeat", requireWhitespaceAfter: false))
-            return RepeatAst(input);
 
         return CommandAst(input);
     }
@@ -271,21 +284,82 @@ public static class DslParser
     }
 
     public static DslAstProgram ParseTree(string text)
+        => ParseTree(text, extraSkills: null);
+
+    /// <summary>
+    /// Parses a DSL script, validating skill calls against their declared parameter types.
+    /// </summary>
+    public static DslAstProgram ParseTree(
+        string text,
+        IReadOnlyDictionary<string, IReadOnlyList<DslSkillParamDef>>? extraSkills)
     {
         if (string.IsNullOrWhiteSpace(text))
             return new DslAstProgram(Array.Empty<DslAstNode>());
+
+        RejectRemovedConstructs(text);
 
         try
         {
             var tree = ProgramAstParser.Parse(text);
             tree = AnnotateSourceLines(text, tree);
-            ValidateTree(tree);
+            ValidateTree(tree, extraSkills);
             return tree;
         }
         catch (ParseException ex)
         {
             throw new FormatException($"Invalid DSL script: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// Parses a DSL body (statements only, no skill/override declarations) as used inside
+    /// skill and override blocks. Skill param tokens like $station pass validation because
+    /// they match the identifier grammar; global macro resolution happens at runtime.
+    /// </summary>
+    internal static DslAstProgram ParseBodyForSkillLibrary(
+        string bodyText,
+        IReadOnlySet<string>? allSkillNames)
+    {
+        if (string.IsNullOrWhiteSpace(bodyText))
+            return new DslAstProgram(Array.Empty<DslAstNode>());
+
+        RejectRemovedConstructs(bodyText);
+
+        try
+        {
+            var tree = ProgramAstParser.Parse(bodyText);
+            // Note: no source-line annotation needed for library bodies
+            ValidateTree(tree, allSkillNames, allowDollarArgs: true);
+            return tree;
+        }
+        catch (ParseException ex)
+        {
+            throw new FormatException($"Invalid skill/override body: {ex.Message}", ex);
+        }
+    }
+
+    private static void RejectRemovedConstructs(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return;
+
+        var repeatMatch = System.Text.RegularExpressions.Regex.Match(
+            text,
+            @"\brepeat\b\s*\{",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        if (!repeatMatch.Success)
+            return;
+
+        int line = 1;
+        for (int i = 0; i < repeatMatch.Index; i++)
+        {
+            if (text[i] == '\n')
+                line++;
+        }
+
+        throw new FormatException(
+            $"Line {line}: 'repeat {{ ... }}' is no longer supported. Use an 'until <CONDITION> {{ ... }}' block instead.");
     }
 
     private readonly record struct StatementLineEntry(int Line);
@@ -313,30 +387,9 @@ public static class DslParser
             {
                 SourceLine = ConsumeLine(entries, ref entryIndex)
             },
-            DslRepeatAstNode repeatNode => AnnotateRepeatNode(repeatNode, entries, ref entryIndex),
             DslIfAstNode ifNode => AnnotateIfNode(ifNode, entries, ref entryIndex),
             DslUntilAstNode untilNode => AnnotateUntilNode(untilNode, entries, ref entryIndex),
             _ => node
-        };
-    }
-
-    private static DslRepeatAstNode AnnotateRepeatNode(
-        DslRepeatAstNode repeatNode,
-        IReadOnlyList<StatementLineEntry> entries,
-        ref int entryIndex)
-    {
-        var body = new List<DslAstNode>(repeatNode.Body.Count);
-        foreach (var child in repeatNode.Body)
-            body.Add(AnnotateNodeLine(child, entries, ref entryIndex));
-
-        int sourceLine = repeatNode.SourceLine > 0
-            ? repeatNode.SourceLine
-            : InferRepeatSourceLine(repeatNode with { Body = body }, entries, entryIndex);
-
-        return repeatNode with
-        {
-            SourceLine = sourceLine,
-            Body = body
         };
     }
 
@@ -378,24 +431,6 @@ public static class DslParser
             SourceLine = sourceLine,
             Body = body
         };
-    }
-
-    private static int InferRepeatSourceLine(
-        DslRepeatAstNode repeatNode,
-        IReadOnlyList<StatementLineEntry> entries,
-        int entryIndex)
-    {
-        if (repeatNode.Body != null && repeatNode.Body.Count > 0)
-        {
-            var firstLine = FindFirstCommandLine(repeatNode.Body);
-            if (firstLine > 0)
-                return firstLine;
-        }
-
-        if (entryIndex < entries.Count)
-            return entries[entryIndex].Line;
-
-        return 1;
     }
 
     private static int InferIfSourceLine(
@@ -442,13 +477,6 @@ public static class DslParser
             {
                 case DslCommandAstNode commandNode when commandNode.SourceLine > 0:
                     return commandNode.SourceLine;
-                case DslRepeatAstNode repeatNode:
-                {
-                    var nested = FindFirstCommandLine(repeatNode.Body);
-                    if (nested > 0)
-                        return nested;
-                    break;
-                }
                 case DslIfAstNode ifNode:
                 {
                     var nested = FindFirstCommandLine(ifNode.Body);
@@ -505,12 +533,6 @@ public static class DslParser
                 {
                     int identifierLine = line;
                     string token = ReadIdentifier(text, ref i);
-                    if (IsRepeatToken(token, text, i))
-                    {
-                        SkipRepeatHeader(text, ref i, ref line);
-                        expectingCommand = true;
-                        continue;
-                    }
                     if (IsIfToken(token, text, i))
                     {
                         SkipIfHeader(text, ref i, ref line);
@@ -550,16 +572,6 @@ public static class DslParser
         return entries;
     }
 
-    private static bool IsRepeatToken(string token, string text, int indexAfterToken)
-    {
-        if (!token.Equals("repeat", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        int i = indexAfterToken;
-        SkipWhitespace(text, ref i);
-        return i < text.Length && text[i] == '{';
-    }
-
     private static bool IsIfToken(string token, string text, int indexAfterToken)
     {
         if (!token.Equals("if", StringComparison.OrdinalIgnoreCase))
@@ -578,13 +590,6 @@ public static class DslParser
         int i = indexAfterToken;
         SkipWhitespace(text, ref i);
         return HasConditionAndOpeningBrace(text, i);
-    }
-
-    private static void SkipRepeatHeader(string text, ref int index, ref int line)
-    {
-        SkipWhitespaceAndCountLines(text, ref index, ref line);
-        if (index < text.Length && text[index] == '{')
-            index++;
     }
 
     private static void SkipIfHeader(string text, ref int index, ref int line)
@@ -644,16 +649,6 @@ public static class DslParser
             index++;
     }
 
-    private static void SkipWhitespaceAndCountLines(string text, ref int index, ref int line)
-    {
-        while (index < text.Length && char.IsWhiteSpace(text[index]))
-        {
-            if (text[index] == '\n')
-                line++;
-            index++;
-        }
-    }
-
     private static bool IsIdentifierStart(char c)
     {
         return char.IsLetter(c) || c == '_';
@@ -682,10 +677,8 @@ public static class DslParser
         var steps = commands.Select(c =>
         {
             var parts = new List<string> { c.Action };
-            if (!string.IsNullOrWhiteSpace(c.Arg1))
-                parts.Add(c.Arg1!);
-            if (c.Quantity.HasValue)
-                parts.Add(c.Quantity.Value.ToString());
+            if (c.Args.Count > 0)
+                parts.AddRange(c.Args.Where(a => !string.IsNullOrWhiteSpace(a)));
             return string.Join(" ", parts);
         });
         return new DslProgram(steps);
@@ -697,7 +690,7 @@ public static class DslParser
 
         sb.AppendLine("root ::= ws script ws");
         sb.AppendLine("ws ::= [ \\t\\n\\r]*");
-        sb.AppendLine("identifier ::= [A-Za-z_][A-Za-z0-9_-]*");
+        sb.AppendLine("identifier ::= [\\$]?[A-Za-z_][A-Za-z0-9_-]*");
         sb.AppendLine("integer ::= [0-9]+");
         sb.AppendLine();
         BuildGrammar(sb);
@@ -707,40 +700,104 @@ public static class DslParser
 
     public static string BuildPromptDslReferenceBlock()
     {
-        var commands = Commands
+        return BuildPromptDslReferenceBlock(
+            userInput: null,
+            exampleScripts: null);
+    }
+
+    public static string BuildPromptDslReferenceBlock(
+        string? userInput,
+        IReadOnlyList<string>? exampleScripts)
+    {
+        var commands = SelectPromptCommands(
+            userInput,
+            exampleScripts,
+            preferredCommandNames: null);
+        return BuildPromptDslReferenceBlockCore(commands);
+    }
+
+    public static string BuildPromptDslReferenceBlock(
+        string? userInput,
+        IReadOnlyList<string>? exampleScripts,
+        IReadOnlyList<string>? preferredCommandNames,
+        IReadOnlyList<DslSkillAstNode>? skills = null)
+    {
+        var commands = SelectPromptCommands(
+            userInput,
+            exampleScripts,
+            preferredCommandNames);
+        return BuildPromptDslReferenceBlockCore(commands, skills);
+    }
+
+    public static IReadOnlyList<DslCommandPromptDoc> GetPromptCommandDocs()
+    {
+        return Commands
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(c =>
+            {
+                var help = (c.BuildHelp(PromptHelpState) ?? string.Empty).Trim();
+                return new DslCommandPromptDoc(
+                    c.Name,
+                    $"{c.Name} {help}".Trim());
+            })
+            .ToList();
+    }
+
+    private static string BuildPromptDslReferenceBlockCore(
+        IReadOnlyList<ICommand> commands,
+        IReadOnlyList<DslSkillAstNode>? skills = null)
+    {
+        var ordered = commands
             .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var entries = commands
+        var entries = ordered
             .Select(c => (Command: c, Syntax: CommandSyntaxByName[c.Name]))
             .ToList();
 
-        var commandSignatures = entries
-            .Select(e => BuildPromptCommandSignature(e.Command.Name, e.Syntax))
+        var commandReferences = entries
+            .Select(e => BuildPromptCommandReferenceLine(e.Command, e.Syntax))
             .ToList();
-        commandSignatures.Add("halt;");
+        commandReferences.Add("halt; (args: none) -> stop script execution");
 
         var sb = new StringBuilder();
         sb.AppendLine("DSL command reference (terminate commands with ;):");
 
-        if (commandSignatures.Count > 0)
+        if (commandReferences.Count > 0)
         {
             sb.AppendLine("Commands:");
-            foreach (var signature in commandSignatures)
-                sb.AppendLine($"- {signature}");
+            foreach (var commandReference in commandReferences)
+                sb.AppendLine($"- {commandReference}");
+        }
+
+        if (skills != null && skills.Count > 0)
+        {
+            sb.AppendLine("Skills (reusable subscripts, call like commands):");
+            foreach (var skill in skills.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                var paramList = skill.Params.Count == 0
+                    ? "none"
+                    : string.Join(", ", skill.Params.Select(p => $"{p.Name}: {DescribePromptArgType(new DslArgumentSpec(p.Type))}"));
+                sb.AppendLine($"- {skill.Name}; (args: {paramList})");
+            }
         }
 
         sb.AppendLine();
         sb.AppendLine("Keywords:");
-        sb.AppendLine("- repeat: infinite runtime loop block");
         sb.AppendLine("- until: runtime loop block that exits when a condition is true");
         sb.AppendLine("- if: conditional block executed only when a condition is true");
         sb.AppendLine("- halt: stop script execution");
         sb.AppendLine();
         sb.AppendLine("Rules:");
-        sb.AppendLine("- Blocks are supported via: repeat { ... }");
         sb.AppendLine("- Conditional blocks are supported via: if <CONDITION> { ... }");
         sb.AppendLine("- Until blocks are supported via: until <CONDITION> { ... }");
+        if (Macros.Count > 0)
+        {
+            var macroReferences = Macros
+                .OrderBy(m => m.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(m => $"`${m.Key}` expands to {m.Value.Description}");
+            sb.AppendLine($"- Text macros: {string.Join(", ", macroReferences)}.");
+        }
         var booleanSigs = DslConditionCatalog.BooleanPredicates
             .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
             .Select(p => FormatPredicateSig(p.Name, p.ParamNames))
@@ -753,36 +810,142 @@ public static class DslParser
             sb.AppendLine($"- Boolean conditions: {string.Join(", ", booleanSigs)}");
         if (numericSigs.Count > 0)
             sb.AppendLine($"- Numeric conditions: {string.Join(", ", numericSigs)}");
-        sb.AppendLine("- All commands still end with ';' inside repeat blocks.");
+        sb.AppendLine("- MINED(item_id) and STASHED(item_id) are script-scoped counters; both reset to 0 when a new script is loaded.");
+        sb.AppendLine("- All commands still end with ';' inside blocks.");
         sb.AppendLine("- Do not add a trailing 'halt;' at script end unless user explicitly asks to stop/pause.");
-        sb.AppendLine();
-        sb.AppendLine("Examples:");
-        sb.AppendLine("- if MISSION_COMPLETE(012345) {");
-        sb.AppendLine("    halt;");
-        sb.AppendLine("  }");
-        sb.AppendLine("- if FUEL() > 5 {");
-        sb.AppendLine("    go node_alpha;");
-        sb.AppendLine("  }");
-        sb.AppendLine("- until CARGO(iron_ore) >= 10 {");
-        sb.AppendLine("    mine iron_ore;");
-        sb.AppendLine("  }");
-        sb.AppendLine("- until STASH(nexus_prime_station, iron_ore) >= 50 {");
-        sb.AppendLine("    mine iron_ore;");
-        sb.AppendLine("    go nexus_prime;");
-        sb.AppendLine("    stash iron_ore;");
-        sb.AppendLine("  }");
-        sb.AppendLine("- explore;");
         sb.AppendLine();
 
         return sb.ToString();
     }
 
+    private static IReadOnlyList<ICommand> SelectPromptCommands(
+        string? userInput,
+        IReadOnlyList<string>? exampleScripts,
+        IReadOnlyList<string>? preferredCommandNames)
+    {
+        var selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var name in preferredCommandNames ?? Array.Empty<string>())
+        {
+            if (CommandNameSet.Contains(name))
+                selected.Add(name);
+        }
+
+        foreach (var name in ExtractCommandsFromExampleScripts(exampleScripts))
+            selected.Add(name);
+
+        foreach (var name in SelectCommandsByPromptSimilarity(userInput))
+            selected.Add(name);
+
+        if (selected.Count == 0)
+        {
+            return Commands
+                .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+                .Take(10)
+                .ToList();
+        }
+
+        return Commands
+            .Where(c => selected.Contains(c.Name))
+            .ToList();
+    }
+
+    private static IReadOnlyList<string> ExtractCommandsFromExampleScripts(
+        IReadOnlyList<string>? exampleScripts)
+    {
+        if (exampleScripts == null || exampleScripts.Count == 0)
+            return Array.Empty<string>();
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var script in exampleScripts)
+        {
+            if (string.IsNullOrWhiteSpace(script))
+                continue;
+
+            try
+            {
+                var tree = ParseTree(script);
+                CollectCommandNames(tree.Statements, names);
+            }
+            catch
+            {
+                // Best-effort extraction; invalid examples should not break prompt building.
+            }
+        }
+
+        return names.ToList();
+    }
+
+    private static void CollectCommandNames(
+        IReadOnlyList<DslAstNode> nodes,
+        HashSet<string> names)
+    {
+        foreach (var node in nodes ?? Array.Empty<DslAstNode>())
+        {
+            switch (node)
+            {
+                case DslCommandAstNode commandNode:
+                {
+                    var normalized = (commandNode.Name ?? string.Empty).Trim().ToLowerInvariant();
+                    if (CommandNameSet.Contains(normalized))
+                        names.Add(normalized);
+                    break;
+                }
+                case DslIfAstNode ifNode:
+                    CollectCommandNames(ifNode.Body ?? Array.Empty<DslAstNode>(), names);
+                    break;
+                case DslUntilAstNode untilNode:
+                    CollectCommandNames(untilNode.Body ?? Array.Empty<DslAstNode>(), names);
+                    break;
+            }
+        }
+    }
+
+    private static IReadOnlyList<string> SelectCommandsByPromptSimilarity(string? userInput)
+    {
+        var terms = BuildPromptTerms(userInput);
+        if (terms.Count == 0)
+            return Array.Empty<string>();
+
+        var matches = new List<string>();
+        foreach (var command in Commands)
+        {
+            var haystack =
+                $"{command.Name} {(command.BuildHelp(PromptHelpState) ?? string.Empty)}"
+                .ToLowerInvariant();
+            if (terms.Any(t => haystack.Contains(t, StringComparison.Ordinal)))
+                matches.Add(command.Name);
+        }
+
+        return matches;
+    }
+
+    private static IReadOnlyList<string> BuildPromptTerms(string? userInput)
+    {
+        if (string.IsNullOrWhiteSpace(userInput))
+            return Array.Empty<string>();
+
+        var tokens = userInput
+            .ToLowerInvariant()
+            .Split(new[] { ' ', '\t', '\r', '\n', ',', '.', ';', ':', '!', '?', '(', ')', '[', ']', '{', '}', '"', '\'' },
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(t => t.Trim())
+            .Where(t => t.Length >= 3)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        return tokens;
+    }
+
     internal static string NormalizeCommandStep(
         string commandName,
-        IReadOnlyList<string>? commandArgs)
+        IReadOnlyList<string>? commandArgs,
+        GameState? state = null)
     {
         var token = commandName.ToLowerInvariant();
-        var args = (commandArgs ?? Array.Empty<string>()).ToList();
+        var args = (commandArgs ?? Array.Empty<string>())
+            .Select(arg => ExpandMacroArg(arg, state))
+            .ToList();
         string normalizedName;
         DslCommandSyntax syntax;
 
@@ -916,11 +1079,10 @@ public static class DslParser
         }
 
         sb.AppendLine("condition_expr ::= [^\\{\\n\\r][^\\{\\n\\r]*");
-        sb.AppendLine("repeat_stmt ::= \"repeat\" ws \"{\" ws statement* ws \"}\"");
         sb.AppendLine("if_stmt ::= \"if\" ws condition_expr ws \"{\" ws statement* ws \"}\"");
         sb.AppendLine("until_stmt ::= \"until\" ws condition_expr ws \"{\" ws statement* ws \"}\"");
         sb.AppendLine("halt_stmt ::= \"halt\" ws \";\"");
-        sb.AppendLine($"statement ::= {string.Join(" | ", statementRules)} | repeat_stmt | if_stmt | until_stmt | halt_stmt");
+        sb.AppendLine($"statement ::= {string.Join(" | ", statementRules)} | if_stmt | until_stmt | halt_stmt");
         sb.AppendLine("script ::= (ws statement)*");
         sb.AppendLine();
     }
@@ -939,7 +1101,7 @@ public static class DslParser
         {
             var parts = new List<string> { nameLiteral };
             for (int i = 0; i < count; i++)
-                parts.Add($"ws {ArgKindPattern(specs[i].Kind)}");
+                parts.Add($"ws {ArgKindPattern(specs[i].Type)}");
             patterns.Add(string.Join(" ", parts));
         }
 
@@ -953,10 +1115,10 @@ public static class DslParser
         if (syntax.ArgSpecs != null && syntax.ArgSpecs.Count > 0)
             return syntax.ArgSpecs;
 
-        if (syntax.ArgKind == DslArgKind.None)
+        if (syntax.ArgType == DslArgType.None)
             return Array.Empty<DslArgumentSpec>();
 
-        return new[] { new DslArgumentSpec(syntax.ArgKind, syntax.ArgRequired, syntax.DefaultArg) };
+        return new[] { new DslArgumentSpec(syntax.ArgType, syntax.ArgRequired, syntax.DefaultArg) };
     }
 
     private static string BuildPromptCommandSignature(string commandName, DslCommandSyntax syntax)
@@ -968,6 +1130,98 @@ public static class DslParser
         var argTokens = BuildPromptArgTokens(commandName, specs);
 
         return $"{commandName} {string.Join(" ", argTokens)};";
+    }
+
+    private static string BuildPromptCommandReferenceLine(ICommand command, DslCommandSyntax syntax)
+    {
+        var signature = BuildPromptCommandSignature(command.Name, syntax);
+        var specs = ResolveArgSpecs(syntax);
+        var argsSummary = BuildPromptArgsSummary(command.Name, specs);
+        var description = BuildPromptCommandDescription(command);
+
+        if (string.IsNullOrWhiteSpace(argsSummary))
+        {
+            return string.IsNullOrWhiteSpace(description)
+                ? signature
+                : $"{signature} -> {description}";
+        }
+
+        return string.IsNullOrWhiteSpace(description)
+            ? $"{signature} (args: {argsSummary})"
+            : $"{signature} (args: {argsSummary}) -> {description}";
+    }
+
+    private static string BuildPromptArgsSummary(
+        string commandName,
+        IReadOnlyList<DslArgumentSpec> specs)
+    {
+        if (specs.Count == 0)
+            return "none";
+
+        var tokens = BuildPromptArgTokens(commandName, specs);
+        var details = new List<string>(specs.Count);
+
+        for (int i = 0; i < specs.Count; i++)
+        {
+            var token = tokens[i].Trim();
+            var trimmed = token.Trim('<', '>');
+            bool optional = trimmed.EndsWith("?", StringComparison.Ordinal);
+            var argName = optional
+                ? trimmed[..^1]
+                : trimmed;
+            var typeLabel = DescribePromptArgType(specs[i]);
+            var requiredLabel = optional ? "optional" : "required";
+            details.Add($"{argName}:{typeLabel} ({requiredLabel})");
+        }
+
+        return string.Join(", ", details);
+    }
+
+    private static string DescribePromptArgType(DslArgumentSpec spec)
+    {
+        return spec.Type switch
+        {
+            DslArgType.Integer => "int",
+            DslArgType.ItemId => "item_id",
+            DslArgType.SystemId => "system_id",
+            DslArgType.PoiId => "poi_id",
+            DslArgType.GoTarget => "go_target",
+            DslArgType.ShipId => "ship_id",
+            DslArgType.ListingId => "listing_id",
+            DslArgType.MissionId => "mission_id",
+            DslArgType.ModuleId => "module_id",
+            DslArgType.RecipeId => "recipe_id",
+            DslArgType.Enum => !string.IsNullOrWhiteSpace(spec.EnumType)
+                ? $"enum:{spec.EnumType}"
+                : (spec.EnumValues != null && spec.EnumValues.Count > 0
+                    ? $"enum[{string.Join("|", spec.EnumValues)}]"
+                    : "enum"),
+            DslArgType.Any => "identifier",
+            _ => "value"
+        };
+    }
+
+    private static string BuildPromptCommandDescription(ICommand command)
+    {
+        var help = (command.BuildHelp(PromptHelpState) ?? "").Trim();
+        if (help.Length == 0)
+            return "";
+
+        if (help.StartsWith("-", StringComparison.Ordinal))
+            help = help[1..].TrimStart();
+
+        int arrowIndex = help.IndexOf("→", StringComparison.Ordinal);
+        if (arrowIndex < 0)
+            arrowIndex = help.IndexOf("->", StringComparison.Ordinal);
+
+        if (arrowIndex >= 0)
+        {
+            var description = help[(arrowIndex + (help[arrowIndex] == '→' ? 1 : 2))..].Trim();
+            if (description.Length > 0)
+                return description;
+        }
+
+        return help;
     }
 
     private static IReadOnlyList<string> BuildPromptArgTokens(
@@ -987,7 +1241,7 @@ public static class DslParser
                 i < overrideNames.Length &&
                 !string.IsNullOrWhiteSpace(overrideNames[i])
                     ? overrideNames[i]
-                    : InferPromptArgBaseName(spec.Kind);
+                    : InferPromptArgBaseName(spec.Type);
 
             used.TryGetValue(baseName, out var seenCount);
             var tokenName = seenCount == 0 ? baseName : $"{baseName}{seenCount + 1}";
@@ -999,18 +1253,20 @@ public static class DslParser
         return tokens;
     }
 
-    private static string InferPromptArgBaseName(DslArgKind kind)
+    private static string InferPromptArgBaseName(DslArgType kind)
         => kind switch
         {
-            _ when kind.HasFlag(DslArgKind.Integer) &&
-                   !kind.HasFlag(DslArgKind.Item) &&
-                   !kind.HasFlag(DslArgKind.System) &&
-                   !kind.HasFlag(DslArgKind.Enum) &&
-                   !kind.HasFlag(DslArgKind.Any) => "count",
-            _ when kind.HasFlag(DslArgKind.Item) && kind.HasFlag(DslArgKind.System) => "target",
-            _ when kind.HasFlag(DslArgKind.Item) => "item",
-            _ when kind.HasFlag(DslArgKind.System) => "system",
-            _ when kind.HasFlag(DslArgKind.Enum) => "option",
+            DslArgType.Integer => "count",
+            DslArgType.ItemId => "item",
+            DslArgType.SystemId => "system",
+            DslArgType.PoiId => "poi",
+            DslArgType.GoTarget => "target",
+            DslArgType.ShipId => "ship",
+            DslArgType.ListingId => "listing",
+            DslArgType.MissionId => "mission",
+            DslArgType.ModuleId => "mod",
+            DslArgType.RecipeId => "recipe",
+            DslArgType.Enum => "option",
             _ => "value"
         };
 
@@ -1019,21 +1275,9 @@ public static class DslParser
             ? $"{name}()"
             : $"{name}({string.Join(", ", paramNames.Select(p => $"<{p}>"))})";
 
-    private static string ArgKindPattern(DslArgKind kind)
+    private static string ArgKindPattern(DslArgType kind)
     {
-        bool allowsInteger = kind.HasFlag(DslArgKind.Integer);
-        bool allowsIdentifier = kind.HasFlag(DslArgKind.Any) ||
-                                kind.HasFlag(DslArgKind.Item) ||
-                                kind.HasFlag(DslArgKind.System) ||
-                                kind.HasFlag(DslArgKind.Enum);
-
-        if (allowsInteger && allowsIdentifier)
-            return "(integer | identifier)";
-
-        if (allowsInteger)
-            return "integer";
-
-        return "identifier";
+        return kind == DslArgType.Integer ? "integer" : "identifier";
     }
 
     private static string RuleToken(string value)
@@ -1047,10 +1291,18 @@ public static class DslParser
         if (string.IsNullOrWhiteSpace(value))
             return false;
 
-        if (!(char.IsLetterOrDigit(value[0]) || value[0] == '_'))
+        int start = 0;
+        if (value[0] == '$')
+        {
+            if (value.Length == 1)
+                return false;
+            start = 1;
+        }
+
+        if (!(char.IsLetterOrDigit(value[start]) || value[start] == '_'))
             return false;
 
-        for (int i = 1; i < value.Length; i++)
+        for (int i = start + 1; i < value.Length; i++)
         {
             var ch = value[i];
             if (!(char.IsLetterOrDigit(ch) || ch == '_' || ch == '-'))
@@ -1081,11 +1333,8 @@ public static class DslParser
             var specs = ResolveArgSpecs(syntax);
             if (specs.Count != 1)
                 continue;
-            var firstKind = specs[0].Kind;
-            bool allowsIdentifier = firstKind.HasFlag(DslArgKind.Any) ||
-                                    firstKind.HasFlag(DslArgKind.Item) ||
-                                    firstKind.HasFlag(DslArgKind.System) ||
-                                    firstKind.HasFlag(DslArgKind.Enum);
+            var firstKind = specs[0].Type;
+            bool allowsIdentifier = firstKind != DslArgType.Integer && firstKind != DslArgType.None;
             if (!allowsIdentifier)
                 continue;
 
@@ -1101,13 +1350,27 @@ public static class DslParser
         return false;
     }
 
-    private static void ValidateTree(DslAstProgram tree)
+    private static void ValidateTree(
+        DslAstProgram tree,
+        IReadOnlyDictionary<string, IReadOnlyList<DslSkillParamDef>>? extraSkills = null,
+        bool allowDollarArgs = false)
     {
-        ValidateNodes(tree.Statements);
+        ValidateNodes(tree.Statements, extraSkills, allowDollarArgs);
+    }
+
+    // Overload for ParseBodyForSkillLibrary, which only has names available during parse.
+    private static void ValidateTree(
+        DslAstProgram tree,
+        IReadOnlySet<string>? extraCommandNames,
+        bool allowDollarArgs)
+    {
+        ValidateNodes(tree.Statements, extraCommandNames, allowDollarArgs);
     }
 
     private static void ValidateNodes(
-        IReadOnlyList<DslAstNode> nodes)
+        IReadOnlyList<DslAstNode> nodes,
+        IReadOnlyDictionary<string, IReadOnlyList<DslSkillParamDef>>? extraSkills = null,
+        bool allowDollarArgs = false)
     {
         foreach (var node in nodes)
         {
@@ -1118,20 +1381,25 @@ public static class DslParser
                     var normalizedName = (commandNode.Name ?? "").Trim().ToLowerInvariant();
                     var args = commandNode.Args ?? Array.Empty<string>();
 
-                    if (!IsCommandAllowed(normalizedName, args))
+                    if (!IsCommandAllowed(normalizedName, args, extraSkills))
                     {
                         throw new FormatException(
                             $"Command '{commandNode.Name}' is not recognized.");
                     }
 
-                    if (CommandSyntaxByName.TryGetValue(normalizedName, out var commandSyntax))
-                        ValidateCommandArgs(normalizedName, args, commandSyntax);
+                    if (extraSkills != null &&
+                        extraSkills.TryGetValue(commandNode.Name ?? string.Empty, out var skillParams))
+                    {
+                        var skillSyntax = new DslCommandSyntax(ArgSpecs: skillParams
+                            .Select(p => new DslArgumentSpec(p.Type, Required: true))
+                            .ToList());
+                        ValidateCommandArgs(commandNode.Name!, args, skillSyntax, allowDollarArgs);
+                    }
+                    else if (CommandSyntaxByName.TryGetValue(normalizedName, out var commandSyntax))
+                    {
+                        ValidateCommandArgs(normalizedName, args, commandSyntax, allowDollarArgs);
+                    }
 
-                    break;
-                }
-                case DslRepeatAstNode repeatNode:
-                {
-                    ValidateNodes(repeatNode.Body ?? Array.Empty<DslAstNode>());
                     break;
                 }
                 case DslIfAstNode ifNode:
@@ -1142,7 +1410,7 @@ public static class DslParser
                             $"Invalid condition '{DslBooleanEvaluator.RenderCondition(ifNode.Condition)}': {error}.");
                     }
 
-                    ValidateNodes(ifNode.Body ?? Array.Empty<DslAstNode>());
+                    ValidateNodes(ifNode.Body ?? Array.Empty<DslAstNode>(), extraSkills, allowDollarArgs);
                     break;
                 }
                 case DslUntilAstNode untilNode:
@@ -1153,7 +1421,60 @@ public static class DslParser
                             $"Invalid condition '{DslBooleanEvaluator.RenderCondition(untilNode.Condition)}': {error}.");
                     }
 
-                    ValidateNodes(untilNode.Body ?? Array.Empty<DslAstNode>());
+                    ValidateNodes(untilNode.Body ?? Array.Empty<DslAstNode>(), extraSkills, allowDollarArgs);
+                    break;
+                }
+                default:
+                    throw new FormatException("Unknown DSL AST node.");
+            }
+        }
+    }
+
+    private static void ValidateNodes(
+        IReadOnlyList<DslAstNode> nodes,
+        IReadOnlySet<string>? extraCommandNames,
+        bool allowDollarArgs)
+    {
+        foreach (var node in nodes)
+        {
+            switch (node)
+            {
+                case DslCommandAstNode commandNode:
+                {
+                    var normalizedName = (commandNode.Name ?? "").Trim().ToLowerInvariant();
+                    var args = commandNode.Args ?? Array.Empty<string>();
+
+                    if (!IsCommandAllowed(normalizedName, args, extraCommandNames))
+                    {
+                        throw new FormatException(
+                            $"Command '{commandNode.Name}' is not recognized.");
+                    }
+
+                    if (CommandSyntaxByName.TryGetValue(normalizedName, out var commandSyntax))
+                        ValidateCommandArgs(normalizedName, args, commandSyntax, allowDollarArgs);
+
+                    break;
+                }
+                case DslIfAstNode ifNode:
+                {
+                    if (!DslBooleanEvaluator.TryValidateCondition(ifNode.Condition, out var error))
+                    {
+                        throw new FormatException(
+                            $"Invalid condition '{DslBooleanEvaluator.RenderCondition(ifNode.Condition)}': {error}.");
+                    }
+
+                    ValidateNodes(ifNode.Body ?? Array.Empty<DslAstNode>(), extraCommandNames, allowDollarArgs);
+                    break;
+                }
+                case DslUntilAstNode untilNode:
+                {
+                    if (!DslBooleanEvaluator.TryValidateCondition(untilNode.Condition, out var error))
+                    {
+                        throw new FormatException(
+                            $"Invalid condition '{DslBooleanEvaluator.RenderCondition(untilNode.Condition)}': {error}.");
+                    }
+
+                    ValidateNodes(untilNode.Body ?? Array.Empty<DslAstNode>(), extraCommandNames, allowDollarArgs);
                     break;
                 }
                 default:
@@ -1164,13 +1485,37 @@ public static class DslParser
 
     private static bool IsCommandAllowed(
         string commandName,
-        IReadOnlyList<string>? commandArgs)
+        IReadOnlyList<string>? commandArgs,
+        IReadOnlyDictionary<string, IReadOnlyList<DslSkillParamDef>>? extraSkills = null)
     {
         var normalized = commandName.ToLowerInvariant();
         if (normalized == HaltKeyword)
             return commandArgs == null || commandArgs.Count == 0;
 
         if (CommandNameSet.Contains(normalized))
+            return true;
+
+        if (extraSkills != null && extraSkills.ContainsKey(commandName))
+            return true;
+
+        return (commandArgs == null || commandArgs.Count == 0) &&
+               TrySplitCollapsedCommand(commandName, out var splitName, out _) &&
+               CommandNameSet.Contains(splitName);
+    }
+
+    private static bool IsCommandAllowed(
+        string commandName,
+        IReadOnlyList<string>? commandArgs,
+        IReadOnlySet<string>? extraCommandNames)
+    {
+        var normalized = commandName.ToLowerInvariant();
+        if (normalized == HaltKeyword)
+            return commandArgs == null || commandArgs.Count == 0;
+
+        if (CommandNameSet.Contains(normalized))
+            return true;
+
+        if (extraCommandNames != null && extraCommandNames.Contains(commandName))
             return true;
 
         return (commandArgs == null || commandArgs.Count == 0) &&
@@ -1181,7 +1526,8 @@ public static class DslParser
     private static void ValidateCommandArgs(
         string commandName,
         IReadOnlyList<string> args,
-        DslCommandSyntax syntax)
+        DslCommandSyntax syntax,
+        bool allowDollarArgs = false)
     {
         var specs = ResolveArgSpecs(syntax);
         if (specs.Count == 0)
@@ -1200,35 +1546,62 @@ public static class DslParser
 
         for (int i = 0; i < args.Count; i++)
         {
+            // Inside skill/override bodies, $param tokens are allowed for any typed arg.
+            if (allowDollarArgs &&
+                args[i].StartsWith("$", StringComparison.Ordinal) &&
+                args[i].Length > 1)
+                continue;
+
             if (!IsArgValueValid(args[i], specs[i]))
             {
                 throw new FormatException(
-                    $"Command '{commandName}' argument {i + 1} must be {specs[i].Kind.ToString().ToLowerInvariant()}.");
+                    $"Command '{commandName}' argument {i + 1} must be {specs[i].Type.ToString().ToLowerInvariant()}.");
             }
         }
     }
 
     private static bool IsArgValueValid(string value, DslArgumentSpec spec)
     {
-        var kind = spec.Kind;
-        if (kind == DslArgKind.None)
+        var type = spec.Type;
+        if (type == DslArgType.None)
             return false;
 
-        if (kind.HasFlag(DslArgKind.Integer) && int.TryParse(value, out _))
+        if (type == DslArgType.Integer && int.TryParse(value, out _))
             return true;
 
-        if (kind.HasFlag(DslArgKind.Enum) && IsValidIdentifier(value))
-            return true;
+        return IsValidIdentifier(value);
+    }
 
-        if ((kind.HasFlag(DslArgKind.Any) ||
-             kind.HasFlag(DslArgKind.Item) ||
-             kind.HasFlag(DslArgKind.System)) &&
-            IsValidIdentifier(value))
-        {
-            return true;
-        }
+    private static string? ResolveNearestStation(GameState state)
+        => GalaxyStateHub.GetNearestStationId(state.System);
 
-        return false;
+    /// <summary>
+    /// Expands a single argument token, resolving $macro references.
+    /// Returns the token unchanged (including the leading $) if state is null.
+    /// Throws FormatException for unknown macros.
+    /// </summary>
+    internal static string ExpandMacroArg(string? arg, GameState? state)
+    {
+        if (string.IsNullOrWhiteSpace(arg))
+            return arg ?? string.Empty;
+
+        var trimmed = arg.Trim();
+        if (!trimmed.StartsWith("$", StringComparison.Ordinal))
+            return trimmed;
+
+        var macroName = trimmed[1..];
+        if (!Macros.TryGetValue(macroName, out var macro))
+            throw new FormatException($"Unknown macro '{trimmed}'.");
+
+        // Parse-only contexts can keep unresolved macros verbatim.
+        if (state == null)
+            return trimmed;
+
+        var resolved = macro.Resolver(state)?.Trim();
+        if (string.IsNullOrWhiteSpace(resolved))
+            throw new FormatException($"Macro '{trimmed}' is not available in current state.");
+
+        return resolved;
     }
 
 }

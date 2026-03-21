@@ -16,3 +16,6 @@ public sealed record DslIntegerOperandAstNode(int Value) : DslNumericOperandAstN
 public sealed record DslMetricCallOperandAstNode(
     string Name,
     IReadOnlyList<string> Args) : DslNumericOperandAstNode;
+
+/// <summary>A $param or $macro reference used as a numeric operand (resolved at runtime).</summary>
+public sealed record DslArgumentRefOperandAstNode(string Token) : DslNumericOperandAstNode;

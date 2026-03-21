@@ -1,7 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -16,6 +21,12 @@ public sealed class ScriptGenerationService
     private readonly IAgentLogger _logger;
     private readonly string _baseSystemPrompt;
     private readonly Action<string>? _setStatus;
+    private readonly HttpClient? _embeddingHttp;
+    private readonly string _embeddingModel = "text-embedding-3-small";
+    private readonly SemaphoreSlim _commandEmbeddingGate = new(1, 1);
+    private Dictionary<string, float[]>? _commandEmbeddingsByName;
+    private readonly Lazy<GalaxyMapSnapshot> _mapCache;
+    private SkillLibrary? _skillLibrary;
 
     public ScriptGenerationService(
         ILLMClient plannerLlm,
@@ -29,6 +40,24 @@ public sealed class ScriptGenerationService
         _logger = logger;
         _baseSystemPrompt = baseSystemPrompt;
         _setStatus = setStatus;
+        _mapCache = new Lazy<GalaxyMapSnapshot>(
+            () => GalaxyMapSnapshotFile.LoadWithKnownPois(AppPaths.GalaxyMapFile, AppPaths.GalaxyKnownPoisFile));
+
+        var embeddingApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        if (!string.IsNullOrWhiteSpace(embeddingApiKey))
+        {
+            _embeddingHttp = new HttpClient
+            {
+                BaseAddress = new Uri("https://api.openai.com")
+            };
+            _embeddingHttp.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", embeddingApiKey);
+        }
+    }
+
+    public void SetSkillLibrary(SkillLibrary? library)
+    {
+        _skillLibrary = library;
     }
 
     public async Task<ScriptGenerationResult> GenerateScriptFromUserInputAsync(
@@ -40,7 +69,16 @@ public sealed class ScriptGenerationService
         var attempts = Math.Max(1, maxAttempts);
         var generationInput = (userInput ?? string.Empty).Trim();
         var stateContextBlock = BuildScriptGenerationStateContextBlock(state, generationInput);
-        var examplesBlock = await BuildScriptGenerationExamplesBlockAsync(generationInput);
+        var (examplesBlock, exampleScripts) = await BuildScriptGenerationExamplesBlockAsync(generationInput);
+        var cosineCommands = await SelectCommandsByCosineSimilarityAsync(
+            generationInput,
+            maxMatches: 12,
+            cancellationToken);
+        var dslCommandReferenceBlock = DslParser.BuildPromptDslReferenceBlock(
+            generationInput,
+            exampleScripts,
+            cosineCommands,
+            _skillLibrary?.Skills);
         string? previousScript = null;
         string? previousError = null;
 
@@ -50,6 +88,7 @@ public sealed class ScriptGenerationService
                 baseSystemPrompt: _baseSystemPrompt,
                 userInput: generationInput,
                 stateContextBlock: stateContextBlock,
+                dslCommandReferenceBlock: dslCommandReferenceBlock,
                 examplesBlock: examplesBlock,
                 attemptNumber: attempt,
                 previousScript: previousScript,
@@ -77,7 +116,11 @@ public sealed class ScriptGenerationService
 
             try
             {
-                var tree = DslParser.ParseTree(script);
+                var skillDefs = _skillLibrary?.Skills.ToDictionary(
+                    s => s.Name,
+                    s => s.Params,
+                    StringComparer.OrdinalIgnoreCase);
+                var tree = DslParser.ParseTree(script, skillDefs);
                 _ = DslScriptTransformer.Translate(tree, state);
                 var normalizedScript = DslScriptTransformer.RenderScript(tree).TrimEnd();
                 await _logger.LogPromptGenerationPairAsync(
@@ -108,7 +151,8 @@ public sealed class ScriptGenerationService
             (previousError ?? "Unknown script error."));
     }
 
-    private async Task<string> BuildScriptGenerationExamplesBlockAsync(string generationInput)
+    private async Task<(string examplesBlock, IReadOnlyList<string> exampleScripts)> BuildScriptGenerationExamplesBlockAsync(
+        string generationInput)
     {
         var sb = new StringBuilder();
         IReadOnlyList<PromptScriptMatch> matches = await _exampleStore.FindTopMatchesAsync(generationInput, maxMatches: 5);
@@ -116,16 +160,249 @@ public sealed class ScriptGenerationService
         if (matches.Count == 0)
             matches = _exampleStore.GetRecentMatches(5);
 
+        var scripts = new List<string>(matches.Count);
+
         for (int i = 0; i < matches.Count; i++)
         {
             var example = matches[i];
             sb.Append(example.Prompt.Trim());
             sb.Append(" ->\n");
-            sb.Append(NormalizeScriptExampleForPrompt(example.Script));
+            var normalizedScript = NormalizeScriptExampleForPrompt(example.Script);
+            sb.Append(normalizedScript);
             sb.Append("\n\n");
+            if (!string.IsNullOrWhiteSpace(normalizedScript))
+                scripts.Add(normalizedScript);
         }
 
-        return sb.ToString().TrimEnd();
+        return (sb.ToString().TrimEnd(), scripts);
+    }
+
+    private async Task<IReadOnlyList<string>> SelectCommandsByCosineSimilarityAsync(
+        string generationInput,
+        int maxMatches,
+        CancellationToken ct)
+    {
+        if (_embeddingHttp == null ||
+            string.IsNullOrWhiteSpace(generationInput) ||
+            maxMatches <= 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        try
+        {
+            var docs = DslParser.GetPromptCommandDocs();
+            if (docs.Count == 0)
+                return Array.Empty<string>();
+
+            await _commandEmbeddingGate.WaitAsync(ct);
+            try
+            {
+                if (_commandEmbeddingsByName == null || _commandEmbeddingsByName.Count == 0)
+                {
+                    var docTexts = docs.Select(d => d.Text).ToList();
+                    var contentHash = ComputeEmbeddingCacheHash(_embeddingModel, docTexts);
+                    var cached = TryLoadCommandEmbeddingsCache(contentHash);
+
+                    if (cached != null)
+                    {
+                        _commandEmbeddingsByName = cached;
+                    }
+                    else
+                    {
+                        var docVectors = await EmbedBatchAsync(docTexts, ct);
+
+                        var map = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
+                        for (int i = 0; i < docs.Count && i < docVectors.Count; i++)
+                        {
+                            var vec = docVectors[i];
+                            if (vec.Length > 0)
+                                map[docs[i].Name] = vec;
+                        }
+
+                        _commandEmbeddingsByName = map;
+                        SaveCommandEmbeddingsCache(contentHash, map);
+                    }
+                }
+            }
+            finally
+            {
+                _commandEmbeddingGate.Release();
+            }
+
+            var queryVectors = await EmbedBatchAsync(new[] { generationInput }, ct);
+            if (queryVectors.Count == 0 || queryVectors[0].Length == 0)
+                return Array.Empty<string>();
+
+            var query = queryVectors[0];
+            var ranked = new List<(string Name, double Score)>();
+            foreach (var doc in docs)
+            {
+                if (_commandEmbeddingsByName == null ||
+                    !_commandEmbeddingsByName.TryGetValue(doc.Name, out var vec))
+                {
+                    continue;
+                }
+
+                var score = CosineSimilarity(query, vec);
+                if (score > 0d)
+                    ranked.Add((doc.Name, score));
+            }
+
+            return ranked
+                .OrderByDescending(v => v.Score)
+                .Take(maxMatches)
+                .Select(v => v.Name)
+                .ToList();
+        }
+        catch
+        {
+            // Embedding retrieval should never block script generation.
+            return Array.Empty<string>();
+        }
+    }
+
+    private async Task<IReadOnlyList<float[]>> EmbedBatchAsync(
+        IReadOnlyList<string> inputs,
+        CancellationToken ct)
+    {
+        if (_embeddingHttp == null || inputs.Count == 0)
+            return Array.Empty<float[]>();
+
+        var payload = new
+        {
+            model = _embeddingModel,
+            input = inputs
+        };
+
+        var json = JsonSerializer.Serialize(payload);
+        using var response = await _embeddingHttp.PostAsync(
+            "/v1/embeddings",
+            new StringContent(json, Encoding.UTF8, "application/json"),
+            ct);
+
+        var raw = await response.Content.ReadAsStringAsync(ct);
+        if (!response.IsSuccessStatusCode)
+            return Array.Empty<float[]>();
+
+        using var doc = JsonDocument.Parse(raw);
+        if (!doc.RootElement.TryGetProperty("data", out var data) ||
+            data.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<float[]>();
+        }
+
+        var vectors = new List<float[]>(data.GetArrayLength());
+        foreach (var item in data.EnumerateArray())
+        {
+            if (!item.TryGetProperty("embedding", out var emb) ||
+                emb.ValueKind != JsonValueKind.Array)
+            {
+                vectors.Add(Array.Empty<float>());
+                continue;
+            }
+
+            var vec = new float[emb.GetArrayLength()];
+            int idx = 0;
+            foreach (var n in emb.EnumerateArray())
+                vec[idx++] = n.GetSingle();
+            vectors.Add(vec);
+        }
+
+        return vectors;
+    }
+
+    private static string ComputeEmbeddingCacheHash(string model, IReadOnlyList<string> texts)
+    {
+        var sb = new StringBuilder();
+        sb.Append(model);
+        sb.Append('\n');
+        foreach (var t in texts)
+        {
+            sb.Append(t);
+            sb.Append('\n');
+        }
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    private static Dictionary<string, float[]>? TryLoadCommandEmbeddingsCache(string expectedHash)
+    {
+        try
+        {
+            var path = AppPaths.CommandEmbeddingsCacheFile;
+            if (!File.Exists(path))
+                return null;
+
+            using var stream = File.OpenRead(path);
+            using var doc = JsonDocument.Parse(stream);
+            var root = doc.RootElement;
+
+            if (!root.TryGetProperty("hash", out var hashProp) ||
+                hashProp.GetString() != expectedHash)
+                return null;
+
+            if (!root.TryGetProperty("entries", out var entriesProp) ||
+                entriesProp.ValueKind != JsonValueKind.Object)
+                return null;
+
+            var map = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
+            foreach (var prop in entriesProp.EnumerateObject())
+            {
+                if (prop.Value.ValueKind != JsonValueKind.Array)
+                    continue;
+                var vec = new float[prop.Value.GetArrayLength()];
+                int idx = 0;
+                foreach (var n in prop.Value.EnumerateArray())
+                    vec[idx++] = n.GetSingle();
+                map[prop.Name] = vec;
+            }
+
+            return map.Count > 0 ? map : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void SaveCommandEmbeddingsCache(string hash, Dictionary<string, float[]> entries)
+    {
+        try
+        {
+            var payload = new
+            {
+                hash,
+                entries
+            };
+            var json = JsonSerializer.Serialize(payload);
+            File.WriteAllText(AppPaths.CommandEmbeddingsCacheFile, json);
+        }
+        catch
+        {
+            // Cache save is best-effort.
+        }
+    }
+
+    private static double CosineSimilarity(float[] a, float[] b)
+    {
+        if (a.Length == 0 || b.Length == 0 || a.Length != b.Length)
+            return -1d;
+
+        double dot = 0d;
+        double normA = 0d;
+        double normB = 0d;
+        for (int i = 0; i < a.Length; i++)
+        {
+            dot += a[i] * b[i];
+            normA += a[i] * a[i];
+            normB += b[i] * b[i];
+        }
+
+        if (normA <= 0d || normB <= 0d)
+            return -1d;
+
+        return dot / (Math.Sqrt(normA) * Math.Sqrt(normB));
     }
 
     private static string NormalizeScriptExampleForPrompt(string script)
@@ -160,17 +437,18 @@ public sealed class ScriptGenerationService
         return text.Substring(firstNewline + 1, lastFence - firstNewline - 1).Trim();
     }
 
-    private static string BuildScriptGenerationStateContextBlock(GameState state, string userInput)
+    private string BuildScriptGenerationStateContextBlock(GameState state, string userInput)
     {
         var searchTerms = BuildPromptSearchTerms(userInput);
+        var map = _mapCache.Value;
 
         var topPoiMatches = FindTopMatches(
             searchTerms,
-            BuildPoiAliasMap(state),
+            BuildPoiAliasMap(state, map),
             maxMatches: 3);
         var topSystemMatches = FindTopMatches(
             searchTerms,
-            BuildSystemAliasMap(state),
+            BuildSystemAliasMap(state, map),
             maxMatches: 3);
         var topItemMatches = FindTopMatches(
             searchTerms,
@@ -200,8 +478,6 @@ public sealed class ScriptGenerationService
             cargoPrimary,
             topItemMatches,
             match => match);
-        var missionIssuingPoiLines = BuildMissionIssuingPoiLines(state);
-
         string currentPoiId = state.CurrentPOI?.Id ?? "-";
         string currentPoiType = state.CurrentPOI?.Type ?? "-";
 
@@ -211,66 +487,7 @@ public sealed class ScriptGenerationService
             $"- poi: {currentPoiId} ({currentPoiType})\n\n" +
             "POIs:\n" + FormatPromptSectionLines(poiLines) + "\n\n" +
             "Systems:\n" + FormatPromptSectionLines(systemLines) + "\n\n" +
-            "Items:\n" + FormatPromptSectionLines(cargoLines) + "\n\n" +
-            "Mission issuing POI IDs:\n" + FormatPromptSectionLines(missionIssuingPoiLines);
-    }
-
-    private static IReadOnlyList<string> BuildMissionIssuingPoiLines(GameState state)
-    {
-        var lines = new List<string>();
-        foreach (var mission in state.ActiveMissions ?? Array.Empty<MissionInfo>())
-        {
-            if (mission == null)
-                continue;
-
-            var missionName = string.IsNullOrWhiteSpace(mission.Title)
-                ? (!string.IsNullOrWhiteSpace(mission.MissionId) ? mission.MissionId : mission.Id)
-                : mission.Title.Trim();
-            var issuingPoiId = ResolveIssuingPoiId(state, mission);
-            if (string.IsNullOrWhiteSpace(issuingPoiId))
-                continue;
-
-            lines.Add($"{missionName} -> {issuingPoiId}");
-        }
-
-        return lines.Count == 0
-            ? Array.Empty<string>()
-            : lines;
-    }
-
-    private static string ResolveIssuingPoiId(GameState state, MissionInfo mission)
-    {
-        var directBaseId = (mission.IssuingBaseId ?? string.Empty).Trim();
-        if (!string.IsNullOrWhiteSpace(directBaseId))
-        {
-            var poiFromBaseId = (state.POIs ?? Array.Empty<POIInfo>())
-                .FirstOrDefault(p => string.Equals(p.BaseId ?? "", directBaseId, StringComparison.OrdinalIgnoreCase));
-            if (poiFromBaseId != null && !string.IsNullOrWhiteSpace(poiFromBaseId.Id))
-                return poiFromBaseId.Id.Trim();
-        }
-
-        var issuingBase = (mission.IssuingBase ?? string.Empty).Trim();
-        if (string.IsNullOrWhiteSpace(issuingBase))
-            return directBaseId;
-
-        var pois = state.POIs ?? Array.Empty<POIInfo>();
-        var byPoiId = pois.FirstOrDefault(p =>
-            string.Equals(p.Id ?? "", issuingBase, StringComparison.OrdinalIgnoreCase));
-        if (byPoiId != null && !string.IsNullOrWhiteSpace(byPoiId.Id))
-            return byPoiId.Id.Trim();
-
-        var byBaseId = pois.FirstOrDefault(p =>
-            string.Equals(p.BaseId ?? "", issuingBase, StringComparison.OrdinalIgnoreCase));
-        if (byBaseId != null && !string.IsNullOrWhiteSpace(byBaseId.Id))
-            return byBaseId.Id.Trim();
-
-        var byName = pois.FirstOrDefault(p =>
-            string.Equals(p.Name ?? "", issuingBase, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(p.BaseName ?? "", issuingBase, StringComparison.OrdinalIgnoreCase));
-        if (byName != null && !string.IsNullOrWhiteSpace(byName.Id))
-            return byName.Id.Trim();
-
-        return directBaseId;
+            "Items:\n" + FormatPromptSectionLines(cargoLines);
     }
 
     private static IReadOnlyList<string> BuildPromptSearchTerms(string userInput)
@@ -325,7 +542,7 @@ public sealed class ScriptGenerationService
         return terms;
     }
 
-    private static Dictionary<string, HashSet<string>> BuildSystemAliasMap(GameState state)
+    private static Dictionary<string, HashSet<string>> BuildSystemAliasMap(GameState state, GalaxyMapSnapshot mapCache)
     {
         var aliases = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 
@@ -333,16 +550,14 @@ public sealed class ScriptGenerationService
         foreach (var systemId in state.Systems)
             AddPromptAlias(aliases, systemId, systemId);
 
-        var map = state.Galaxy?.Map?.Systems?.Count > 0
-            ? state.Galaxy.Map
-            : LoadMapCache();
+        var map = state.Galaxy?.Map?.Systems?.Count > 0 ? state.Galaxy.Map : mapCache;
         foreach (var system in map.Systems)
             AddPromptAlias(aliases, system.Id, system.Id);
 
         return aliases;
     }
 
-    private static Dictionary<string, HashSet<string>> BuildPoiAliasMap(GameState state)
+    private static Dictionary<string, HashSet<string>> BuildPoiAliasMap(GameState state, GalaxyMapSnapshot mapCache)
     {
         var aliases = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 
@@ -353,9 +568,7 @@ public sealed class ScriptGenerationService
             AddPromptAlias(aliases, poi.Id, poi.Name);
         }
 
-        var map = state.Galaxy?.Map?.Systems?.Count > 0
-            ? state.Galaxy.Map
-            : LoadMapCache();
+        var map = state.Galaxy?.Map?.Systems?.Count > 0 ? state.Galaxy.Map : mapCache;
         foreach (var system in map.Systems)
         {
             foreach (var poi in system.Pois)
@@ -516,10 +729,5 @@ public sealed class ScriptGenerationService
         return FuzzyMatchScoring.ComputeScore(query, candidateAlias);
     }
 
-    private static GalaxyMapSnapshot LoadMapCache()
-    {
-        return GalaxyMapSnapshotFile.LoadWithKnownPois(
-            AppPaths.GalaxyMapFile,
-            AppPaths.GalaxyKnownPoisFile);
-    }
+
 }

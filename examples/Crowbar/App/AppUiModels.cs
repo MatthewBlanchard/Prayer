@@ -173,12 +173,14 @@ public sealed record BotStateEntry(
     IReadOnlyList<string> ExecutionStatusLines,
     string? ControlInput,
     int? CurrentScriptLine,
+    bool ScriptRunning,
     string? LastGenerationPrompt,
     int? CurrentTick,
     DateTime? LastSpaceMoltPostUtc,
     Prayer.Contracts.ActiveGoRouteDto? ActiveRoute,
     CraftingUiModel? CraftingModel,
-    SkillsUiModel? SkillsModel);
+    SkillsUiModel? SkillsModel,
+    string? ActiveOverrideName = null);
 
 public sealed record BotRouteOverlay(
     string BotId,

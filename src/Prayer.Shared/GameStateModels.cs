@@ -23,12 +23,15 @@ public partial class GameState
     public PlayerShip Ship { get; set; } = new();
     public int Credits { get; set; }
     public bool Docked { get; set; }
+    public string HomeBase { get; set; } = "";
     public ShipyardShowroomEntry[] ShipyardShowroom { get; set; } = Array.Empty<ShipyardShowroomEntry>();
     public ShipyardListingEntry[] ShipyardListings { get; set; } = Array.Empty<ShipyardListingEntry>();
     public Catalogue ShipCatalogue { get; set; } = new();
     public OwnedShipInfo[] OwnedShips { get; set; } = Array.Empty<OwnedShipInfo>();
     public CatalogueEntry[] AvailableRecipes { get; set; } = [];
     public Dictionary<string, int> Skills { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, int> ScriptMinedByItem { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, int> ScriptStashedByItem { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public MissionInfo[] ActiveMissions { get; set; } = Array.Empty<MissionInfo>();
     public MissionInfo[] AvailableMissions { get; set; } = Array.Empty<MissionInfo>();

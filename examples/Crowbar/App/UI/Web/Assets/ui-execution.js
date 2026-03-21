@@ -40,6 +40,18 @@
     if (scriptInput) scriptInput.value = responseText;
   };
 
+  window.setActiveOverride = function (overrideName) {
+    var el = document.getElementById('override-indicator');
+    if (!el) return;
+    if (overrideName) {
+      el.textContent = '\u26A0\uFE0F Override: ' + overrideName;
+      el.removeAttribute('hidden');
+    } else {
+      el.setAttribute('hidden', '');
+      el.textContent = '';
+    }
+  };
+
   window.setExecuteButtonRunning = function (isRunning) {
     var executeBtn =
       document.getElementById('execute-btn') ||
@@ -47,6 +59,18 @@
     if (!executeBtn) return;
     executeBtn.classList.toggle('run-active', !!isRunning);
   };
+
+  function refreshStateUiNow() {
+    ['state-tabs', 'state-strip-inline', 'right-panel', 'tick-status'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) htmx.trigger(el, 'load');
+    });
+    if (window.pollStatePanes) window.pollStatePanes();
+  }
+
+  function scheduleStateUiRefresh(delayMs) {
+    window.setTimeout(refreshStateUiNow, delayMs);
+  }
 
   window.executeIfOk = function (e) {
     var detail = (e || {}).detail || {};
@@ -78,6 +102,9 @@
     window.setLiveScriptRunLine(1);
     htmx.ajax('POST', apiUrl('api/execute'), { swap: 'none', values: { bot_id: window._activeBotId || '' } });
     // Force a quick refresh in addition to the 1s poll loop.
+    scheduleStateUiRefresh(120);
+    scheduleStateUiRefresh(450);
+    scheduleStateUiRefresh(1000);
     setTimeout(window.syncCurrentScript, 120);
     setTimeout(window.syncCurrentScript, 450);
   };
@@ -121,6 +148,9 @@
         window.setExecuteButtonRunning(true);
         window.setLiveScriptRunLine(1);
         htmx.ajax('POST', apiUrl('api/execute'), { swap: 'none', values: { bot_id: window._activeBotId || '' } });
+        scheduleStateUiRefresh(120);
+        scheduleStateUiRefresh(450);
+        scheduleStateUiRefresh(1000);
         setTimeout(window.syncCurrentScript, 120);
         setTimeout(window.syncCurrentScript, 450);
       })
@@ -183,19 +213,23 @@
           var textChanged = current !== text;
           if (textChanged) window._liveScriptEditor.setValue(text);
           var nextLine = (typeof state.currentScriptLine === 'number') ? state.currentScriptLine : null;
+          var scriptRunning = !!state.scriptRunning;
           var now = Date.now();
           if (window._haltHighlightPending) {
             if (now < window._haltHighlightPendingUntil) {
               nextLine = null;
+              scriptRunning = false;
             } else {
               window._haltHighlightPending = false;
               window._haltHighlightPendingUntil = 0;
             }
           }
-          window.setExecuteButtonRunning(nextLine !== null);
+          window.setExecuteButtonRunning(scriptRunning);
+          var overrideName = state.activeOverrideName || null;
+          window.setActiveOverride(overrideName);
           var lineChanged = window._liveScriptRunLineNumber !== nextLine;
           if (lineChanged) window.setLiveScriptRunLine(nextLine);
-          var isActive = nextLine !== null;
+          var isActive = scriptRunning;
           window._currentScriptIdlePollMs = (textChanged || lineChanged || isActive) ? 250 : 1500;
           if (window._uiPerf) {
             window._uiPerf.setGauge('current_script_poll_ms', window._currentScriptIdlePollMs);

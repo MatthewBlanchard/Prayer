@@ -101,6 +101,9 @@ public sealed class RuntimeStateBuilder
             },
             Credits = player.GetProperty("credits").GetInt32(),
             Docked = docked,
+            HomeBase = player.TryGetProperty("home_base", out var homeBaseEl) && homeBaseEl.ValueKind == JsonValueKind.String
+                ? homeBaseEl.GetString() ?? ""
+                : "",
             Skills = skills,
             Notifications = Array.Empty<GameNotification>(),
             ChatMessages = Array.Empty<GameChatMessage>()

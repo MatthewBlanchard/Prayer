@@ -19,6 +19,7 @@ public sealed class RuntimeGameStateDto
     public RuntimePlayerShipDto Ship { get; set; } = new();
     public int Credits { get; set; }
     public bool Docked { get; set; }
+    public string HomeBase { get; set; } = "";
     public RuntimeShipyardShowroomEntryDto[] ShipyardShowroom { get; set; } = Array.Empty<RuntimeShipyardShowroomEntryDto>();
     public RuntimeShipyardListingEntryDto[] ShipyardListings { get; set; } = Array.Empty<RuntimeShipyardListingEntryDto>();
     public RuntimeCatalogueDto ShipCatalogue { get; set; } = new();

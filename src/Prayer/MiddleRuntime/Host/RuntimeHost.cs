@@ -275,27 +275,39 @@ public sealed class RuntimeHost : IRuntimeHost
                     if (await HandlePendingHaltsAsync(token))
                         continue;
 
+                    // Fetch state: throttled (once per second) while halted, always fresh otherwise.
+                    GameState currentState;
                     if (_agent.IsHalted)
                     {
                         if (_getLatestState() == null ||
                             DateTime.UtcNow - _getLastHaltedSnapshotAt() > TimeSpan.FromSeconds(1))
                         {
-                            var haltedState = await _stateProvider.GetLatestStateAsync();
-                            _setLatestState(haltedState);
-                            _publishSnapshot(haltedState);
+                            currentState = await _stateProvider.GetLatestStateAsync();
+                            _setLatestState(currentState);
+                            _publishSnapshot(currentState);
                             _setLastHaltedSnapshotAt(DateTime.UtcNow);
                         }
+                        else
+                        {
+                            currentState = _getLatestState()!;
+                        }
+                    }
+                    else
+                    {
+                        currentState = await _stateProvider.GetLatestStateAsync();
+                        _setLatestState(currentState);
+                        _publishSnapshot(currentState);
+                    }
 
+                    // DecideAsync checks overrides unconditionally — even while halted.
+                    var result = await _agent.DecideAsync(currentState);
+                    _publishSnapshot(currentState);
+
+                    if (result == null && _agent.IsHalted)
+                    {
                         await Task.Delay(100, token);
                         continue;
                     }
-
-                    var currentState = await _stateProvider.GetLatestStateAsync();
-                    _setLatestState(currentState);
-                    _publishSnapshot(currentState);
-
-                    var result = await _agent.DecideAsync(currentState);
-                    _publishSnapshot(currentState);
 
                     if (result != null)
                     {
@@ -438,7 +450,10 @@ public sealed class RuntimeHost : IRuntimeHost
 
     private static string BuildScriptStepKey(CommandResult step)
     {
-        return $"{step.SourceLine?.ToString() ?? "-"}|{step.Action}|{step.Arg1 ?? ""}|{step.Quantity?.ToString() ?? ""}";
+        var args = step.Args.Count == 0
+            ? string.Empty
+            : string.Join("|", step.Args.Where(a => !string.IsNullOrWhiteSpace(a)));
+        return $"{step.SourceLine?.ToString() ?? "-"}|{step.Action}|{args}";
     }
 
     private async Task<GameState> TryAutoDockedMaintenanceAsync(
@@ -583,13 +598,15 @@ public sealed class RuntimeHost : IRuntimeHost
 
     private static string FormatCommand(CommandResult result)
     {
-        if (!string.IsNullOrWhiteSpace(result.Arg1) && result.Quantity.HasValue)
-            return $"{result.Action} {result.Arg1} {result.Quantity.Value}";
+        if (result.Args.Count == 0)
+            return result.Action;
 
-        if (!string.IsNullOrWhiteSpace(result.Arg1))
-            return $"{result.Action} {result.Arg1}";
-
-        return result.Action;
+        var args = result.Args
+            .Where(a => !string.IsNullOrWhiteSpace(a))
+            .ToArray();
+        return args.Length == 0
+            ? result.Action
+            : $"{result.Action} {string.Join(" ", args)}";
     }
 
     private async Task<bool> HandlePendingHaltsAsync(CancellationToken token)

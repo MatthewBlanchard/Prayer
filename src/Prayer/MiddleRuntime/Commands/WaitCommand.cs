@@ -18,7 +18,7 @@ public class WaitCommand : ISingleTurnCommand, IDslCommandGrammar
         ArgSpecs: new[]
         {
             new DslArgumentSpec(
-                DslArgKind.Integer,
+                DslArgType.Integer,
                 Required: false,
                 DefaultValue: DefaultTicks.ToString())
         });

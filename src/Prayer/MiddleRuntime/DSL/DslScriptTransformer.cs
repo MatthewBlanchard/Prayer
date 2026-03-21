@@ -83,11 +83,6 @@ public static class DslScriptTransformer
                     output.Add(result);
                     break;
                 }
-                case DslRepeatAstNode repeatNode:
-                {
-                    InterpretNodes(repeatNode.Body ?? Array.Empty<DslAstNode>(), state, output);
-                    break;
-                }
                 case DslIfAstNode ifNode:
                 {
                     InterpretNodes(ifNode.Body ?? Array.Empty<DslAstNode>(), state, output);
@@ -109,15 +104,10 @@ public static class DslScriptTransformer
         var parts = step
             .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-        var arg2Raw = parts.ElementAtOrDefault(2);
         return new CommandResult
         {
             Action = parts.ElementAtOrDefault(0) ?? "",
-            Arg1 = parts.ElementAtOrDefault(1),
-            Arg2 = arg2Raw,
-            Quantity = int.TryParse(arg2Raw, out int n)
-                ? n
-                : null,
+            Args = parts.Skip(1).ToList(),
             SourceLine = null
         };
     }

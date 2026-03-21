@@ -309,9 +309,10 @@
     window.requestAnimationFrame(_starDriftFrame);
   }
   window._scriptCommandRegex = null;
-  window._scriptKeywordRegex = buildNameRegex(['repeat', 'until', 'if', 'halt'], true);
+  window._scriptKeywordRegex = buildNameRegex(['until', 'if', 'halt'], true);
   window._scriptSystemRegex = null;
   window._scriptPoiRegex = null;
+  window._scriptItemRegex = null;
   window._scriptSymbolRegex = null;
   window._haltHighlightPending = false;
   window._haltHighlightPendingUntil = 0;

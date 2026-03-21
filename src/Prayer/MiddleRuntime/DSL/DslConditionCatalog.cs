@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 
 public sealed record DslBooleanPredicate(
     string Name,
@@ -16,18 +17,17 @@ public static class DslConditionCatalog
     public static IReadOnlyList<DslBooleanPredicate> BooleanPredicates { get; } = new List<DslBooleanPredicate>
     {
         new("MISSION_COMPLETE", ["mission_id"], IsMissionComplete),
-        new("IS_DOCKED", [], (state, _) => state.Docked),
     };
 
     public static IReadOnlyList<DslNumericPredicate> NumericPredicates { get; } = new List<DslNumericPredicate>
     {
         new("FUEL",    [],           (state, _)    => ResolveFuelPercent(state)),
-        new("HULL",    [],           (state, _)    => ResolveHullPercent(state)),
-        new("SHIELD",  [],           (state, _)    => ResolveShieldPercent(state)),
-        new("ARMOR",   [],           (state, _)    => state.Ship.Armor),
         new("CREDITS", [],           (state, _)    => state.Credits),
+        new("CARGO_PCT", [],         (state, _)    => ResolveCargoPercent(state)),
         new("CARGO",   ["item_id"],  (state, args) => ResolveItemCount(state.Ship.Cargo, args)),
         new("STASH",   ["poi_id", "item_id"],  (state, args) => ResolveStashCount(state, args)),
+        new("MINED",   ["item_id"],  (state, args) => ResolveTrackedCount(state.ScriptMinedByItem, args)),
+        new("STASHED", ["item_id"],  (state, args) => ResolveTrackedCount(state.ScriptStashedByItem, args)),
     };
 
     private static bool IsMissionComplete(GameState state, IReadOnlyList<string> args)
@@ -39,16 +39,54 @@ public static class DslConditionCatalog
         foreach (var mission in state.ActiveMissions ?? Array.Empty<MissionInfo>())
         {
             if (mission == null) continue;
-            if (MatchesPrefix(mission.Id, prefix) || MatchesPrefix(mission.MissionId, prefix))
+            if (MatchesMissionPrefix(mission, prefix))
                 return mission.Completed;
         }
-        return false;
+
+        // Completed missions are typically removed from ActiveMissions after turn-in.
+        // If we can't find a matching active mission, treat it as complete.
+        return true;
+    }
+
+    private static bool MatchesMissionPrefix(MissionInfo mission, string prefix)
+    {
+        return MatchesPrefix(mission.Id, prefix) ||
+               MatchesPrefix(mission.MissionId, prefix) ||
+               MatchesPrefix(mission.TemplateId, prefix) ||
+               MatchesPrefix(ToSnakeCaseToken(mission.Title), prefix);
     }
 
     private static bool MatchesPrefix(string? id, string prefix)
     {
         var s = (id ?? string.Empty).Trim();
         return s.Length > 0 && s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ToSnakeCaseToken(string? value)
+    {
+        var input = (value ?? string.Empty).Trim();
+        if (input.Length == 0)
+            return string.Empty;
+
+        var sb = new StringBuilder(input.Length);
+        bool lastWasUnderscore = false;
+        foreach (var ch in input)
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                sb.Append(char.ToLowerInvariant(ch));
+                lastWasUnderscore = false;
+                continue;
+            }
+
+            if (!lastWasUnderscore)
+            {
+                sb.Append('_');
+                lastWasUnderscore = true;
+            }
+        }
+
+        return sb.ToString().Trim('_');
     }
 
     private static int ResolveItemCount(Dictionary<string, ItemStack> dict, IReadOnlyList<string> args)
@@ -72,6 +110,16 @@ public static class DslConditionCatalog
         return 0;
     }
 
+    private static int ResolveTrackedCount(Dictionary<string, int>? dict, IReadOnlyList<string> args)
+    {
+        if (dict == null || args.Count == 0 || string.IsNullOrWhiteSpace(args[0]))
+            return 0;
+
+        return dict.TryGetValue(args[0], out var value)
+            ? Math.Max(0, value)
+            : 0;
+    }
+
     private static int ResolveFuelPercent(GameState state)
     {
         var maxFuel = state.Ship.MaxFuel;
@@ -79,17 +127,10 @@ public static class DslConditionCatalog
         return Math.Clamp((state.Ship.Fuel * 100) / maxFuel, 0, 100);
     }
 
-    private static int ResolveHullPercent(GameState state)
+    private static int ResolveCargoPercent(GameState state)
     {
-        var max = state.Ship.MaxHull;
-        if (max <= 0) return 0;
-        return Math.Clamp((state.Ship.Hull * 100) / max, 0, 100);
-    }
-
-    private static int ResolveShieldPercent(GameState state)
-    {
-        var max = state.Ship.MaxShield;
-        if (max <= 0) return 0;
-        return Math.Clamp((state.Ship.Shield * 100) / max, 0, 100);
+        var cargoCapacity = state.Ship.CargoCapacity;
+        if (cargoCapacity <= 0) return 0;
+        return Math.Clamp((state.Ship.CargoUsed * 100) / cargoCapacity, 0, 100);
     }
 }

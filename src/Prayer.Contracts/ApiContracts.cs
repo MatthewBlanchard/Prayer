@@ -17,6 +17,7 @@ public sealed record RegisterSessionResponse(string SessionId, string Password);
 public sealed record RuntimeCommandRequest(string Command, string? Argument = null);
 
 public sealed record SetScriptRequest(string Script);
+public sealed record RunScriptRequest(string Script);
 
 public sealed record GenerateScriptRequest(string Prompt);
 public sealed record GenerateScriptResponse(string Script);
@@ -52,10 +53,12 @@ public sealed record RuntimeStateResponse(
     IReadOnlyList<string> ExecutionStatusLines,
     string? ControlInput,
     int? CurrentScriptLine,
+    bool ScriptRunning,
     string? LastGenerationPrompt,
     int? CurrentTick,
     DateTime? LastSpaceMoltPostUtc,
-    ActiveGoRouteDto? ActiveRoute = null);
+    ActiveGoRouteDto? ActiveRoute = null,
+    string? ActiveOverrideName = null);
 
 public sealed record SessionSummary(
     string Id,
@@ -110,3 +113,24 @@ public sealed record SpaceMoltPassthroughResponse(bool Succeeded, JsonElement Re
 public sealed record GenerateRequest(string Prompt, int MaxTokens = 512, float Temperature = 0.7f);
 
 public sealed record GenerateResponse(string Text);
+
+public sealed record SkillParamDto(string Name, string TypeName);
+
+public sealed record SkillEntryDto(string Name, IReadOnlyList<SkillParamDto> Params, string RawText);
+
+public sealed record OverrideEntryDto(string Name, string Condition, string RawText, bool Enabled);
+
+public sealed record SkillLibraryResponse(
+    IReadOnlyList<SkillEntryDto> Skills,
+    IReadOnlyList<OverrideEntryDto> Overrides,
+    string RawText);
+
+public sealed record SetSkillLibraryRequest(string Text);
+
+public sealed record AppendSkillBlockRequest(string BlockText);
+
+public sealed record ToggleOverrideRequest(string Name);
+
+public sealed record DeleteSkillItemRequest(string Kind, string Name);
+
+public sealed record ReorderOverrideRequest(string Name, string Direction);

@@ -3,11 +3,10 @@
 Date captured: 2026-03-05
 Code baseline: current `main` workspace state before middle-runtime extraction.
 
-## DSL parse and normalize behavior (`repeat`, `if`, `until`, `halt`)
+## DSL parse and normalize behavior (`if`, `until`, `halt`)
 
 - Parser accepts commands in the form `command [arg1] [arg2];`.
 - Block forms currently supported:
-  - `repeat { ... }`
   - `if <BOOLEAN_FLAG> { ... }`
   - `until <BOOLEAN_FLAG> { ... }`
 - `halt;` is a first-class DSL command and is accepted by parser validation.
@@ -19,7 +18,6 @@ Code baseline: current `main` workspace state before middle-runtime extraction.
   - default args may be injected where syntax defines defaults
   - rendered normalized script is persisted as the execution script
 - AST walker semantics in runtime:
-  - `repeat` loops forever unless execution is halted externally
   - `if` executes body when condition is true; if condition is unknown at runtime, body is entered
   - `until` executes body until condition becomes true; if condition is unknown at runtime, body is entered
 

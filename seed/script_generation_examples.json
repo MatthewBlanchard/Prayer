@@ -35,28 +35,18 @@
     "CreatedUtc": "2026-03-04T22:12:00.9509226Z"
   },
   {
-    "Prompt": "Do a mining loop at nexus prime",
-    "Script": "go nexus_prime;\nrepeat {\n  mine;\n  sell;\n}",
+    "Prompt": "Mine and sell at nexus prime",
+    "Script": "go nexus_prime;\nmine;\nsell;",
     "CreatedUtc": "2026-03-05T10:17:15.861709Z"
   },
   {
-    "Prompt": "mine iron and stash it at nexus prime until 50 are stored there",
-    "Script": "until STASH(nexus_prime_station, iron_ore) >= 50 {\n  mine iron_ore;\n  go nexus_prime;\n  stash;\n}",
+    "Prompt": "mine iron and stash 50 this run",
+    "Script": "until STASHED(iron_ore) >= 50 {\n  mine iron_ore;\n  go nexus_prime;\n  stash iron_ore;\n}",
     "CreatedUtc": "2026-03-11T00:00:00.0000000Z"
   },
   {
-    "Prompt": "mine vanadium ore until cargo is 80 percent full, refuel if fuel drops below 20",
-    "Script": "until CARGO() >= 80 {\n  if FUEL() < 20 { refuel; }\n  mine vanadium_ore;\n}",
-    "CreatedUtc": "2026-03-17T00:00:00.0000000Z"
-  },
-  {
-    "Prompt": "mine energy crystals until cargo full",
-    "Script": "until CARGO() >= 70 {\n  mine energy_crystal;\n}",
-    "CreatedUtc": "2026-03-17T00:00:00.0000000Z"
-  },
-  {
-    "Prompt": "mine iron ore until cargo full then go sell at station and repeat",
-    "Script": "repeat {\n  until CARGO() >= 80 { mine iron_ore; }\n  go nexus_prime;\n  dock;\n  sell;\n}",
+    "Prompt": "accept_mission copper_requisition, accept_mission deep_core_prospecting, accept_mission iron_supply_run",
+    "Script": "accept_mission copper_requisition;\naccept_mission deep_core_prospecting;\naccept_mission iron_supply_run;",
     "CreatedUtc": "2026-03-17T00:00:00.0000000Z"
   }
 ]

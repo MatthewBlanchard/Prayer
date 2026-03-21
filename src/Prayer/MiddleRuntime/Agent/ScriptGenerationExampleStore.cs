@@ -90,7 +90,16 @@ public sealed class ScriptGenerationExampleStore
             var raw = File.ReadAllText(AppPaths.ScriptGenerationExamplesFile);
             var loaded = JsonSerializer.Deserialize<List<ScriptGenerationExample>>(raw);
             if (loaded == null || loaded.Count == 0)
-                return;
+            {
+                // Auto-heal deleted/empty cache files from seed.
+                if (!EnsureSeededExamplesFileExists(overwriteIfEmptyOrInvalid: true))
+                    return;
+
+                raw = File.ReadAllText(AppPaths.ScriptGenerationExamplesFile);
+                loaded = JsonSerializer.Deserialize<List<ScriptGenerationExample>>(raw);
+                if (loaded == null || loaded.Count == 0)
+                    return;
+            }
 
             _examples.Clear();
             _examples.AddRange(
@@ -104,26 +113,75 @@ public sealed class ScriptGenerationExampleStore
         }
     }
 
-    private static void EnsureSeededExamplesFileExists()
+    private static bool EnsureSeededExamplesFileExists(bool overwriteIfEmptyOrInvalid = false)
     {
         try
         {
-            if (File.Exists(AppPaths.ScriptGenerationExamplesFile))
-                return;
+            string examplesPath = AppPaths.ScriptGenerationExamplesFile;
+            Directory.CreateDirectory(Path.GetDirectoryName(examplesPath) ?? AppPaths.CacheDir);
 
-            if (!File.Exists(AppPaths.SeedScriptGenerationExamplesFile))
-                return;
+            if (File.Exists(examplesPath))
+            {
+                if (!overwriteIfEmptyOrInvalid)
+                    return true;
 
-            string seed = File.ReadAllText(AppPaths.SeedScriptGenerationExamplesFile);
+                string existing = File.ReadAllText(examplesPath);
+                if (!string.IsNullOrWhiteSpace(existing))
+                    return true;
+            }
+
+            string? seedPath = ResolveSeedExamplesPath();
+            if (string.IsNullOrWhiteSpace(seedPath))
+                return false;
+
+            string seed = File.ReadAllText(seedPath);
             if (string.IsNullOrWhiteSpace(seed))
-                return;
+                return false;
 
-            File.WriteAllText(AppPaths.ScriptGenerationExamplesFile, seed);
+            File.WriteAllText(examplesPath, seed);
+            return true;
         }
         catch
         {
             // Seeding is best-effort.
+            return false;
         }
+    }
+
+    private static string? ResolveSeedExamplesPath()
+    {
+        var candidates = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void AddCandidate(string root)
+        {
+            if (string.IsNullOrWhiteSpace(root))
+                return;
+
+            string candidate = Path.Combine(root, AppPaths.SeedScriptGenerationExamplesFile);
+            if (seen.Add(candidate))
+                candidates.Add(candidate);
+        }
+
+        void AddParentCandidates(string startPath)
+        {
+            if (string.IsNullOrWhiteSpace(startPath))
+                return;
+
+            DirectoryInfo? dir = new DirectoryInfo(startPath);
+            while (dir != null)
+            {
+                AddCandidate(dir.FullName);
+                dir = dir.Parent;
+            }
+        }
+
+        AddCandidate(Directory.GetCurrentDirectory());
+        AddParentCandidates(Directory.GetCurrentDirectory());
+        AddCandidate(AppContext.BaseDirectory);
+        AddParentCandidates(AppContext.BaseDirectory);
+
+        return candidates.FirstOrDefault(File.Exists);
     }
 
     private async Task SaveAsync()

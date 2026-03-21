@@ -19,12 +19,12 @@ public sealed partial class HtmxBotWindow
 
     private static readonly IReadOnlyList<StateTabDefinition> StateTabs = new[]
     {
-        new StateTabDefinition("map", "Map", "load", ActiveOnLoad: true),
-        new StateTabDefinition("shipyard", "Ship", "load"),
-        new StateTabDefinition("skills", "Skills", "load"),
-        new StateTabDefinition("missions", "Missions", "load"),
-        new StateTabDefinition("trade", "Trade", "load"),
-        new StateTabDefinition("crafting", "Crafting", "load", RequiresDocked: true),
+        new StateTabDefinition("map", "Map", "load, every 1000ms", ActiveOnLoad: true),
+        new StateTabDefinition("shipyard", "Ship", "load, every 1000ms"),
+        new StateTabDefinition("skills", "Skills", "load, every 1000ms"),
+        new StateTabDefinition("missions", "Missions", "load, every 1000ms"),
+        new StateTabDefinition("trade", "Trade", "load, every 1000ms"),
+        new StateTabDefinition("crafting", "Crafting", "load, every 1000ms", RequiresDocked: true),
     };
 
     private string BuildShellHtml()
@@ -185,14 +185,16 @@ public sealed partial class HtmxBotWindow
     {
         sb.AppendLine("<div class='card script-column'>");
 
-        // Tab bar: Script | Roleplay
+        // Tab bar: Script | Roleplay | Skills
         sb.AppendLine("<div class='tabs' role='tablist' aria-label='Right Column'>");
         sb.AppendLine("<button id='right-tab-script' type='button' class='tab-btn' role='tab' data-right-tab='script' aria-selected='true' aria-controls='right-pane-script' tabindex='0'>Script</button>");
         sb.AppendLine("<button id='right-tab-roleplay' type='button' class='tab-btn' role='tab' data-right-tab='roleplay' aria-selected='false' aria-controls='right-pane-roleplay' tabindex='-1'>Roleplay</button>");
+        sb.AppendLine("<button id='right-tab-skills' type='button' class='tab-btn' role='tab' data-right-tab='skills' aria-selected='false' aria-controls='right-pane-skills' tabindex='-1'>Skills</button>");
         sb.AppendLine("</div>");
 
         // Script pane
         sb.AppendLine("<div id='right-pane-script' class='tab-pane active' role='tabpanel' aria-labelledby='right-tab-script'>");
+        sb.AppendLine("<div id='override-indicator' class='override-indicator' hidden></div>");
         sb.AppendLine("<section class='space-panel script-block'><div class='space-panel-title'>Current Script</div><div id='live-script-editor'><textarea id='current-script-input' rows='5' readonly>")
             .Append(E(currentScript))
             .AppendLine("</textarea></div></section>");
@@ -211,6 +213,11 @@ public sealed partial class HtmxBotWindow
         sb.AppendLine("<div id='right-pane-roleplay' class='tab-pane' role='tabpanel' aria-labelledby='right-tab-roleplay' hidden>");
         sb.AppendLine("<div hx-get='partial/roleplay' hx-trigger='load' hx-swap='innerHTML'></div>");
         sb.AppendLine("</div>"); // end right-pane-roleplay
+
+        // Skills pane
+        sb.AppendLine("<div id='right-pane-skills' class='tab-pane' role='tabpanel' aria-labelledby='right-tab-skills' hidden>");
+        sb.AppendLine("<div id='skills-library' hx-get='partial/skills-library' hx-trigger='revealed' hx-swap='innerHTML'></div>");
+        sb.AppendLine("</div>"); // end right-pane-skills
 
         sb.AppendLine("</div>"); // end script-column
     }

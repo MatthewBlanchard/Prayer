@@ -36,6 +36,11 @@ public sealed partial class HtmxBotWindow : IAppUi
     private Action<string>? _roleplayStopHandler;               // botId
     private Func<string, (bool IsRunning, string? Status, string? Persona)>? _roleplayStatusHandler;
     private Func<string, IReadOnlyList<string>>? _roleplayTraceHandler;
+    private Func<string, Task<Prayer.Contracts.SkillLibraryResponse>>? _getSkillLibraryHandler;
+    private Func<string, string, Task<Prayer.Contracts.SkillLibraryResponse>>? _appendSkillBlockHandler;
+    private Func<string, string, Task<Prayer.Contracts.SkillLibraryResponse>>? _toggleOverrideHandler;
+    private Func<string, string, string, Task<Prayer.Contracts.SkillLibraryResponse>>? _deleteSkillItemHandler;
+    private Func<string, string, string, Task<Prayer.Contracts.SkillLibraryResponse>>? _reorderOverrideHandler;
 
     private string _selectedProvider = "llamacpp";
     private string _selectedModel = "model";
@@ -65,6 +70,11 @@ public sealed partial class HtmxBotWindow : IAppUi
     public void SetRoleplayStopHandler(Action<string> handler) => _roleplayStopHandler = handler;
     public void SetRoleplayStatusHandler(Func<string, (bool IsRunning, string? Status, string? Persona)> handler) => _roleplayStatusHandler = handler;
     public void SetRoleplayTraceHandler(Func<string, IReadOnlyList<string>> handler) => _roleplayTraceHandler = handler;
+    public void SetGetSkillLibraryHandler(Func<string, Task<Prayer.Contracts.SkillLibraryResponse>> handler) => _getSkillLibraryHandler = handler;
+    public void SetAppendSkillBlockHandler(Func<string, string, Task<Prayer.Contracts.SkillLibraryResponse>> handler) => _appendSkillBlockHandler = handler;
+    public void SetToggleOverrideHandler(Func<string, string, Task<Prayer.Contracts.SkillLibraryResponse>> handler) => _toggleOverrideHandler = handler;
+    public void SetDeleteSkillItemHandler(Func<string, string, string, Task<Prayer.Contracts.SkillLibraryResponse>> handler) => _deleteSkillItemHandler = handler;
+    public void SetReorderOverrideHandler(Func<string, string, string, Task<Prayer.Contracts.SkillLibraryResponse>> handler) => _reorderOverrideHandler = handler;
 
     public void ConfigureInitialLlmSelection(string provider, string model)
     {
@@ -592,6 +602,52 @@ public sealed partial class HtmxBotWindow : IAppUi
             return;
         }
 
+        if (req.HttpMethod == "GET" && path == "/partial/skills-library")
+        {
+            var botId = req.QueryString["bot_id"];
+            var html = BuildSkillsLibraryHtml(botId);
+            WriteText(ctx.Response, html, "text/html; charset=utf-8");
+            return;
+        }
+
+        if (req.HttpMethod == "POST" && path == "/api/skills-save")
+        {
+            var botId = req.QueryString["bot_id"];
+            var form = ReadForm(req);
+            var prayerText = GetValue(form, "prayer_text") ?? string.Empty;
+            HandleSkillsSaveAsync(ctx, botId, prayerText).GetAwaiter().GetResult();
+            return;
+        }
+
+        if (req.HttpMethod == "POST" && path == "/api/skills-toggle-override")
+        {
+            var botId = req.QueryString["bot_id"];
+            var form = ReadForm(req);
+            var overrideName = GetValue(form, "name");
+            HandleSkillsToggleOverrideAsync(ctx, botId, overrideName).GetAwaiter().GetResult();
+            return;
+        }
+
+        if (req.HttpMethod == "POST" && path == "/api/skills-delete")
+        {
+            var botId = req.QueryString["bot_id"];
+            var form = ReadForm(req);
+            var itemKind = GetValue(form, "kind");    // "skill" or "override"
+            var itemName = GetValue(form, "name");
+            HandleSkillsDeleteAsync(ctx, botId, itemKind, itemName).GetAwaiter().GetResult();
+            return;
+        }
+
+        if (req.HttpMethod == "POST" && path == "/api/skills-reorder-override")
+        {
+            var botId = req.QueryString["bot_id"];
+            var form = ReadForm(req);
+            var overrideName = GetValue(form, "name");
+            var direction = GetValue(form, "direction");  // "up" or "down"
+            HandleSkillsReorderOverrideAsync(ctx, botId, overrideName, direction).GetAwaiter().GetResult();
+            return;
+        }
+
         WriteText(ctx.Response, "Not found", "text/plain", 404);
     }
 
@@ -617,6 +673,225 @@ public sealed partial class HtmxBotWindow : IAppUi
             sb.AppendLine("<div class='small'>(no bots loaded)</div>");
         sb.AppendLine("</div>");
         return sb.ToString();
+    }
+
+    // ─── Skills library UI ─────────────────────────────────────────────────────
+
+    private string BuildSkillsLibraryHtml(string? botId)
+        => BuildSkillsLibraryHtmlFromResponse(botId, null);
+
+    private string BuildSkillsLibraryHtmlFromResponse(string? botId, Prayer.Contracts.SkillLibraryResponse? lib)
+    {
+        UiSnapshot snapshot;
+        lock (_lock) snapshot = _snapshot;
+        var resolvedBotId = botId ?? snapshot.DefaultBotId;
+
+        if (string.IsNullOrWhiteSpace(resolvedBotId) || _getSkillLibraryHandler == null)
+            return "<div class='small'>(no bot selected)</div>";
+
+        if (lib == null)
+        {
+            try { lib = _getSkillLibraryHandler(resolvedBotId).GetAwaiter().GetResult(); }
+            catch (Exception ex)
+                { return $"<div class='small'>Error loading skills: {E(ex.Message)}</div>"; }
+        }
+
+        var sb = new StringBuilder();
+        var bid = E(resolvedBotId);
+
+        // ── Skills section ──────────────────────────────────────────────────
+        sb.AppendLine("<section class='space-panel script-block'>");
+        sb.AppendLine("<div class='space-panel-title'>Skills</div>");
+
+        if (lib.Skills.Count > 0)
+        {
+            sb.AppendLine("<div class='list'>");
+            foreach (var skill in lib.Skills)
+            {
+                var paramSig = string.Join(", ", skill.Params.Select(p => $"{p.Name}: {p.TypeName}"));
+                var sig = E($"{skill.Name}({paramSig})");
+                sb.AppendLine("<div class='skill-row'>");
+                sb.AppendLine($"  <details><summary class='skill-sig'>{sig}</summary>");
+                sb.AppendLine($"  <pre class='skill-body'>{E(skill.RawText)}</pre></details>");
+                sb.AppendLine($"  <form hx-post='api/skills-delete?bot_id={bid}' hx-target='#skills-library' hx-swap='innerHTML' style='display:inline'>");
+                sb.AppendLine($"    <input type='hidden' name='kind' value='skill'>");
+                sb.AppendLine($"    <input type='hidden' name='name' value='{E(skill.Name)}'>");
+                sb.AppendLine("    <button type='submit' class='icon-btn' title='Remove'>✕</button>");
+                sb.AppendLine("  </form>");
+                sb.AppendLine("</div>");
+            }
+            sb.AppendLine("</div>");
+        }
+        else
+        {
+            sb.AppendLine("<div class='small'>(no skills defined)</div>");
+        }
+
+        sb.AppendLine($"<form hx-post='api/skills-save?bot_id={bid}' hx-target='#skills-library' hx-swap='innerHTML' class='list' style='margin-top:8px'>");
+        sb.AppendLine("<textarea name='prayer_text' rows='4' placeholder='skill refuel_at(station: poi_id) {\n  go $station;\n  refuel;\n}'></textarea>");
+        sb.AppendLine("<button type='submit'>Add Skill</button>");
+        sb.AppendLine("</form>");
+        sb.AppendLine("</section>");
+
+        // ── Overrides section ────────────────────────────────────────────────
+        sb.AppendLine("<section class='space-panel script-block'>");
+        sb.AppendLine("<div class='space-panel-title'>Overrides</div>");
+
+        if (lib.Overrides.Count > 0)
+        {
+            sb.AppendLine("<div class='list'>");
+            for (int i = 0; i < lib.Overrides.Count; i++)
+            {
+                var ov = lib.Overrides[i];
+                var checkedAttr = ov.Enabled ? " checked" : "";
+                var ovSig = E($"{ov.Name} when {ov.Condition}");
+                sb.AppendLine("<div class='skill-row'>");
+
+                sb.AppendLine($"  <form hx-post='api/skills-toggle-override?bot_id={bid}' hx-target='#skills-library' hx-swap='innerHTML' style='display:inline'>");
+                sb.AppendLine($"    <input type='hidden' name='name' value='{E(ov.Name)}'>");
+                sb.AppendLine($"    <input type='checkbox' name='enabled' onchange='this.form.submit()'{checkedAttr} title='Enable/disable'>");
+                sb.AppendLine("  </form>");
+
+                sb.AppendLine($"  <details><summary class='skill-sig'>{ovSig}</summary>");
+                sb.AppendLine($"  <pre class='skill-body'>{E(ov.RawText)}</pre></details>");
+
+                if (i > 0)
+                {
+                    sb.AppendLine($"  <form hx-post='api/skills-reorder-override?bot_id={bid}' hx-target='#skills-library' hx-swap='innerHTML' style='display:inline'>");
+                    sb.AppendLine($"    <input type='hidden' name='name' value='{E(ov.Name)}'>");
+                    sb.AppendLine("    <input type='hidden' name='direction' value='up'>");
+                    sb.AppendLine("    <button type='submit' class='icon-btn' title='Move up'>▲</button>");
+                    sb.AppendLine("  </form>");
+                }
+                if (i < lib.Overrides.Count - 1)
+                {
+                    sb.AppendLine($"  <form hx-post='api/skills-reorder-override?bot_id={bid}' hx-target='#skills-library' hx-swap='innerHTML' style='display:inline'>");
+                    sb.AppendLine($"    <input type='hidden' name='name' value='{E(ov.Name)}'>");
+                    sb.AppendLine("    <input type='hidden' name='direction' value='down'>");
+                    sb.AppendLine("    <button type='submit' class='icon-btn' title='Move down'>▼</button>");
+                    sb.AppendLine("  </form>");
+                }
+
+                sb.AppendLine($"  <form hx-post='api/skills-delete?bot_id={bid}' hx-target='#skills-library' hx-swap='innerHTML' style='display:inline'>");
+                sb.AppendLine("    <input type='hidden' name='kind' value='override'>");
+                sb.AppendLine($"    <input type='hidden' name='name' value='{E(ov.Name)}'>");
+                sb.AppendLine("    <button type='submit' class='icon-btn' title='Remove'>✕</button>");
+                sb.AppendLine("  </form>");
+                sb.AppendLine("</div>");
+            }
+            sb.AppendLine("</div>");
+        }
+        else
+        {
+            sb.AppendLine("<div class='small'>(no overrides defined)</div>");
+        }
+
+        sb.AppendLine($"<form hx-post='api/skills-save?bot_id={bid}' hx-target='#skills-library' hx-swap='innerHTML' class='list' style='margin-top:8px'>");
+        sb.AppendLine("<textarea name='prayer_text' rows='4' placeholder='override low_fuel when FUEL() &lt; 50 {\n  go $nearest_station;\n  refuel;\n}'></textarea>");
+        sb.AppendLine("<button type='submit'>Add Override</button>");
+        sb.AppendLine("</form>");
+        sb.AppendLine("</section>");
+
+        return sb.ToString();
+    }
+
+    private async Task HandleSkillsSaveAsync(HttpListenerContext ctx, string? botId, string newBlockText)
+    {
+        UiSnapshot snapshot;
+        lock (_lock) snapshot = _snapshot;
+        var resolvedBotId = botId ?? snapshot.DefaultBotId;
+
+        if (string.IsNullOrWhiteSpace(resolvedBotId) || _appendSkillBlockHandler == null)
+        {
+            WriteText(ctx.Response, "<div class='small'>(no bot selected)</div>", "text/html; charset=utf-8", 400);
+            return;
+        }
+
+        try
+        {
+            var lib = await _appendSkillBlockHandler(resolvedBotId, newBlockText);
+            WriteText(ctx.Response, BuildSkillsLibraryHtmlFromResponse(resolvedBotId, lib), "text/html; charset=utf-8");
+        }
+        catch (Exception ex)
+        {
+            Prayer.Contracts.SkillLibraryResponse? current = null;
+            try { if (_getSkillLibraryHandler != null) current = await _getSkillLibraryHandler(resolvedBotId); } catch { }
+
+            var errorBanner = $"<div style='color:#ffd7da;font-size:12px;padding:4px 0;margin-bottom:6px'>Error: {E(ex.Message)}</div>";
+            var body = current != null
+                ? errorBanner + BuildSkillsLibraryHtmlFromResponse(resolvedBotId, current)
+                : errorBanner;
+            WriteText(ctx.Response, body, "text/html; charset=utf-8");
+        }
+    }
+
+    private async Task HandleSkillsToggleOverrideAsync(HttpListenerContext ctx, string? botId, string? overrideName)
+    {
+        UiSnapshot snapshot;
+        lock (_lock) snapshot = _snapshot;
+        var resolvedBotId = botId ?? snapshot.DefaultBotId;
+
+        if (string.IsNullOrWhiteSpace(resolvedBotId) || string.IsNullOrWhiteSpace(overrideName) || _toggleOverrideHandler == null)
+        {
+            WriteText(ctx.Response, BuildSkillsLibraryHtml(resolvedBotId), "text/html; charset=utf-8");
+            return;
+        }
+
+        try
+        {
+            var lib = await _toggleOverrideHandler(resolvedBotId, overrideName);
+            WriteText(ctx.Response, BuildSkillsLibraryHtmlFromResponse(resolvedBotId, lib), "text/html; charset=utf-8");
+        }
+        catch
+        {
+            WriteText(ctx.Response, BuildSkillsLibraryHtml(resolvedBotId), "text/html; charset=utf-8");
+        }
+    }
+
+    private async Task HandleSkillsDeleteAsync(HttpListenerContext ctx, string? botId, string? kind, string? name)
+    {
+        UiSnapshot snapshot;
+        lock (_lock) snapshot = _snapshot;
+        var resolvedBotId = botId ?? snapshot.DefaultBotId;
+
+        if (string.IsNullOrWhiteSpace(resolvedBotId) || string.IsNullOrWhiteSpace(name) || _deleteSkillItemHandler == null)
+        {
+            WriteText(ctx.Response, BuildSkillsLibraryHtml(resolvedBotId), "text/html; charset=utf-8");
+            return;
+        }
+
+        try
+        {
+            var lib = await _deleteSkillItemHandler(resolvedBotId, kind ?? "skill", name);
+            WriteText(ctx.Response, BuildSkillsLibraryHtmlFromResponse(resolvedBotId, lib), "text/html; charset=utf-8");
+        }
+        catch
+        {
+            WriteText(ctx.Response, BuildSkillsLibraryHtml(resolvedBotId), "text/html; charset=utf-8");
+        }
+    }
+
+    private async Task HandleSkillsReorderOverrideAsync(HttpListenerContext ctx, string? botId, string? overrideName, string? direction)
+    {
+        UiSnapshot snapshot;
+        lock (_lock) snapshot = _snapshot;
+        var resolvedBotId = botId ?? snapshot.DefaultBotId;
+
+        if (string.IsNullOrWhiteSpace(resolvedBotId) || string.IsNullOrWhiteSpace(overrideName) || _reorderOverrideHandler == null)
+        {
+            WriteText(ctx.Response, BuildSkillsLibraryHtml(resolvedBotId), "text/html; charset=utf-8");
+            return;
+        }
+
+        try
+        {
+            var lib = await _reorderOverrideHandler(resolvedBotId, overrideName, direction ?? "down");
+            WriteText(ctx.Response, BuildSkillsLibraryHtmlFromResponse(resolvedBotId, lib), "text/html; charset=utf-8");
+        }
+        catch
+        {
+            WriteText(ctx.Response, BuildSkillsLibraryHtml(resolvedBotId), "text/html; charset=utf-8");
+        }
     }
 
     private BotStateEntry? GetBotState(UiSnapshot snapshot, string? botId)
@@ -881,6 +1156,9 @@ public sealed partial class HtmxBotWindow : IAppUi
         var highlightNames = LoadScriptHighlightNamesFromCache()
             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToList();
+        var itemHighlightNames = LoadItemHighlightNamesFromCache()
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToList();
         var (systemNames, poiNames) = LoadMapNameHintsFromCache();
         var payload = new Dictionary<string, object?>
         {
@@ -888,6 +1166,7 @@ public sealed partial class HtmxBotWindow : IAppUi
                 .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
                 .ToList(),
             ["scriptHighlightNames"] = highlightNames,
+            ["itemHighlightNames"] = itemHighlightNames,
             ["systemHighlightNames"] = systemNames,
             ["poiHighlightNames"] = poiNames.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList()
         };
@@ -935,6 +1214,13 @@ public sealed partial class HtmxBotWindow : IAppUi
         return names;
     }
 
+    private static IReadOnlyCollection<string> LoadItemHighlightNamesFromCache()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddCatalogueNamesFromCache(AppPaths.ItemCatalogByIdCacheFile, names);
+        return names;
+    }
+
     private static void AddCatalogueNamesFromCache(string path, HashSet<string> names)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
@@ -962,6 +1248,10 @@ public sealed partial class HtmxBotWindow : IAppUi
             {
                 if (entry.Value.ValueKind != JsonValueKind.Object)
                     continue;
+
+                var idTrimmed = entry.Name.Trim();
+                if (idTrimmed.Length > 0)
+                    names.Add(idTrimmed);
 
                 if (!TryGetStringPropertyCaseInsensitive(entry.Value, "name", out var name))
                     continue;
@@ -1044,7 +1334,10 @@ public sealed partial class HtmxBotWindow : IAppUi
                             pois.Add(poiId.Trim());
                         if (TryGetStringPropertyCaseInsensitive(poi, "name", out var poiName))
                             pois.Add(poiName.Trim());
-                        if (TryGetStringPropertyCaseInsensitive(poi, "systemId", out var systemId))
+                        if (TryGetStringPropertyCaseInsensitive(poi, "base_id", out var baseId) && !string.IsNullOrWhiteSpace(baseId))
+                            pois.Add(baseId.Trim());
+                        if (TryGetStringPropertyCaseInsensitive(poi, "systemId", out var systemId) ||
+                            TryGetStringPropertyCaseInsensitive(poi, "system_id", out systemId))
                             systems.Add(systemId.Trim());
                     }
                 }
@@ -1113,11 +1406,15 @@ public sealed partial class HtmxBotWindow : IAppUi
         var botState = GetBotState(snapshot, botId);
         var script = botState?.ControlInput ?? string.Empty;
         var currentScriptLine = botState?.CurrentScriptLine;
+        var scriptRunning = botState?.ScriptRunning ?? false;
+        var activeOverrideName = botState?.ActiveOverrideName;
 
         return JsonSerializer.Serialize(new
         {
             script,
-            currentScriptLine
+            currentScriptLine,
+            scriptRunning,
+            activeOverrideName
         });
     }
 

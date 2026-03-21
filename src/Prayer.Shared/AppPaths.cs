@@ -28,10 +28,12 @@ public static class AppPaths
     public static readonly string ScriptCommandFailuresLogFile = Path.Combine(LogDir, "script_command_failures.log");
     public static readonly string RuntimeHostLogFile = Path.Combine(LogDir, "runtime_host.log");
     public static readonly string AutonomousGenerationLogFile = Path.Combine(LogDir, "autonomous_generation.log");
+    public static readonly string AutonomousDriverLogFile = Path.Combine(LogDir, "autodriver.log");
     public static readonly string GoArgValidationLogFile = Path.Combine(LogDir, "go_arg_validation.log");
     public static readonly string GoArgValidationMapDumpLogFile = Path.Combine(LogDir, "go_arg_validation_mapdump.log");
     public static readonly string UiHttpErrorLogFile = Path.Combine(LogDir, "ui_http_errors.log");
     public static readonly string UiHttpTraceLogFile = Path.Combine(LogDir, "ui_http_trace.log");
+    public static readonly string OverrideLogFile = Path.Combine(LogDir, "overrides.log");
     public static readonly string ScriptGenerationExamplesFile = Path.Combine(CacheDir, "script_generation_examples.json");
     public static readonly string SeedScriptGenerationExamplesFile = Path.Combine("seed", "script_generation_examples.json");
     public static readonly string SavedBotsFile = Path.Combine(CacheDir, "saved_bots.json");
@@ -45,13 +47,20 @@ public static class AppPaths
 
     public static readonly string GalaxyMapFile = Path.Combine(CacheDir, "galaxy_map.json");
     public static readonly string GalaxyKnownPoisFile = Path.Combine(CacheDir, "known_pois.json");
+    public static readonly string CommandEmbeddingsCacheFile = Path.Combine(CacheDir, "command_embeddings.json");
 
-    private static readonly string[] DebugLogsToResetOnStartup =
+    private static readonly string[] LogsToResetOnStartup =
     {
         LlmLogFile,
         PlannerPromptLogFile,
+        OpenAiErrorsLogFile,
+        HttpBadRequestLogFile,
         PathfindLogFile,
         SpaceMoltApiLogFile,
+        SpaceMoltApiStatsLogFile,
+        AuthFlowLogFile,
+        AnalyzeMarketLogFile,
+        ItemCatalogLogFile,
         CommandExecutionLogFile,
         ScriptNormalizationLogFile,
         ScriptWriterContextLogFile,
@@ -60,8 +69,12 @@ public static class AppPaths
         ScriptCommandFailuresLogFile,
         RuntimeHostLogFile,
         AutonomousGenerationLogFile,
+        AutonomousDriverLogFile,
         GoArgValidationLogFile,
-        GoArgValidationMapDumpLogFile
+        GoArgValidationMapDumpLogFile,
+        UiHttpErrorLogFile,
+        UiHttpTraceLogFile,
+        OverrideLogFile
     };
 
     public static void EnsureDirectories()
@@ -76,10 +89,12 @@ public static class AppPaths
 
     public static void ResetDebugLogsOnStartup()
     {
-        foreach (var path in DebugLogsToResetOnStartup)
+        foreach (var path in LogsToResetOnStartup)
         {
             try
             {
+                if (File.Exists(path))
+                    File.Delete(path);
                 File.WriteAllText(path, string.Empty);
             }
             catch
@@ -87,6 +102,24 @@ public static class AppPaths
                 // Startup log reset is best-effort.
             }
         }
+    }
+
+    public static string GetSkillsFile(string botLabel)
+    {
+        var normalized = string.IsNullOrWhiteSpace(botLabel)
+            ? "default"
+            : botLabel.Trim().ToLowerInvariant();
+
+        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        var builder = new StringBuilder(normalized.Length);
+        foreach (var ch in normalized)
+            builder.Append(invalid.Contains(ch) ? '_' : ch);
+
+        var safeName = builder.ToString();
+        if (string.IsNullOrWhiteSpace(safeName))
+            safeName = "default";
+
+        return Path.Combine(AgentCheckpointsDir, $"{safeName}.skills.prayer");
     }
 
     public static string GetAgentCheckpointFile(string botLabel)

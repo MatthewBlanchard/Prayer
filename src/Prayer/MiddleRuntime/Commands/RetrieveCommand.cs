@@ -10,8 +10,8 @@ public class RetrieveCommand : AutoDockSingleTurnCommand, IDslCommandGrammar
     public override DslCommandSyntax GetDslSyntax() => new(
         ArgSpecs: new[]
         {
-            new DslArgumentSpec(DslArgKind.Item, Required: true),
-            new DslArgumentSpec(DslArgKind.Integer, Required: false),
+            new DslArgumentSpec(DslArgType.ItemId, Required: true),
+            new DslArgumentSpec(DslArgType.Integer, Required: false),
         });
 
     protected override bool IsAvailableWhenDocked(GameState state)

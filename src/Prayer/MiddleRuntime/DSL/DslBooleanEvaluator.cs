@@ -53,7 +53,11 @@ internal static class DslBooleanEvaluator
         return false;
     }
 
-    public static bool TryEvaluate(DslConditionAstNode? condition, GameState state, out bool value)
+    public static bool TryEvaluate(
+        DslConditionAstNode? condition,
+        GameState state,
+        out bool value,
+        IReadOnlyDictionary<string, string>? bindings = null)
     {
         value = false;
         if (state == null || condition == null) return false;
@@ -62,14 +66,24 @@ internal static class DslBooleanEvaluator
         {
             if (!BooleanPredicateByName.TryGetValue(call.Name.ToUpperInvariant(), out var predicate))
                 return false;
-            value = predicate.Evaluate(state, call.Args);
-            return true;
+            var expandedArgs = ExpandArgs(call.Args, state, bindings);
+            try
+            {
+                value = predicate.Evaluate(state, expandedArgs);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                throw new FormatException(
+                    $"Condition evaluation failed for '{RenderCall(call.Name, call.Args)}': {ex.Message}",
+                    ex);
+            }
         }
 
         if (condition is DslComparisonConditionAstNode comparison)
         {
-            if (!TryResolveOperand(comparison.Left, state, out var left) ||
-                !TryResolveOperand(comparison.Right, state, out var right))
+            if (!TryResolveOperand(comparison.Left, state, bindings, out var left) ||
+                !TryResolveOperand(comparison.Right, state, bindings, out var right))
                 return false;
 
             value = comparison.Operator switch
@@ -100,6 +114,7 @@ internal static class DslBooleanEvaluator
     {
         error = null;
         if (operand is DslIntegerOperandAstNode) return true;
+        if (operand is DslArgumentRefOperandAstNode) return true; // param/macro ref, resolved at runtime
         if (operand is DslMetricCallOperandAstNode call)
         {
             if (!IsKnownNumericMetric(call.Name))
@@ -113,23 +128,58 @@ internal static class DslBooleanEvaluator
         return false;
     }
 
-    private static bool TryResolveOperand(DslNumericOperandAstNode operand, GameState state, out int value)
+    private static bool TryResolveOperand(
+        DslNumericOperandAstNode operand,
+        GameState state,
+        IReadOnlyDictionary<string, string>? bindings,
+        out int value)
     {
         value = 0;
         if (operand is DslIntegerOperandAstNode i) { value = i.Value; return true; }
         if (operand is DslMetricCallOperandAstNode call &&
             NumericPredicateByName.TryGetValue(call.Name.ToUpperInvariant(), out var predicate))
         {
-            value = predicate.Resolve(state, call.Args);
+            value = predicate.Resolve(state, ExpandArgs(call.Args, state, bindings));
             return true;
         }
+        if (operand is DslArgumentRefOperandAstNode refOp)
+        {
+            var resolved = ResolveArgToken(refOp.Token, state, bindings);
+            return int.TryParse(resolved, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out value);
+        }
         return false;
+    }
+
+    private static IReadOnlyList<string> ExpandArgs(
+        IReadOnlyList<string> args,
+        GameState state,
+        IReadOnlyDictionary<string, string>? bindings)
+    {
+        if (args.Count == 0) return args;
+        var expanded = new string[args.Count];
+        for (int i = 0; i < args.Count; i++)
+            expanded[i] = ResolveArgToken(args[i], state, bindings);
+        return expanded;
+    }
+
+    private static string ResolveArgToken(string arg, GameState state, IReadOnlyDictionary<string, string>? bindings)
+    {
+        if (string.IsNullOrEmpty(arg) || !arg.StartsWith("$", StringComparison.Ordinal))
+            return arg;
+
+        var name = arg[1..];
+        if (bindings != null && bindings.TryGetValue(name, out var bound))
+            return bound;
+
+        return DslParser.ExpandMacroArg(arg, state);
     }
 
     private static string RenderOperand(DslNumericOperandAstNode operand) => operand switch
     {
         DslIntegerOperandAstNode i          => i.Value.ToString(CultureInfo.InvariantCulture),
         DslMetricCallOperandAstNode call    => RenderCall(call.Name, call.Args),
+        DslArgumentRefOperandAstNode r      => r.Token,
         _                                   => string.Empty
     };
 

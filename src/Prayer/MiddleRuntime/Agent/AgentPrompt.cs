@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 public static class AgentPrompt
 {
     public const string BaseSystemPrompt =
@@ -56,3 +57,69 @@ public static class AgentPrompt
             "<|start_header_id|>assistant<|end_header_id|>\n";
     }
 }
+=======
+public static class AgentPrompt
+{
+    public const string BaseSystemPrompt =
+        "You are an autonomous agent playing the online game SpaceMolt. " +
+        "Pursue the user objective with short, deterministic DSL scripts. " +
+        "Avoid redundant movement and setup steps. " +
+        "Do not add dock before commands that can auto-dock. " +
+        "Do not add go before mine; use mine or mine <resource_id> directly so runtime can resolve navigation. " +
+        "Remember: mine <resource_id> selects where to mine, but mined output can still include other resources. " +
+        "For mine quests, plan to stash cargo at station and use stash; (no item argument) to deposit all cargo when needed. " +
+        "Do not append a trailing halt; unless the user explicitly asks to stop or pause.";
+
+    public static string BuildScriptFromUserInputPrompt(
+        string baseSystemPrompt,
+        string userInput,
+        string stateContextBlock,
+        string dslCommandReferenceBlock,
+        string examplesBlock,
+        int attemptNumber = 1,
+        string? previousScript = null,
+        string? previousError = null)
+    {
+        var retryContext = string.IsNullOrWhiteSpace(previousError)
+            ? ""
+            :
+                "Previous attempt failed.\n" +
+                "Error:\n" + previousError.Trim() + "\n\n" +
+                "Previous script:\n" + (previousScript ?? "") + "\n\n" +
+                "Fix the script and return a corrected version.\n\n";
+        var trimmedExamples = (examplesBlock ?? string.Empty).Trim();
+        var examplesSection = string.IsNullOrWhiteSpace(trimmedExamples)
+            ? string.Empty
+            : "Prompt -> script examples:\n" + trimmedExamples + "\n\n";
+
+        return
+            "<|start_header_id|>system<|end_header_id|>\n" +
+            baseSystemPrompt + "\n" +
+            "You write DSL scripts for this game agent.\n" +
+            "Output only DSL script text. No markdown fences and no explanation.\n" +
+            "Terminate every command with a semicolon (;).\n" +
+            "Use only the DSL syntax implied by the examples.\n" +
+            "Do not invent unsupported commands.\n" +
+            "<|eot_id|>" +
+            "<|start_header_id|>user<|end_header_id|>\n" +
+            "Attempt: " + attemptNumber + "\n\n" +
+            "User request:\n" + userInput + "\n\n" +
+            stateContextBlock + "\n\n" +
+            dslCommandReferenceBlock +
+            examplesSection +
+            retryContext +
+            "Generate a DSL script now.\n" +
+            "Checklist:\n" +
+            "- every command ends with ;\n" +
+            "- blocks are allowed only as: if <CONDITION> { ... }, until <CONDITION> { ... }\n" +
+            "- avoid explicit dock unless user explicitly asks for dock\n" +
+            "- avoid explicit go before mine; use mine or mine <resource_id>\n" +
+            "- mine <resource_id> does not guarantee only that resource in cargo; for mine quests, include stash; at station when you need to deposit mixed cargo\n" +
+            "- do not append trailing halt; unless user explicitly asks to stop/pause\n" +
+            "- no markdown fence\n" +
+            "Return only the script text.\n" +
+            "<|eot_id|>" +
+            "<|start_header_id|>assistant<|end_header_id|>\n";
+    }
+}
+>>>>>>> upstream/main

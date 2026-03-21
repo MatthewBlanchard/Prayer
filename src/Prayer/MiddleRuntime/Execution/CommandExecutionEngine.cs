@@ -11,6 +11,11 @@ public sealed class CommandExecutionEngine
     private readonly Queue<ActionMemory> _memory = new();
     private readonly LinkedList<CommandResult> _requeuedSteps = new();
     private readonly List<ExecutionFrame> _frames = new();
+    private readonly Dictionary<string, int> _minedByItem = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _stashedByItem = new(StringComparer.OrdinalIgnoreCase);
+
+    // Skill library — provides named skills and always-on overrides.
+    private SkillLibrary? _skillLibrary;
 
     private const int MaxMemory = 12;
 
@@ -21,6 +26,8 @@ public sealed class CommandExecutionEngine
     private ActiveCommandState _activeCommandState;
     private IMultiTurnCommand? _activeCommand;
     private CommandResult? _activeCommandResult;
+    private StateSnapshot? _lastObservedState;
+    private string? _pendingDeltaAction;
 
     private readonly Action<string> _setStatus;
     private readonly IAgentLogger _logger;
@@ -47,13 +54,39 @@ public sealed class CommandExecutionEngine
     public int? CurrentScriptLine => _currentScriptLine;
     public string? CurrentScript => string.IsNullOrWhiteSpace(_script) ? null : _script;
 
+    public string? ActiveOverrideName
+    {
+        get
+        {
+            for (int i = _frames.Count - 1; i >= 0; i--)
+            {
+                if (_frames[i].Kind == ExecutionFrameKind.Override)
+                    return _frames[i].OverrideName;
+            }
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Sets or replaces the skill library. Skills become valid commands in subsequently
+    /// loaded scripts, and overrides are evaluated before each script step.
+    /// </summary>
+    public void SetSkillLibrary(SkillLibrary? library)
+    {
+        _skillLibrary = library;
+    }
+
     public string SetScript(string script, GameState? state = null)
     {
         EnsureActiveCommandInvariant();
         var rawScript = script ?? string.Empty;
         _currentScriptLine = null;
 
-        var tree = DslParser.ParseTree(rawScript);
+        var skillDefs = _skillLibrary?.Skills.ToDictionary(
+            s => s.Name,
+            s => s.Params,
+            StringComparer.OrdinalIgnoreCase);
+        var tree = DslParser.ParseTree(rawScript, skillDefs);
         if (state != null)
             ValidateCommandNodes(tree.Statements, state);
 
@@ -63,7 +96,8 @@ public sealed class CommandExecutionEngine
 
         _logger.LogScriptNormalization("set_script", rawScript, _script);
 
-        ResetFrames();
+        ResetFrames(state);
+        ResetScriptConditionCounters();
         ClearActiveCommand();
         _requeuedSteps.Clear();
         _isHalted = false;
@@ -171,6 +205,7 @@ public sealed class CommandExecutionEngine
         GameState state)
     {
         EnsureActiveCommandInvariant();
+        ObserveStateAndApplyCounters(state);
         string? message = null;
         bool shouldAddMemory = false;
         bool haltScript = false;
@@ -201,6 +236,7 @@ public sealed class CommandExecutionEngine
 
             bool finished = continuation.Item1;
             var response = continuation.Item2;
+            SetPendingDeltaAction(_activeCommandResult!.Action);
 
             if (finished)
             {
@@ -272,6 +308,8 @@ public sealed class CommandExecutionEngine
                     ClearActiveCommand();
                     _setStatus("Waiting");
                 }
+
+                SetPendingDeltaAction(result.Action);
             }
             else if (command is ISingleTurnCommand singleTurnCommand)
             {
@@ -281,6 +319,7 @@ public sealed class CommandExecutionEngine
                 shouldAddMemory = true;
                 haltScript = response?.HaltScript == true;
                 _setStatus("Waiting");
+                SetPendingDeltaAction(result.Action);
             }
         }
 
@@ -309,7 +348,14 @@ public sealed class CommandExecutionEngine
     public Task<CommandResult?> DecideAsync(GameState state)
     {
         EnsureActiveCommandInvariant();
-        if (_isHalted)
+        ObserveStateAndApplyCounters(state);
+
+        // Overrides are hard safety mechanisms — check them unconditionally,
+        // even while halted or between scripts.
+        if (!HasActiveCommand)
+            TryTriggerOverride(state);
+
+        if (_isHalted && _frames.Count == 0)
         {
             _setStatus("Halted: waiting for user input");
             return Task.FromResult<CommandResult?>(null);
@@ -366,10 +412,21 @@ public sealed class CommandExecutionEngine
                 next = _requeuedSteps.First!.Value;
                 _requeuedSteps.RemoveFirst();
             }
-            else if (!TryGetNextScriptCommand(state, out next))
+            else
             {
-                Halt("Script complete: waiting for input");
-                return Task.FromResult<CommandResult?>(null);
+                try
+                {
+                    if (!TryGetNextScriptCommand(state, out next))
+                    {
+                        Halt("Script complete: waiting for input");
+                        return Task.FromResult<CommandResult?>(null);
+                    }
+                }
+                catch (InvalidOperationException ex)
+                {
+                    Halt($"Script condition error: {ex.Message}");
+                    return Task.FromResult<CommandResult?>(null);
+                }
             }
 
             if (!IsExecutableAction(next.Action))
@@ -379,7 +436,7 @@ public sealed class CommandExecutionEngine
                 continue;
             }
 
-            _currentScriptLine = next.SourceLine;
+            _currentScriptLine = next.SourceLine ?? GetCallSiteSourceLine();
             _setStatus($"Executing: script {FormatCommand(next)}");
             PersistCheckpoint();
             return Task.FromResult<CommandResult?>(next);
@@ -412,6 +469,8 @@ public sealed class CommandExecutionEngine
                 LogAstWalker(
                     "frame_pop",
                     $"Popped frame kind={frame.Kind} path={frame.Path}.");
+                if (frame.Kind == ExecutionFrameKind.Override && frame.OverrideName != null)
+                    _logger.LogOverride("completed", frame.OverrideName, $"path={frame.Path}");
                 continue;
             }
 
@@ -421,32 +480,27 @@ public sealed class CommandExecutionEngine
             switch (node)
             {
                 case DslCommandAstNode commandNode:
-                    result = BuildCommandResult(commandNode);
+                {
+                    // Skill call: push a new Skill frame instead of emitting a command.
+                    if (_skillLibrary != null &&
+                        _skillLibrary.TryGetSkill(commandNode.Name, out var skillDef))
+                    {
+                        var bindings = BuildSkillBindings(skillDef!, commandNode.Args, state);
+                        if (!string.IsNullOrWhiteSpace(state.System))
+                            bindings["here"] = state.System;
+                        PushSkillFrame(skillDef!, bindings, $"{frame.Path}/{nodeIndex}", commandNode.SourceLine);
+                        LogAstWalker(
+                            "skill_call",
+                            $"Pushed skill frame skill={skillDef!.Name} path={frame.Path}/{nodeIndex}.");
+                        continue;
+                    }
+
+                    var substituted = SubstituteBindings(commandNode);
+                    result = BuildCommandResult(substituted, state);
                     LogAstWalker(
                         "emit_command",
                         $"Selected command line={result.SourceLine?.ToString() ?? "?"} cmd={FormatCommand(result)} path={frame.Path}/{nodeIndex}.");
                     return true;
-
-                case DslRepeatAstNode repeatNode:
-                {
-                    IReadOnlyList<DslAstNode> body = repeatNode.Body ?? Array.Empty<DslAstNode>();
-                    LogAstWalker(
-                        "repeat_visit",
-                        $"Visited repeat line={repeatNode.SourceLine} bodyCount={body.Count} path={frame.Path}/{nodeIndex}.");
-                    if (body.Count > 0)
-                    {
-                        _frames.Add(new ExecutionFrame(
-                            body,
-                            ExecutionFrameKind.Repeat,
-                            repeatNode.SourceLine,
-                            untilCondition: null,
-                            untilConditionKnown: false,
-                            path: $"{frame.Path}/{nodeIndex}"));
-                        LogAstWalker(
-                            "frame_push",
-                            $"Pushed repeat frame line={repeatNode.SourceLine} path={frame.Path}/{nodeIndex}.");
-                    }
-                    continue;
                 }
 
                 case DslIfAstNode ifNode:
@@ -518,19 +572,13 @@ public sealed class CommandExecutionEngine
         if (frame.Nodes.Count == 0)
             return false;
 
-        if (frame.Kind == ExecutionFrameKind.Repeat)
-        {
-            frame.Index = 0;
-            return true;
-        }
-
         if (frame.Kind != ExecutionFrameKind.Until)
             return false;
 
         if (!frame.UntilConditionKnown || frame.UntilCondition == null)
             return false;
 
-        if (!DslBooleanEvaluator.TryEvaluate(frame.UntilCondition, state, out var conditionValue))
+        if (!DslBooleanEvaluator.TryEvaluate(frame.UntilCondition, state, out var conditionValue, GetActiveFrameBindings()))
             return false;
 
         if (conditionValue)
@@ -540,13 +588,13 @@ public sealed class CommandExecutionEngine
         return true;
     }
 
-    private static bool ShouldEnterIf(
+    private bool ShouldEnterIf(
         DslConditionAstNode condition,
         GameState state,
         out bool conditionKnown,
         out bool conditionValue)
     {
-        if (!DslBooleanEvaluator.TryEvaluate(condition, state, out var evaluated))
+        if (!DslBooleanEvaluator.TryEvaluate(condition, state, out var evaluated, GetActiveFrameBindings()))
         {
             conditionKnown = false;
             conditionValue = false;
@@ -558,13 +606,13 @@ public sealed class CommandExecutionEngine
         return evaluated;
     }
 
-    private static bool ShouldEnterUntil(
+    private bool ShouldEnterUntil(
         DslConditionAstNode condition,
         GameState state,
         out bool conditionKnown,
         out bool conditionValue)
     {
-        if (!DslBooleanEvaluator.TryEvaluate(condition, state, out var evaluated))
+        if (!DslBooleanEvaluator.TryEvaluate(condition, state, out var evaluated, GetActiveFrameBindings()))
         {
             conditionKnown = false;
             conditionValue = false;
@@ -576,13 +624,13 @@ public sealed class CommandExecutionEngine
         return !evaluated;
     }
 
-    private static CommandResult BuildCommandResult(DslCommandAstNode commandNode)
+    private static CommandResult BuildCommandResult(DslCommandAstNode commandNode, GameState state)
     {
         var command = new DslCommand(commandNode.Name, commandNode.Args);
         CommandResult result;
         try
         {
-            result = command.ToValidCommand(state: null, command);
+            result = command.ToValidCommand(state, command);
         }
         catch (FormatException ex) when (commandNode.SourceLine > 0)
         {
@@ -595,7 +643,7 @@ public sealed class CommandExecutionEngine
         return result;
     }
 
-    private static void ValidateCommandNodes(IReadOnlyList<DslAstNode> nodes, GameState state)
+    private void ValidateCommandNodes(IReadOnlyList<DslAstNode> nodes, GameState state)
     {
         foreach (var node in nodes ?? Array.Empty<DslAstNode>())
         {
@@ -603,6 +651,11 @@ public sealed class CommandExecutionEngine
             {
                 case DslCommandAstNode commandNode:
                 {
+                    // Skill calls are validated at runtime when the frame is pushed; skip here.
+                    if (_skillLibrary != null &&
+                        _skillLibrary.TryGetSkill(commandNode.Name, out _))
+                        break;
+
                     var command = new DslCommand(commandNode.Name, commandNode.Args);
                     try
                     {
@@ -615,10 +668,6 @@ public sealed class CommandExecutionEngine
                     break;
                 }
 
-                case DslRepeatAstNode repeatNode:
-                    ValidateCommandNodes(repeatNode.Body ?? Array.Empty<DslAstNode>(), state);
-                    break;
-
                 case DslIfAstNode ifNode:
                     ValidateCommandNodes(ifNode.Body ?? Array.Empty<DslAstNode>(), state);
                     break;
@@ -630,12 +679,21 @@ public sealed class CommandExecutionEngine
         }
     }
 
-    private void ResetFrames()
+    private void ResetFrames(GameState? state = null)
     {
         _frames.Clear();
         LogAstWalker("reset_frames", "Cleared execution frames.");
         if (_scriptAst?.Statements == null || _scriptAst.Statements.Count == 0)
             return;
+
+        Dictionary<string, string>? rootBindings = null;
+        if (!string.IsNullOrWhiteSpace(state?.System))
+        {
+            rootBindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["here"] = state.System
+            };
+        }
 
         _frames.Add(new ExecutionFrame(
             _scriptAst.Statements,
@@ -643,7 +701,8 @@ public sealed class CommandExecutionEngine
             sourceLine: 1,
             untilCondition: null,
             untilConditionKnown: false,
-            path: RootFramePath));
+            path: RootFramePath,
+            bindings: rootBindings));
         LogAstWalker(
             "frame_push",
             $"Initialized root frame statements={_scriptAst.Statements.Count}.");
@@ -667,31 +726,22 @@ public sealed class CommandExecutionEngine
 
         _memory.Enqueue(new ActionMemory(
             result.Action,
-            result.Arg1,
-            result.Quantity,
+            result.Args.ToList(),
             message));
     }
 
     private static string FormatAction(ActionMemory m)
     {
-        if (!string.IsNullOrWhiteSpace(m.Arg1) && m.Quantity.HasValue)
-            return $"{m.Action} {m.Arg1} {m.Quantity}";
-
-        if (!string.IsNullOrWhiteSpace(m.Arg1))
-            return $"{m.Action} {m.Arg1}";
-
-        return m.Action;
+        if (m.Args.Count == 0)
+            return m.Action;
+        return $"{m.Action} {string.Join(" ", m.Args.Where(a => !string.IsNullOrWhiteSpace(a)))}";
     }
 
     private static string FormatCommand(CommandResult cmd)
     {
-        if (!string.IsNullOrWhiteSpace(cmd.Arg1) && cmd.Quantity.HasValue)
-            return $"{cmd.Action} {cmd.Arg1} {cmd.Quantity}";
-
-        if (!string.IsNullOrWhiteSpace(cmd.Arg1))
-            return $"{cmd.Action} {cmd.Arg1}";
-
-        return cmd.Action;
+        if (cmd.Args.Count == 0)
+            return cmd.Action;
+        return $"{cmd.Action} {string.Join(" ", cmd.Args.Where(a => !string.IsNullOrWhiteSpace(a)))}";
     }
 
     private static CommandResult CloneStep(CommandResult step)
@@ -699,8 +749,7 @@ public sealed class CommandExecutionEngine
         return new CommandResult
         {
             Action = step.Action,
-            Arg1 = step.Arg1,
-            Quantity = step.Quantity,
+            Args = step.Args.ToList(),
             SourceLine = step.SourceLine
         };
     }
@@ -715,8 +764,7 @@ public sealed class CommandExecutionEngine
 
             _memory.Enqueue(new ActionMemory(
                 memoryEntry.Action,
-                memoryEntry.Arg1,
-                memoryEntry.Quantity,
+                memoryEntry.Args ?? new List<string>(),
                 memoryEntry.ResultMessage));
         }
 
@@ -739,6 +787,8 @@ public sealed class CommandExecutionEngine
         {
             _requeuedSteps.AddFirst(CloneStep(checkpoint.ActiveCommandResult));
         }
+
+        RestoreScriptConditionCounters(checkpoint);
 
         if (!TryRestoreFrames(checkpoint.Frames))
             ResetFrames();
@@ -859,7 +909,6 @@ public sealed class CommandExecutionEngine
             var node = currentNodes[nodeIndex];
             currentNodes = node switch
             {
-                DslRepeatAstNode repeatNode => repeatNode.Body,
                 DslIfAstNode ifNode => ifNode.Body,
                 DslUntilAstNode untilNode => untilNode.Body,
                 _ => Array.Empty<DslAstNode>()
@@ -923,8 +972,7 @@ public sealed class CommandExecutionEngine
             Memory = _memory.Select(m => new ActionMemoryCheckpoint
             {
                 Action = m.Action,
-                Arg1 = m.Arg1,
-                Quantity = m.Quantity,
+                Args = m.Args.ToList(),
                 ResultMessage = m.ResultMessage
             }).ToList(),
             RequeuedSteps = _requeuedSteps
@@ -938,7 +986,9 @@ public sealed class CommandExecutionEngine
                 UntilCondition = DslBooleanEvaluator.RenderCondition(f.UntilCondition),
                 UntilConditionKnown = f.UntilConditionKnown,
                 Path = f.Path
-            }).ToList()
+            }).ToList(),
+            MinedByItem = new Dictionary<string, int>(_minedByItem, StringComparer.OrdinalIgnoreCase),
+            StashedByItem = new Dictionary<string, int>(_stashedByItem, StringComparer.OrdinalIgnoreCase)
         };
     }
 
@@ -951,6 +1001,349 @@ public sealed class CommandExecutionEngine
         return DslParser.TryParseCondition(condition, out parsed, out _);
     }
 
+    private void ResetScriptConditionCounters()
+    {
+        _minedByItem.Clear();
+        _stashedByItem.Clear();
+        _lastObservedState = null;
+        _pendingDeltaAction = null;
+    }
+
+    private void RestoreScriptConditionCounters(CommandExecutionCheckpoint checkpoint)
+    {
+        _minedByItem.Clear();
+        foreach (var entry in checkpoint.MinedByItem)
+        {
+            if (string.IsNullOrWhiteSpace(entry.Key))
+                continue;
+            _minedByItem[entry.Key] = Math.Max(0, entry.Value);
+        }
+
+        _stashedByItem.Clear();
+        foreach (var entry in checkpoint.StashedByItem)
+        {
+            if (string.IsNullOrWhiteSpace(entry.Key))
+                continue;
+            _stashedByItem[entry.Key] = Math.Max(0, entry.Value);
+        }
+
+        _lastObservedState = null;
+        _pendingDeltaAction = null;
+    }
+
+    private void ObserveStateAndApplyCounters(GameState state)
+    {
+        if (state == null)
+            return;
+
+        var current = CaptureStateSnapshot(state);
+
+        if (_lastObservedState != null &&
+            !string.IsNullOrWhiteSpace(_pendingDeltaAction))
+        {
+            // Accumulate into the innermost scoped frame's counters when inside a skill/override,
+            // otherwise accumulate into the root script counters.
+            var scopedFrame = GetInnermostScopedFrame();
+
+            if (string.Equals(_pendingDeltaAction, "mine", StringComparison.OrdinalIgnoreCase))
+            {
+                var target = scopedFrame?.FrameMinedByItem ?? _minedByItem;
+                AccumulatePositiveDelta(target, _lastObservedState.CargoByItem, current.CargoByItem);
+            }
+            else if (string.Equals(_pendingDeltaAction, "stash", StringComparison.OrdinalIgnoreCase))
+            {
+                var target = scopedFrame?.FrameStashedByItem ?? _stashedByItem;
+                AccumulatePositiveDelta(target, _lastObservedState.StorageByItem, current.StorageByItem);
+            }
+        }
+
+        _lastObservedState = current;
+        _pendingDeltaAction = null;
+        ApplyCountersToState(state);
+    }
+
+    private void SetPendingDeltaAction(string? action)
+    {
+        if (string.IsNullOrWhiteSpace(action))
+            return;
+
+        _pendingDeltaAction = action.Trim();
+    }
+
+    private void ApplyCountersToState(GameState state)
+    {
+        // Inside a Skill/Override frame, expose that frame's counters so MINED()/STASHED()
+        // conditions reflect only what the current subscript has done.
+        var scopedFrame = GetInnermostScopedFrame();
+        if (scopedFrame != null)
+        {
+            state.ScriptMinedByItem = new Dictionary<string, int>(
+                scopedFrame.FrameMinedByItem!, StringComparer.OrdinalIgnoreCase);
+            state.ScriptStashedByItem = new Dictionary<string, int>(
+                scopedFrame.FrameStashedByItem!, StringComparer.OrdinalIgnoreCase);
+        }
+        else
+        {
+            state.ScriptMinedByItem = new Dictionary<string, int>(_minedByItem, StringComparer.OrdinalIgnoreCase);
+            state.ScriptStashedByItem = new Dictionary<string, int>(_stashedByItem, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private static StateSnapshot CaptureStateSnapshot(GameState state)
+    {
+        return new StateSnapshot(
+            CopyItemStacks(state.Ship?.Cargo),
+            CopyItemStacks(state.StorageItems));
+    }
+
+    private static Dictionary<string, int> CopyItemStacks(Dictionary<string, ItemStack>? source)
+    {
+        var snapshot = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (source == null)
+            return snapshot;
+
+        foreach (var (itemId, stack) in source)
+        {
+            if (string.IsNullOrWhiteSpace(itemId))
+                continue;
+
+            int quantity = stack?.Quantity ?? 0;
+            if (quantity > 0)
+                snapshot[itemId] = quantity;
+        }
+
+        return snapshot;
+    }
+
+    private static void AccumulatePositiveDelta(
+        Dictionary<string, int> totals,
+        Dictionary<string, int> before,
+        Dictionary<string, int> after)
+    {
+        foreach (var (itemId, afterQuantity) in after)
+        {
+            before.TryGetValue(itemId, out var beforeQuantity);
+            int delta = afterQuantity - beforeQuantity;
+            if (delta <= 0)
+                continue;
+
+            totals.TryGetValue(itemId, out var existing);
+            totals[itemId] = existing + delta;
+        }
+    }
+
+    // ─── Skill / Override helpers ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the innermost frame that carries scoped counters (Skill or Override kind).
+    /// Null when the current stack has no Skill/Override frames active.
+    /// </summary>
+    private ExecutionFrame? GetInnermostScopedFrame()
+    {
+        for (int i = _frames.Count - 1; i >= 0; i--)
+        {
+            var f = _frames[i];
+            if (f.Kind == ExecutionFrameKind.Skill || f.Kind == ExecutionFrameKind.Override)
+                return f;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Returns the call-site source line from the innermost Skill frame, or null if none.
+    /// Used to display the parent script line number while a skill body is executing.
+    /// </summary>
+    private int? GetCallSiteSourceLine()
+    {
+        for (int i = _frames.Count - 1; i >= 0; i--)
+        {
+            if (_frames[i].Kind == ExecutionFrameKind.Skill && _frames[i].SourceLine > 0)
+                return _frames[i].SourceLine;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Returns the bindings from the innermost Skill frame on the stack, or null if none.
+    /// </summary>
+    private IReadOnlyDictionary<string, string>? GetActiveFrameBindings()
+    {
+        for (int i = _frames.Count - 1; i >= 0; i--)
+        {
+            var f = _frames[i];
+            if (f.Bindings != null &&
+                (f.Kind == ExecutionFrameKind.Skill ||
+                 f.Kind == ExecutionFrameKind.Root ||
+                 f.Kind == ExecutionFrameKind.Override))
+                return f.Bindings;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Returns a copy of <paramref name="node"/> with any $param tokens in its args
+    /// replaced by values from the active Skill frame bindings.
+    /// Global macros ($home, $here, etc.) are left as-is for runtime resolution.
+    /// </summary>
+    private DslCommandAstNode SubstituteBindings(DslCommandAstNode node)
+    {
+        var bindings = GetActiveFrameBindings();
+        if (bindings == null || bindings.Count == 0)
+            return node;
+
+        bool changed = false;
+        var newArgs = new List<string>(node.Args.Count);
+        foreach (var arg in node.Args)
+        {
+            if (arg.StartsWith("$", StringComparison.Ordinal) &&
+                bindings.TryGetValue(arg[1..], out var bound))
+            {
+                newArgs.Add(bound);
+                changed = true;
+            }
+            else
+            {
+                newArgs.Add(arg);
+            }
+        }
+
+        return changed ? node with { Args = newArgs } : node;
+    }
+
+    /// <summary>
+    /// Resolves a call-site arg token, checking the active frame bindings first,
+    /// then falling through to global macro expansion.
+    /// </summary>
+    private string ResolveCallSiteArg(string arg, GameState state)
+    {
+        if (!arg.StartsWith("$", StringComparison.Ordinal))
+            return arg;
+
+        var name = arg[1..];
+        var bindings = GetActiveFrameBindings();
+        if (bindings != null && bindings.TryGetValue(name, out var bound))
+            return bound;
+
+        // Fall through to global macro resolution.
+        return DslParser.ExpandMacroArg(arg, state);
+    }
+
+    /// <summary>
+    /// Builds a bindings dictionary by mapping skill parameter names to resolved call-site arg values.
+    /// </summary>
+    private Dictionary<string, string> BuildSkillBindings(
+        DslSkillAstNode skill,
+        IReadOnlyList<string> callSiteArgs,
+        GameState state)
+    {
+        var @params = skill.Params;
+
+        int requiredCount = @params.Count; // all params are required (no defaults in skills)
+        if (callSiteArgs.Count < requiredCount)
+            throw new FormatException(
+                $"Skill '{skill.Name}' requires {requiredCount} argument(s), got {callSiteArgs.Count}.");
+
+        if (callSiteArgs.Count > @params.Count)
+            throw new FormatException(
+                $"Skill '{skill.Name}' takes {requiredCount} argument(s), got {callSiteArgs.Count}.");
+
+        var bindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < @params.Count; i++)
+        {
+            var resolved = ResolveCallSiteArg(callSiteArgs[i], state);
+            bindings[@params[i].Name] = resolved;
+        }
+
+        return bindings;
+    }
+
+    /// <summary>Pushes a new Skill execution frame onto the stack.</summary>
+    private void PushSkillFrame(
+        DslSkillAstNode skill,
+        IReadOnlyDictionary<string, string> bindings,
+        string parentPath,
+        int callSiteSourceLine = 0)
+    {
+        _frames.Add(new ExecutionFrame(
+            skill.Body,
+            ExecutionFrameKind.Skill,
+            sourceLine: callSiteSourceLine,
+            untilCondition: null,
+            untilConditionKnown: false,
+            path: $"skill/{skill.Name}",
+            bindings: bindings));
+
+        LogAstWalker(
+            "frame_push",
+            $"Pushed skill frame skill={skill.Name} parent={parentPath}.");
+    }
+
+    /// <summary>
+    /// Checks registered overrides and pushes an Override frame for the first one whose
+    /// condition is true and whose frame is not already on the stack. At most one fires per tick.
+    /// </summary>
+    private void TryTriggerOverride(GameState state)
+    {
+        if (_skillLibrary == null)
+            return;
+
+        foreach (var ov in _skillLibrary.Overrides)
+        {
+            if (!ov.Enabled) continue;
+
+            // Don't re-trigger while the override's own frame is already executing.
+            bool alreadyActive = false;
+            for (int i = 0; i < _frames.Count; i++)
+            {
+                if (_frames[i].Kind == ExecutionFrameKind.Override &&
+                    string.Equals(_frames[i].OverrideName, ov.Name, StringComparison.OrdinalIgnoreCase))
+                {
+                    alreadyActive = true;
+                    break;
+                }
+            }
+            if (alreadyActive) continue;
+
+            if (!DslBooleanEvaluator.TryEvaluate(ov.Condition, state, out var fired) || !fired)
+                continue;
+
+            Dictionary<string, string>? overrideBindings = null;
+            if (!string.IsNullOrWhiteSpace(state?.System))
+            {
+                overrideBindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["here"] = state.System
+                };
+            }
+
+            _frames.Add(new ExecutionFrame(
+                ov.Body,
+                ExecutionFrameKind.Override,
+                sourceLine: 0,
+                untilCondition: null,
+                untilConditionKnown: false,
+                path: $"override/{ov.Name}",
+                overrideName: ov.Name,
+                bindings: overrideBindings));
+
+            LogAstWalker(
+                "override_trigger",
+                $"Override '{ov.Name}' fired cond={DslBooleanEvaluator.RenderCondition(ov.Condition)}.");
+            _logger.LogOverride(
+                "triggered",
+                ov.Name,
+                $"cond={DslBooleanEvaluator.RenderCondition(ov.Condition)} halted={_isHalted}");
+
+            break; // Only one override per tick.
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private sealed record StateSnapshot(
+        Dictionary<string, int> CargoByItem,
+        Dictionary<string, int> StorageByItem);
+
     private sealed class ExecutionFrame
     {
         public ExecutionFrame(
@@ -959,7 +1352,9 @@ public sealed class CommandExecutionEngine
             int sourceLine,
             DslConditionAstNode? untilCondition,
             bool untilConditionKnown,
-            string path)
+            string path,
+            IReadOnlyDictionary<string, string>? bindings = null,
+            string? overrideName = null)
         {
             Nodes = nodes ?? Array.Empty<DslAstNode>();
             Kind = kind;
@@ -967,6 +1362,15 @@ public sealed class CommandExecutionEngine
             UntilCondition = untilCondition;
             UntilConditionKnown = untilConditionKnown;
             Path = path;
+            Bindings = bindings;
+            OverrideName = overrideName;
+
+            // Skill and Override frames each carry their own isolated counters.
+            if (kind == ExecutionFrameKind.Skill || kind == ExecutionFrameKind.Override)
+            {
+                FrameMinedByItem = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                FrameStashedByItem = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            }
         }
 
         public IReadOnlyList<DslAstNode> Nodes { get; }
@@ -976,14 +1380,27 @@ public sealed class CommandExecutionEngine
         public bool UntilConditionKnown { get; }
         public string Path { get; }
         public int Index { get; set; }
+
+        /// <summary>Skill parameter bindings ($param -> resolved value). Null for non-Skill frames.</summary>
+        public IReadOnlyDictionary<string, string>? Bindings { get; }
+
+        /// <summary>Name of the override this frame belongs to. Null for non-Override frames.</summary>
+        public string? OverrideName { get; }
+
+        /// <summary>Scoped MINED counter for Skill/Override frames. Null for other frame kinds.</summary>
+        public Dictionary<string, int>? FrameMinedByItem { get; }
+
+        /// <summary>Scoped STASHED counter for Skill/Override frames. Null for other frame kinds.</summary>
+        public Dictionary<string, int>? FrameStashedByItem { get; }
     }
 
     private enum ExecutionFrameKind
     {
         Root,
-        Repeat,
         If,
-        Until
+        Until,
+        Skill,
+        Override
     }
 
     private enum ActiveCommandState
@@ -994,7 +1411,6 @@ public sealed class CommandExecutionEngine
 
     private record ActionMemory(
         string Action,
-        string? Arg1,
-        int? Quantity,
+        IReadOnlyList<string> Args,
         string? ResultMessage);
 }

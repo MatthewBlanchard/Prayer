@@ -21,7 +21,8 @@ public sealed class PrayerApiClient
 
         _http = new HttpClient
         {
-            BaseAddress = new Uri(EnsureTrailingSlash(baseUrl.Trim()))
+            BaseAddress = new Uri(EnsureTrailingSlash(baseUrl.Trim())),
+            Timeout = System.Threading.Timeout.InfiniteTimeSpan
         };
     }
 
@@ -71,6 +72,23 @@ public sealed class PrayerApiClient
         var response = await _http.PostAsJsonAsync(
             $"api/runtime/sessions/{sessionId}/commands",
             new Contracts.RuntimeCommandRequest(command, argument));
+        await EnsureSuccessWithDetailsAsync(response);
+    }
+
+    public async Task WaitForHaltAsync(string sessionId, CancellationToken cancellationToken = default)
+    {
+        var response = await _http.GetAsync(
+            $"api/runtime/sessions/{sessionId}/halt/wait",
+            cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response);
+    }
+
+    public async Task RunScriptAsync(string sessionId, string script, CancellationToken cancellationToken = default)
+    {
+        var response = await _http.PostAsJsonAsync(
+            $"api/runtime/sessions/{sessionId}/script/run",
+            new Contracts.RunScriptRequest(script),
+            cancellationToken);
         await EnsureSuccessWithDetailsAsync(response);
     }
 
@@ -244,6 +262,53 @@ public sealed class PrayerApiClient
         await EnsureSuccessWithDetailsAsync(response);
     }
 
+    public async Task<Contracts.SkillLibraryResponse> GetSkillLibraryAsync(string sessionId)
+    {
+        var result = await _http.GetFromJsonAsync<Contracts.SkillLibraryResponse>(
+            $"api/runtime/sessions/{sessionId}/skills");
+        return result ?? new Contracts.SkillLibraryResponse(
+            Array.Empty<Contracts.SkillEntryDto>(),
+            Array.Empty<Contracts.OverrideEntryDto>(),
+            string.Empty);
+    }
+
+    public async Task<Contracts.SkillLibraryResponse> AppendSkillBlockAsync(string sessionId, string blockText)
+    {
+        var response = await _http.PostAsJsonAsync(
+            $"api/runtime/sessions/{sessionId}/skills/append",
+            new Contracts.AppendSkillBlockRequest(blockText));
+        await EnsureSuccessWithDetailsAsync(response);
+        var result = await response.Content.ReadFromJsonAsync<Contracts.SkillLibraryResponse>();
+        return result!;
+    }
+
+    public async Task<Contracts.SkillLibraryResponse> ToggleOverrideAsync(string sessionId, string name)
+    {
+        var response = await _http.PostAsJsonAsync(
+            $"api/runtime/sessions/{sessionId}/skills/toggle-override",
+            new Contracts.ToggleOverrideRequest(name));
+        await EnsureSuccessWithDetailsAsync(response);
+        return (await response.Content.ReadFromJsonAsync<Contracts.SkillLibraryResponse>())!;
+    }
+
+    public async Task<Contracts.SkillLibraryResponse> DeleteSkillItemAsync(string sessionId, string kind, string name)
+    {
+        var response = await _http.PostAsJsonAsync(
+            $"api/runtime/sessions/{sessionId}/skills/delete",
+            new Contracts.DeleteSkillItemRequest(kind, name));
+        await EnsureSuccessWithDetailsAsync(response);
+        return (await response.Content.ReadFromJsonAsync<Contracts.SkillLibraryResponse>())!;
+    }
+
+    public async Task<Contracts.SkillLibraryResponse> ReorderOverrideAsync(string sessionId, string name, string direction)
+    {
+        var response = await _http.PostAsJsonAsync(
+            $"api/runtime/sessions/{sessionId}/skills/reorder-override",
+            new Contracts.ReorderOverrideRequest(name, direction));
+        await EnsureSuccessWithDetailsAsync(response);
+        return (await response.Content.ReadFromJsonAsync<Contracts.SkillLibraryResponse>())!;
+    }
+
     private static string EnsureTrailingSlash(string url)
     {
         return url.EndsWith("/", StringComparison.Ordinal) ? url : url + "/";
@@ -288,10 +353,12 @@ public sealed class PrayerApiClient
             snapshot.ExecutionStatusLines,
             snapshot.ControlInput,
             snapshot.CurrentScriptLine,
+            snapshot.ScriptRunning,
             snapshot.LastGenerationPrompt,
             snapshot.CurrentTick,
             snapshot.LastSpaceMoltPostUtc,
-            snapshot.ActiveRoute);
+            snapshot.ActiveRoute,
+            snapshot.ActiveOverrideName);
     }
 }
 
@@ -301,10 +368,12 @@ public sealed record AppPrayerRuntimeState(
     IReadOnlyList<string> ExecutionStatusLines,
     string? ControlInput,
     int? CurrentScriptLine,
+    bool ScriptRunning,
     string? LastGenerationPrompt,
     int? CurrentTick,
     DateTime? LastSpaceMoltPostUtc,
-    Contracts.ActiveGoRouteDto? ActiveRoute = null);
+    Contracts.ActiveGoRouteDto? ActiveRoute = null,
+    string? ActiveOverrideName = null);
 
 public sealed record AppPrayerRuntimeStatePollResult(
     AppPrayerRuntimeState? State,

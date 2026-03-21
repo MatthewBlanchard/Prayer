@@ -14,7 +14,7 @@ public class ScanCommand : ISingleTurnCommand, IDslCommandGrammar
     public DslCommandSyntax GetDslSyntax() => new(
         ArgSpecs: new[]
         {
-            new DslArgumentSpec(DslArgKind.Any, Required: true)
+            new DslArgumentSpec(DslArgType.Any, Required: true)
         });
 
     public async Task<CommandExecutionResult?> ExecuteAsync(

@@ -14,8 +14,8 @@ public class JettisonCommand : ISingleTurnCommand, IDslCommandGrammar
     public DslCommandSyntax GetDslSyntax() => new(
         ArgSpecs: new[]
         {
-            new DslArgumentSpec(DslArgKind.Item, Required: true),
-            new DslArgumentSpec(DslArgKind.Integer, Required: true)
+            new DslArgumentSpec(DslArgType.ItemId, Required: true),
+            new DslArgumentSpec(DslArgType.Integer, Required: true)
         });
 
     public async Task<CommandExecutionResult?> ExecuteAsync(
@@ -32,9 +32,7 @@ public class JettisonCommand : ISingleTurnCommand, IDslCommandGrammar
             };
         }
 
-        int quantity = 1;
-        if (!string.IsNullOrWhiteSpace(cmd.Arg2) && int.TryParse(cmd.Arg2, out var parsed) && parsed > 0)
-            quantity = parsed;
+        int quantity = cmd.Quantity is > 0 ? cmd.Quantity.Value : 1;
 
         JsonElement response = (await client.ExecuteCommandAsync(
             "jettison",

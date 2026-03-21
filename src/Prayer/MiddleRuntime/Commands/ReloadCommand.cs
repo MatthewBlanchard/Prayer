@@ -13,8 +13,8 @@ public class ReloadCommand : ISingleTurnCommand, IDslCommandGrammar
     public DslCommandSyntax GetDslSyntax() => new(
         ArgSpecs: new[]
         {
-            new DslArgumentSpec(DslArgKind.Any, Required: true),
-            new DslArgumentSpec(DslArgKind.Item, Required: true)
+            new DslArgumentSpec(DslArgType.Any, Required: true),
+            new DslArgumentSpec(DslArgType.ItemId, Required: true)
         });
 
     public async Task<CommandExecutionResult?> ExecuteAsync(
@@ -22,7 +22,8 @@ public class ReloadCommand : ISingleTurnCommand, IDslCommandGrammar
         CommandResult cmd,
         GameState state)
     {
-        if (string.IsNullOrWhiteSpace(cmd.Arg1) || string.IsNullOrWhiteSpace(cmd.Arg2))
+        var ammoItemId = cmd.Args.Count > 1 ? cmd.Args[1] : null;
+        if (string.IsNullOrWhiteSpace(cmd.Arg1) || string.IsNullOrWhiteSpace(ammoItemId))
         {
             return new CommandExecutionResult
             {
@@ -33,7 +34,7 @@ public class ReloadCommand : ISingleTurnCommand, IDslCommandGrammar
 
         JsonElement response = (await client.ExecuteCommandAsync(
             "reload",
-            new { weapon_instance_id = cmd.Arg1, ammo_item_id = cmd.Arg2 })).Payload;
+            new { weapon_instance_id = cmd.Arg1, ammo_item_id = ammoItemId })).Payload;
 
         if (CommandJson.TryGetError(response, out var code, out var error))
         {

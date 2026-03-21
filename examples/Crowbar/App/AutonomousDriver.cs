@@ -111,10 +111,10 @@ public sealed class AutonomousDriver
                     continue;
                 }
 
-                // 3. Go home before picking the next mission.
-                SetStatus($"Cycle {cycle}: Returning home...");
-                _log($"[{_botLabel}] cycle={cycle} go_home_start");
-                if (!await TryExecuteScriptAsync("go $home;", "go_home", cycle, ct))
+                // 3. Go to nearest station before picking the next mission.
+                SetStatus($"Cycle {cycle}: Returning to nearest station...");
+                _log($"[{_botLabel}] cycle={cycle} go_nearest_station_start");
+                if (!await TryExecuteScriptAsync("go $nearest_station;", "go_nearest_station", cycle, ct))
                 {
                     await Task.Delay(2000, ct);
                     continue;
@@ -123,7 +123,7 @@ public sealed class AutonomousDriver
                 state = await GetFreshStateAsync(ct);
                 if (state?.State == null)
                 {
-                    SetStatus("No game state available after go home. Retrying...");
+                    SetStatus("No game state available after returning to nearest station. Retrying...");
                     await Task.Delay(2000, ct);
                     continue;
                 }

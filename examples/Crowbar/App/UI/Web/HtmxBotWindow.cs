@@ -1334,7 +1334,10 @@ public sealed partial class HtmxBotWindow : IAppUi
                             pois.Add(poiId.Trim());
                         if (TryGetStringPropertyCaseInsensitive(poi, "name", out var poiName))
                             pois.Add(poiName.Trim());
-                        if (TryGetStringPropertyCaseInsensitive(poi, "systemId", out var systemId))
+                        if (TryGetStringPropertyCaseInsensitive(poi, "base_id", out var baseId) && !string.IsNullOrWhiteSpace(baseId))
+                            pois.Add(baseId.Trim());
+                        if (TryGetStringPropertyCaseInsensitive(poi, "systemId", out var systemId) ||
+                            TryGetStringPropertyCaseInsensitive(poi, "system_id", out systemId))
                             systems.Add(systemId.Trim());
                     }
                 }

@@ -719,13 +719,14 @@ public static class DslParser
     public static string BuildPromptDslReferenceBlock(
         string? userInput,
         IReadOnlyList<string>? exampleScripts,
-        IReadOnlyList<string>? preferredCommandNames)
+        IReadOnlyList<string>? preferredCommandNames,
+        IReadOnlyList<DslSkillAstNode>? skills = null)
     {
         var commands = SelectPromptCommands(
             userInput,
             exampleScripts,
             preferredCommandNames);
-        return BuildPromptDslReferenceBlockCore(commands);
+        return BuildPromptDslReferenceBlockCore(commands, skills);
     }
 
     public static IReadOnlyList<DslCommandPromptDoc> GetPromptCommandDocs()
@@ -742,7 +743,9 @@ public static class DslParser
             .ToList();
     }
 
-    private static string BuildPromptDslReferenceBlockCore(IReadOnlyList<ICommand> commands)
+    private static string BuildPromptDslReferenceBlockCore(
+        IReadOnlyList<ICommand> commands,
+        IReadOnlyList<DslSkillAstNode>? skills = null)
     {
         var ordered = commands
             .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
@@ -765,6 +768,18 @@ public static class DslParser
             sb.AppendLine("Commands:");
             foreach (var commandReference in commandReferences)
                 sb.AppendLine($"- {commandReference}");
+        }
+
+        if (skills != null && skills.Count > 0)
+        {
+            sb.AppendLine("Skills (reusable subscripts, call like commands):");
+            foreach (var skill in skills.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                var paramList = skill.Params.Count == 0
+                    ? "none"
+                    : string.Join(", ", skill.Params.Select(p => $"{p.Name}: {DescribePromptArgType(new DslArgumentSpec(p.Type))}"));
+                sb.AppendLine($"- {skill.Name}; (args: {paramList})");
+            }
         }
 
         sb.AppendLine();

@@ -54,6 +54,7 @@ public class SpaceMoltAgent
     public void SetSkillLibrary(SkillLibrary? library)
     {
         _execution.SetSkillLibrary(library);
+        _scriptGeneration.SetSkillLibrary(library);
     }
 
     public void SetStatusWriter(ChannelWriter<string> writer)

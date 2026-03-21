@@ -26,6 +26,7 @@ public sealed class ScriptGenerationService
     private readonly SemaphoreSlim _commandEmbeddingGate = new(1, 1);
     private Dictionary<string, float[]>? _commandEmbeddingsByName;
     private readonly Lazy<GalaxyMapSnapshot> _mapCache;
+    private SkillLibrary? _skillLibrary;
 
     public ScriptGenerationService(
         ILLMClient plannerLlm,
@@ -54,6 +55,11 @@ public sealed class ScriptGenerationService
         }
     }
 
+    public void SetSkillLibrary(SkillLibrary? library)
+    {
+        _skillLibrary = library;
+    }
+
     public async Task<ScriptGenerationResult> GenerateScriptFromUserInputAsync(
         string userInput,
         GameState state,
@@ -71,7 +77,8 @@ public sealed class ScriptGenerationService
         var dslCommandReferenceBlock = DslParser.BuildPromptDslReferenceBlock(
             generationInput,
             exampleScripts,
-            cosineCommands);
+            cosineCommands,
+            _skillLibrary?.Skills);
         string? previousScript = null;
         string? previousError = null;
 
@@ -109,7 +116,11 @@ public sealed class ScriptGenerationService
 
             try
             {
-                var tree = DslParser.ParseTree(script);
+                var skillDefs = _skillLibrary?.Skills.ToDictionary(
+                    s => s.Name,
+                    s => s.Params,
+                    StringComparer.OrdinalIgnoreCase);
+                var tree = DslParser.ParseTree(script, skillDefs);
                 _ = DslScriptTransformer.Translate(tree, state);
                 var normalizedScript = DslScriptTransformer.RenderScript(tree).TrimEnd();
                 await _logger.LogPromptGenerationPairAsync(

@@ -284,12 +284,14 @@ public static class DslParser
     }
 
     public static DslAstProgram ParseTree(string text)
-        => ParseTree(text, extraCommandNames: null);
+        => ParseTree(text, extraSkills: null);
 
     /// <summary>
-    /// Parses a DSL script, treating the given extra names (e.g. skill names) as valid commands.
+    /// Parses a DSL script, validating skill calls against their declared parameter types.
     /// </summary>
-    public static DslAstProgram ParseTree(string text, IReadOnlySet<string>? extraCommandNames)
+    public static DslAstProgram ParseTree(
+        string text,
+        IReadOnlyDictionary<string, IReadOnlyList<DslSkillParamDef>>? extraSkills)
     {
         if (string.IsNullOrWhiteSpace(text))
             return new DslAstProgram(Array.Empty<DslAstNode>());
@@ -300,7 +302,7 @@ public static class DslParser
         {
             var tree = ProgramAstParser.Parse(text);
             tree = AnnotateSourceLines(text, tree);
-            ValidateTree(tree, extraCommandNames);
+            ValidateTree(tree, extraSkills);
             return tree;
         }
         catch (ParseException ex)
@@ -1335,16 +1337,88 @@ public static class DslParser
 
     private static void ValidateTree(
         DslAstProgram tree,
-        IReadOnlySet<string>? extraCommandNames = null,
+        IReadOnlyDictionary<string, IReadOnlyList<DslSkillParamDef>>? extraSkills = null,
         bool allowDollarArgs = false)
+    {
+        ValidateNodes(tree.Statements, extraSkills, allowDollarArgs);
+    }
+
+    // Overload for ParseBodyForSkillLibrary, which only has names available during parse.
+    private static void ValidateTree(
+        DslAstProgram tree,
+        IReadOnlySet<string>? extraCommandNames,
+        bool allowDollarArgs)
     {
         ValidateNodes(tree.Statements, extraCommandNames, allowDollarArgs);
     }
 
     private static void ValidateNodes(
         IReadOnlyList<DslAstNode> nodes,
-        IReadOnlySet<string>? extraCommandNames = null,
+        IReadOnlyDictionary<string, IReadOnlyList<DslSkillParamDef>>? extraSkills = null,
         bool allowDollarArgs = false)
+    {
+        foreach (var node in nodes)
+        {
+            switch (node)
+            {
+                case DslCommandAstNode commandNode:
+                {
+                    var normalizedName = (commandNode.Name ?? "").Trim().ToLowerInvariant();
+                    var args = commandNode.Args ?? Array.Empty<string>();
+
+                    if (!IsCommandAllowed(normalizedName, args, extraSkills))
+                    {
+                        throw new FormatException(
+                            $"Command '{commandNode.Name}' is not recognized.");
+                    }
+
+                    if (extraSkills != null &&
+                        extraSkills.TryGetValue(commandNode.Name ?? string.Empty, out var skillParams))
+                    {
+                        var skillSyntax = new DslCommandSyntax(ArgSpecs: skillParams
+                            .Select(p => new DslArgumentSpec(p.Type, Required: true))
+                            .ToList());
+                        ValidateCommandArgs(commandNode.Name!, args, skillSyntax, allowDollarArgs);
+                    }
+                    else if (CommandSyntaxByName.TryGetValue(normalizedName, out var commandSyntax))
+                    {
+                        ValidateCommandArgs(normalizedName, args, commandSyntax, allowDollarArgs);
+                    }
+
+                    break;
+                }
+                case DslIfAstNode ifNode:
+                {
+                    if (!DslBooleanEvaluator.TryValidateCondition(ifNode.Condition, out var error))
+                    {
+                        throw new FormatException(
+                            $"Invalid condition '{DslBooleanEvaluator.RenderCondition(ifNode.Condition)}': {error}.");
+                    }
+
+                    ValidateNodes(ifNode.Body ?? Array.Empty<DslAstNode>(), extraSkills, allowDollarArgs);
+                    break;
+                }
+                case DslUntilAstNode untilNode:
+                {
+                    if (!DslBooleanEvaluator.TryValidateCondition(untilNode.Condition, out var error))
+                    {
+                        throw new FormatException(
+                            $"Invalid condition '{DslBooleanEvaluator.RenderCondition(untilNode.Condition)}': {error}.");
+                    }
+
+                    ValidateNodes(untilNode.Body ?? Array.Empty<DslAstNode>(), extraSkills, allowDollarArgs);
+                    break;
+                }
+                default:
+                    throw new FormatException("Unknown DSL AST node.");
+            }
+        }
+    }
+
+    private static void ValidateNodes(
+        IReadOnlyList<DslAstNode> nodes,
+        IReadOnlySet<string>? extraCommandNames,
+        bool allowDollarArgs)
     {
         foreach (var node in nodes)
         {
@@ -1361,16 +1435,8 @@ public static class DslParser
                             $"Command '{commandNode.Name}' is not recognized.");
                     }
 
-                    // Skill calls (extra commands) accept any arguments; validation
-                    // happens at runtime when the Skill frame is pushed.
-                    bool isExtraCommand = extraCommandNames != null &&
-                        extraCommandNames.Contains(commandNode.Name ?? string.Empty);
-
-                    if (!isExtraCommand &&
-                        CommandSyntaxByName.TryGetValue(normalizedName, out var commandSyntax))
-                    {
+                    if (CommandSyntaxByName.TryGetValue(normalizedName, out var commandSyntax))
                         ValidateCommandArgs(normalizedName, args, commandSyntax, allowDollarArgs);
-                    }
 
                     break;
                 }
@@ -1405,7 +1471,7 @@ public static class DslParser
     private static bool IsCommandAllowed(
         string commandName,
         IReadOnlyList<string>? commandArgs,
-        IReadOnlySet<string>? extraCommandNames = null)
+        IReadOnlyDictionary<string, IReadOnlyList<DslSkillParamDef>>? extraSkills = null)
     {
         var normalized = commandName.ToLowerInvariant();
         if (normalized == HaltKeyword)
@@ -1414,7 +1480,26 @@ public static class DslParser
         if (CommandNameSet.Contains(normalized))
             return true;
 
-        // Skill names from the library are valid commands in mission scripts.
+        if (extraSkills != null && extraSkills.ContainsKey(commandName))
+            return true;
+
+        return (commandArgs == null || commandArgs.Count == 0) &&
+               TrySplitCollapsedCommand(commandName, out var splitName, out _) &&
+               CommandNameSet.Contains(splitName);
+    }
+
+    private static bool IsCommandAllowed(
+        string commandName,
+        IReadOnlyList<string>? commandArgs,
+        IReadOnlySet<string>? extraCommandNames)
+    {
+        var normalized = commandName.ToLowerInvariant();
+        if (normalized == HaltKeyword)
+            return commandArgs == null || commandArgs.Count == 0;
+
+        if (CommandNameSet.Contains(normalized))
+            return true;
+
         if (extraCommandNames != null && extraCommandNames.Contains(commandName))
             return true;
 

@@ -82,8 +82,11 @@ public sealed class CommandExecutionEngine
         var rawScript = script ?? string.Empty;
         _currentScriptLine = null;
 
-        var skillNames = _skillLibrary?.SkillNames;
-        var tree = DslParser.ParseTree(rawScript, skillNames);
+        var skillDefs = _skillLibrary?.Skills.ToDictionary(
+            s => s.Name,
+            s => s.Params,
+            StringComparer.OrdinalIgnoreCase);
+        var tree = DslParser.ParseTree(rawScript, skillDefs);
         if (state != null)
             ValidateCommandNodes(tree.Statements, state);
 
@@ -93,7 +96,7 @@ public sealed class CommandExecutionEngine
 
         _logger.LogScriptNormalization("set_script", rawScript, _script);
 
-        ResetFrames();
+        ResetFrames(state);
         ResetScriptConditionCounters();
         ClearActiveCommand();
         _requeuedSteps.Clear();
@@ -466,6 +469,8 @@ public sealed class CommandExecutionEngine
                 LogAstWalker(
                     "frame_pop",
                     $"Popped frame kind={frame.Kind} path={frame.Path}.");
+                if (frame.Kind == ExecutionFrameKind.Override && frame.OverrideName != null)
+                    _logger.LogOverride("completed", frame.OverrideName, $"path={frame.Path}");
                 continue;
             }
 
@@ -481,6 +486,8 @@ public sealed class CommandExecutionEngine
                         _skillLibrary.TryGetSkill(commandNode.Name, out var skillDef))
                     {
                         var bindings = BuildSkillBindings(skillDef!, commandNode.Args, state);
+                        if (!string.IsNullOrWhiteSpace(state.System))
+                            bindings["here"] = state.System;
                         PushSkillFrame(skillDef!, bindings, $"{frame.Path}/{nodeIndex}", commandNode.SourceLine);
                         LogAstWalker(
                             "skill_call",
@@ -672,12 +679,21 @@ public sealed class CommandExecutionEngine
         }
     }
 
-    private void ResetFrames()
+    private void ResetFrames(GameState? state = null)
     {
         _frames.Clear();
         LogAstWalker("reset_frames", "Cleared execution frames.");
         if (_scriptAst?.Statements == null || _scriptAst.Statements.Count == 0)
             return;
+
+        Dictionary<string, string>? rootBindings = null;
+        if (!string.IsNullOrWhiteSpace(state?.System))
+        {
+            rootBindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["here"] = state.System
+            };
+        }
 
         _frames.Add(new ExecutionFrame(
             _scriptAst.Statements,
@@ -685,7 +701,8 @@ public sealed class CommandExecutionEngine
             sourceLine: 1,
             untilCondition: null,
             untilConditionKnown: false,
-            path: RootFramePath));
+            path: RootFramePath,
+            bindings: rootBindings));
         LogAstWalker(
             "frame_push",
             $"Initialized root frame statements={_scriptAst.Statements.Count}.");
@@ -1153,8 +1170,12 @@ public sealed class CommandExecutionEngine
     {
         for (int i = _frames.Count - 1; i >= 0; i--)
         {
-            if (_frames[i].Kind == ExecutionFrameKind.Skill && _frames[i].Bindings != null)
-                return _frames[i].Bindings;
+            var f = _frames[i];
+            if (f.Bindings != null &&
+                (f.Kind == ExecutionFrameKind.Skill ||
+                 f.Kind == ExecutionFrameKind.Root ||
+                 f.Kind == ExecutionFrameKind.Override))
+                return f.Bindings;
         }
         return null;
     }
@@ -1286,6 +1307,15 @@ public sealed class CommandExecutionEngine
             if (!DslBooleanEvaluator.TryEvaluate(ov.Condition, state, out var fired) || !fired)
                 continue;
 
+            Dictionary<string, string>? overrideBindings = null;
+            if (!string.IsNullOrWhiteSpace(state?.System))
+            {
+                overrideBindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["here"] = state.System
+                };
+            }
+
             _frames.Add(new ExecutionFrame(
                 ov.Body,
                 ExecutionFrameKind.Override,
@@ -1293,11 +1323,16 @@ public sealed class CommandExecutionEngine
                 untilCondition: null,
                 untilConditionKnown: false,
                 path: $"override/{ov.Name}",
-                overrideName: ov.Name));
+                overrideName: ov.Name,
+                bindings: overrideBindings));
 
             LogAstWalker(
                 "override_trigger",
                 $"Override '{ov.Name}' fired cond={DslBooleanEvaluator.RenderCondition(ov.Condition)}.");
+            _logger.LogOverride(
+                "triggered",
+                ov.Name,
+                $"cond={DslBooleanEvaluator.RenderCondition(ov.Condition)} halted={_isHalted}");
 
             break; // Only one override per tick.
         }

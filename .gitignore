@@ -41,3 +41,5 @@ markets/
 # OS files
 .DS_Store
 Thumbs.db
+/publish/runtimes
+publish-linux/

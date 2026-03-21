@@ -98,37 +98,40 @@ internal sealed class SpaceMoltGameStateAssembler
                 .Select(c => c.GetProperty("system_id").GetString()!)
                 .ToArray();
 
-            var currentPoiObj = SpaceMoltApiTransport.RequireObjectProperty(systemResult, "poi", "get_system");
-
-            currentPOI = ParsePoiInfo(currentPoiObj, currentSystem);
+            currentPOI = systemResult.TryGetProperty("poi", out var currentPoiObj) && currentPoiObj.ValueKind == JsonValueKind.Object
+                ? ParsePoiInfo(currentPoiObj, currentSystem)
+                : null;
 
             pois = systemObj.TryGetProperty("pois", out var poisArray) &&
                        poisArray.ValueKind == JsonValueKind.Array
                 ? poisArray
                     .EnumerateArray()
                     .Select(p => ParsePoiInfo(p, currentSystem))
-                    .Where(p => !string.Equals(p.Id, currentPOI.Id, StringComparison.Ordinal))
+                    .Where(p => currentPOI == null || !string.Equals(p.Id, currentPOI.Id, StringComparison.Ordinal))
                     .ToArray()
                 : Array.Empty<POIInfo>();
 
-            await EnrichCurrentPoiFromGetPoiAsync(currentPOI);
-            GalaxyStateHub.MarkPoiVisited(
-                currentPOI.Id,
-                currentSystem,
-                currentPOI.Name,
-                currentPOI.Type,
-                currentPOI.X,
-                currentPOI.Y,
-                currentPOI.HasBase,
-                currentPOI.BaseId,
-                currentPOI.BaseName);
+            if (currentPOI != null)
+            {
+                await EnrichCurrentPoiFromGetPoiAsync(currentPOI);
+                GalaxyStateHub.MarkPoiVisited(
+                    currentPOI.Id,
+                    currentSystem,
+                    currentPOI.Name,
+                    currentPOI.Type,
+                    currentPOI.X,
+                    currentPOI.Y,
+                    currentPOI.HasBase,
+                    currentPOI.BaseId,
+                    currentPOI.BaseName);
+            }
 
             await _owner.ObserveSeenPoisAsync(
                 currentSystem,
-                new[] { currentPOI }.Concat(pois));
+                currentPOI != null ? new[] { currentPOI }.Concat(pois) : pois);
             GalaxyStateHub.MergeResourceLocations(
                 currentSystem,
-                new[] { currentPOI }.Concat(pois));
+                currentPOI != null ? new[] { currentPOI }.Concat(pois) : pois);
         }
 
         var cargo = new Dictionary<string, ItemStack>();
@@ -153,7 +156,7 @@ internal sealed class SpaceMoltGameStateAssembler
 
         var state = _stateBuilder.BuildBaseState(
             currentSystem,
-            currentPOI,
+            currentPOI ?? new POIInfo { Id = "", SystemId = currentSystem },
             pois,
             jumpTargets,
             cargo,

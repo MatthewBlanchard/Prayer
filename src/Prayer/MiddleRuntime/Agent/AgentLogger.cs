@@ -27,6 +27,7 @@ public interface IAgentLogger
     void LogScriptNormalization(string source, string inputScript, string outputScript);
     void LogAstWalker(string eventName, string detail);
     void LogScriptCommandFailure(string commandText, string failureMessage);
+    void LogOverride(string eventName, string overrideName, string detail);
 }
 
 public sealed class FileAgentLogger : IAgentLogger
@@ -163,6 +164,17 @@ public sealed class FileAgentLogger : IAgentLogger
             LogKind.AstWalker,
             line,
             AppPaths.AstWalkerLogFile));
+    }
+
+    public void LogOverride(string eventName, string overrideName, string detail)
+    {
+        var line = $"[{DateTime.UtcNow:O}] event={eventName} override={overrideName} detail={detail}{Environment.NewLine}";
+
+        LogSink.Instance.Enqueue(new LogEvent(
+            DateTime.UtcNow,
+            LogKind.Override,
+            line,
+            AppPaths.OverrideLogFile));
     }
 
     public void LogScriptCommandFailure(string commandText, string failureMessage)

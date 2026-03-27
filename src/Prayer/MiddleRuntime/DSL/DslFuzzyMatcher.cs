@@ -220,6 +220,11 @@ internal static class DslFuzzyMatcher
                 aliases.Add(alias);
         }
 
+        // Allow macro names without the $ prefix — resolve to $name so ExpandMacroArg handles them.
+        // e.g. "go nearest_station" → canonical "$nearest_station" → resolved at execution time.
+        foreach (var macroName in new[] { "nearest_station", "home", "here" })
+            systems[$"${macroName}"] = new HashSet<string>(StringComparer.Ordinal) { macroName, $"${macroName}" };
+
         return systems
             .Select(kvp => new Candidate(kvp.Key, kvp.Value.ToList()))
             .ToList();

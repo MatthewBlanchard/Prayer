@@ -34,6 +34,7 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
     private int _shipCatalogPage = 1;
     private long _requestSequence;
     private GameState? _latestGameState;
+    private volatile Task? _stateInitTask;
     private readonly SemaphoreSlim _stateRefreshLock = new(1, 1);
     private readonly SemaphoreSlim _sessionRecoveryLock = new(1, 1);
     private readonly SemaphoreSlim _apiStatsLogLock = new(1, 1);
@@ -209,8 +210,15 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
         }
 
         PersistSessionSnapshot();
-        await _catalogService.EnsureFreshCataloguesAsync(forceRefresh: true);
-        await RefreshLatestStateFromApiAsync();
+        // Fire catalogue fetch + state refresh in the background so LoginAsync returns
+        // immediately after SpaceMolt auth. With 10 agents creating sessions in parallel,
+        // awaiting either operation blocks the POST /api/runtime/sessions response for 60s+.
+        // GetGameState() will block on _stateInitTask if called before it completes.
+        _stateInitTask = Task.Run(async () =>
+        {
+            await _catalogService.EnsureFreshCataloguesAsync(forceRefresh: false);
+            await RefreshLatestStateFromApiAsync();
+        });
     }
 
     public async Task<string> RegisterAsync(string username, string empire, string registrationCode)
@@ -335,6 +343,14 @@ public class SpaceMoltHttpClient : IDisposable, IRuntimeTransport
 
     public GameState GetGameState()
     {
+        if (_latestGameState != null)
+            return _latestGameState;
+
+        // Block on the background init task if it's still running.
+        var initTask = _stateInitTask;
+        if (initTask != null && !initTask.IsCompleted)
+            initTask.GetAwaiter().GetResult();
+
         if (_latestGameState == null)
             throw new InvalidOperationException("Game state cache is empty.");
 

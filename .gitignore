@@ -43,3 +43,5 @@ markets/
 Thumbs.db
 /publish/runtimes
 publish-linux/
+*.so
+publish/seed/
